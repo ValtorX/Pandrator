@@ -1,0 +1,134 @@
+# Stories of epic-large-project-responsiveness, in build order.
+
+[[entry]]
+id = 1
+type = "story"
+title = "Reproduce the stall and record a baseline"
+description = "Builds the synthetic 5,000-segment project and timing script, runs them and a local copy of the real database through the real server, and records where listing, plan reads, admission and the opening check spend their time. Delivers the baseline part of each covered line; later stories deliver the fixes, and the later epics reuse the project."
+verify = "Running the timing script prints per-operation timings on both datasets, and the saved results name the top costs and propose admission and check targets."
+covers = ["R1", "R2", "R3", "R6", "R7"]
+after = []
+hitl = true # the owner makes, or authorizes, the database copy with the app stopped
+risk = "medium"
+notes = ["If the synthetic project doesn't reproduce what the real copy shows, make its rows more realistic before moving on."]
+
+[[entry]]
+id = 2
+type = "story"
+title = "Shared audio identity work costs far less"
+description = "Reduces the per-segment cost of AudioIdentityContext.for_segment that listing, plan history, admission and the opening check all pay, giving identical identities for every segment. Its speed-up serves stories 3, 4, 8 and Epic 2."
+verify = "A test proves identities are unchanged across a varied fixture while its query count falls, and the timing script shows the identity pass well below baseline."
+covers = ["R1", "R6", "R7"]
+after = [1]
+hitl = false
+risk = "high"
+
+[[entry]]
+id = 3
+type = "story"
+title = "Listing cost follows the page, not the project"
+description = "Makes limit and fields actually reduce the work of a segment listing, skipping reuse status when it isn't requested and making totals cheaper, with default responses unchanged."
+verify = "A query-count test shows a limit=1 id-only page does far less work than a full page, and the timing script shows pages of 100 inside 15 s on both datasets."
+covers = ["R1", "R2"]
+after = [2]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 4
+type = "story"
+title = "Plan status and revision reads return in time"
+description = "Brings list_speech_plan_revisions, get_speech_plan_status and non-active revision reads inside 15 s, using the existing summary path from MCP where the full history isn't needed."
+verify = "The timing script shows all three inside 15 s on both datasets, and MCP tests show the summary path is used."
+covers = ["R3"]
+after = [2]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 5
+type = "story"
+title = "Routine requests stop taking the write lock"
+description = "Stops read requests contending for the writer over token last_used_at and audit rows, making last_used_at coarser and batching or delaying audit writes, with no audit event lost."
+verify = "A test shows repeated authenticated reads open no write transaction for the token within the update window and every audit event is recorded; a read-load run shows no bulk audit spooling."
+covers = ["R5"]
+after = [1]
+hitl = false
+risk = "high"
+
+[[entry]]
+id = 6
+type = "story"
+title = "Abandoned reads stop stalling the server"
+description = "Keeps the server able to answer after clients give up on heavy reads, by a mechanism chosen from story 1's profile, such as a server-side deadline or a cap on concurrent heavy reads."
+verify = "A burst of abandoned heavy reads leaves /api/v1/auth/status and a small project's listing answering without a restart."
+covers = ["R4", "R2"] # R2's after-load part; story 3 delivers its page-cost part
+after = [1, 5] # both change the request lifecycle in http_lifecycle.py
+hitl = false
+risk = "high"
+
+[[entry]]
+id = 7
+type = "story"
+title = "Heavy reads stop holding the WAL back"
+description = "Shortens how long heavy reads keep a read transaction open, so checkpoints can complete and the WAL stops growing after load, and no database is locked failures appear under read load."
+verify = "A read-load run with the timing script shows no database is locked errors and the WAL shrinking or stable once the load ends."
+covers = ["R5"] # the WAL and lock part; story 5 delivers the request-write part
+after = [3, 4, 6]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 8
+type = "story"
+title = "Admission meets its target without stalling reads"
+description = "Re-measures admission after story 2, fixes what remains until it meets the target from story 1, and finds out why reads stalled during it."
+verify = "The timing script shows admission of 1-15 segments meeting its target on both datasets, with listing inside 15 s while it runs."
+covers = ["R6"]
+after = [2, 5]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 9
+type = "story"
+title = "The reviewable generation route holds no writer through its check"
+description = "Moves run_reviewable_generation's snapshot and identity work out of its write transaction, as 415aaa8a did for queued runs, and confirms the opening check meets its target from story 1."
+verify = "A test with a slow identity check shows heartbeats succeeding throughout on this route, and the timing script shows the check meeting its target."
+covers = ["R7"]
+after = [2, 8] # both can change the opening-check path
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 10
+type = "story"
+title = "A cancel stops the opening check"
+description = "Gives the identity loop a cancellation hook, so a cancel during the opening check frees the worker promptly. Builds on the release line carrying 415aaa8a."
+verify = "A test cancelling during a slow identity check shows the worker free within seconds and the job closed as cancelled."
+covers = ["R8"]
+after = [2, 9, "epic-fork-releases"]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 11
+type = "story"
+title = "Refactor sweep"
+description = "Cleans up what the plans and reviews in this epic deferred, with scope set at its start and cleanup only."
+verify = "The epic's focused tests, lint and type checks pass, with no behaviour change."
+covers = []
+after = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+hitl = false
+risk = "low"
+
+[[entry]]
+id = 12
+type = "story"
+title = "Verified on real data in a released build"
+description = "Runs the timing script and a small regenerate against a fresh copy of the real database on a released fork build, on the stock 30-second lease, records the results against every line of this epic, and, with the owner's go-ahead, offers upstream as focused PRs any fixes not yet offered."
+verify = "The owner sees every timing inside its limit or target, a small regenerate completing on the released build, and a list showing each fix's upstream PR or why it wasn't offered."
+covers = ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8"]
+after = [11, "epic-fork-releases"]
+hitl = true # the owner provides the copy and runs the released build
+risk = "medium"
