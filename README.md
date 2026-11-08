@@ -5,12 +5,16 @@ fork and must never reach an upstream pull request: BMad output and the `AGENTS.
 
 ## Setting up a new clone
 
-Fetch this branch, check it out as a worktree, and ignore it along with the local BMad install:
+Fetch this branch, check it out as a worktree, ignore it along with the local BMad install,
+restore `AGENTS.md`, which Git does not track on the code branches, and recreate the `CLAUDE.md`
+that loads it:
 
 ```bash
 git fetch origin fork-files:fork-files
 git worktree add _bmad-output fork-files
 printf '%s\n' /_bmad-output/ /CLAUDE.md /.agents/ /.claude/ /_bmad/ /skills-lock.json >> .git/info/exclude
+cp _bmad-output/backup/repo-instructions.backup.txt AGENTS.md
+printf '@AGENTS.md\n' > CLAUDE.md
 ```
 
 ## Committing here
