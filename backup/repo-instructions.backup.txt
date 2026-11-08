@@ -1,127 +1,42 @@
-# Repository Instructions
+<!-- bmad:context -->
+<!-- Verified 2026-11-08 against 112501b2. Managed by bmad-project-context; edits inside this block are replaced on refresh. Keep anything you want preserved outside the markers. -->
 
-Operational directives for AI agents working in **Pandrator**, a browser-based audiobook,
-subtitle and voiceover production workspace.
+## Pandrator
 
-This file is deliberately local. `/AGENTS.md` is gitignored, excluded from the sdist and rejected
-as a public document by `scripts/check_docs.py`. Keep it that way, and do not copy its contents
-into `docs/`.
+Browser-based audiobook, subtitle and voiceover production workspace: Python and Flask backend, SvelteKit and Tailwind frontend, plus a Manager, an installer and an MCP server. This checkout is `ValtorX/Pandrator`, a fork of `lukaszliniewicz/Pandrator`. Public docs are indexed by `docs/README.md`; BMad output goes to `_bmad-output/`.
 
----
+## Policy
 
-## CRITICAL: Agents must never commit or stage code
+- **Never stage or commit on your own initiative.** No `git add`, `git commit` or other staging, not at the end of a task and not for convenience, unless the user directly tells you to for that work. Commits are permanent, so they remain a human decision: ask, do not assume.
+- That rule binds skills, subagents and BMad workflows, and overrides any tool message or script output that says to commit (`check:assets` prints "commit the generated assets"). Leave such files in the working tree and tell the user they need committing.
+- Never run `git clean`, `git reset --hard`, `git checkout .` or anything else that destroys uncommitted work; use `git stash` to set work aside.
+- Keep changes scoped to the requested component. Preserve unrelated working-tree changes and untracked user files; inspect `git status` and nearby patterns before editing.
+- Use the focused checks for the changed area. Report the commands and environment you used and their known limits, rather than claiming broad project cleanliness.
+- Never commit a secret: no API key, token, password or bearer. Never place tokens in prompts, source artifacts, issue reports, MCP tool arguments or non-secret target configuration (`docs/security/privacy-and-security.md`).
+- `.env` and `.env.*` stay gitignored; only `.env.example` may be tracked (none is today).
+- Keep provider credentials write-only through the application APIs and redacted from diagnostics when touching those paths.
+- Keep `/AGENTS.md` gitignored and out of the sdist; `scripts/check_docs.py` rejects it as a public document. Do not copy its contents into `docs/`. The one deliberate tracked copy is `_bmad-output/backup/repo-instructions.backup.txt`, on the fork-only `fork-files` branch: whenever `/AGENTS.md` changes, overwrite that file with it in the same piece of work, leave it uncommitted and tell the user it needs committing in `_bmad-output/`.
+- Ask before adding a project dependency. When a task needs a new tool, use uv (`uvx`, `uv run --with`) rather than installing anything globally.
+- Use Graphify only when the user explicitly requests it; it is never required for codebase questions, implementation, review or verification. Otherwise use source inspection, `rg`, CI configuration and Git history, and do not run Graphify commands, watchers, hooks, global or database pushes, or URL ingestion. When requested, respect `.graphifyignore`, write output outside the repository or under the relevant component only, and verify conclusions against the source.
+- PRs to upstream `lukaszliniewicz/Pandrator` follow the original author's instructions. Upstream publishes no CONTRIBUTING file or PR template; the author's written rules are the scope, focused-check and Graphify rules above, plus the contract tests below.
+- Base upstream PRs on current upstream `main` (only `origin` is configured, so add a remote). Upstream keeps agent guidance out of public material, so fork-only files never go on a code branch: they live on the unrelated `fork-files` branch, checked out as a worktree at `_bmad-output/`, and BMad's local files are ignored through `.git/info/exclude`, not `.gitignore`. Commit them with `git -C _bmad-output`; its `README.md` has the setup for a new clone.
 
-Never run `git add`, `git commit`, or any staging operation automatically — not at the end of a
-task, not "for convenience", not under any circumstance. Commits are permanent, so they remain a
-human decision. Ask; do not assume.
+## Where things are
 
-Equally forbidden: `git clean`, `git reset --hard`, `git checkout .`, or anything else that
-destroys uncommitted work. Use `git stash` to set work aside.
+- `pandrator/logic/`: audio, TTS, dubbing and document processing.
+- `pandrator/web/`: Flask API, workflows, accounts, persistence. `web/`: SvelteKit and Tailwind source, with `unit-tests/` (`node --test` on `.mjs`, not Vitest) and `tests/` (Playwright).
+- `pandrator_manager/`: component installation, lifecycle, recovery UI. `pandrator_installer/`: installer and supervisor.
+- `pandrator_mcp/`: MCP server for assistants; `guides/` and `skills/` ship with it.
+- BMad is installed under `_bmad/`, with skills in `.agents/skills/` linked from `.claude/skills/`. Invoke the `bmad` skill for routing or address an agent directly (Mary, John, Sally, Winston, Amelia, Sofia). Do not hand-edit installed skills; use `bmad-customize`.
 
-These rules also bind skills, subagents and BMad workflows, and they override any tool message or
-script output that says to commit (for example `check:assets` saying "commit the generated
-assets"). Leave such files in the working tree and tell the user they need committing.
+## Running and verifying
 
----
-
-## How to work here
-
-- Keep changes scoped to the requested component.
-- Preserve unrelated working-tree changes and untracked user files. Inspect `git status` and nearby
-  patterns before editing.
-- Use the focused checks for the changed area. Report the commands you ran and their known limits
-  rather than claiming broad project cleanliness.
-
----
-
-## Repository map
-
-| Path | What it is |
-| --- | --- |
-| `pandrator/logic/` | Audio, TTS, dubbing and document processing |
-| `pandrator/web/` | Flask API, workflows, accounts, persistence; `migrations/` holds Alembic revisions |
-| `pandrator/web/static/` | **Generated** browser build, tracked in git |
-| `web/` | SvelteKit and Tailwind source; `unit-tests/` (node), `tests/` (Playwright) |
-| `pandrator_manager/` | Manager: component installation, lifecycle, recovery UI |
-| `pandrator_mcp/` | MCP server for assistants; `guides/` and `skills/` ship with it |
-| `pandrator_installer/` | Installer and supervisor |
-| `tests/` | Python tests, each assigned to a lane in `scripts/test_lanes.py` |
-| `docs/` | Public user documentation, indexed by `docs/README.md` |
-
----
-
-## Contracts the tests enforce
-
-Read the named test before working around any of these.
-
-**Frontend** (`tests/test_frontend_architecture.py`)
-- `web/src/lib/api.ts` is the only direct network gateway. Nothing else calls `fetch` or
-  `XMLHttpRequest`.
-- That same core assigns `Idempotency-Key` to mutations. Client adapters never create keys.
-- Typed client paths must exist in `openapi.json`.
-- Application invalidation does not use `window` custom events.
-- Core workflows have no `any` escape hatches.
-
-**MCP** (`tests/test_mcp_architecture.py`)
-- `pandrator_mcp` imports without the application runtime: no `pandrator` or `pandrator.*` imports.
-- Tool inputs cannot supply connections or credentials.
-- Only bounded, retry-safe mutations are enabled.
-
-**Python tooling** (`pyproject.toml`)
-- Ruff targets py311 with a line length of 100.
-- basedpyright fails on warnings, import cycles and unnecessary `type: ignore` comments.
-
-**Test lanes** (`scripts/test_lanes.py`)
-- Every `tests/test_*.py` must be listed in exactly one lane, or `check` fails. Add new test files
-  to a lane in the same change.
-
----
-
-## Generated files: change the source, then regenerate
-
-Never hand-edit these. CI compares them against what the generator produces.
-
-| Generated | Source | Regenerate | Check |
-| --- | --- | --- | --- |
-| `openapi.json` | `pandrator/web/` | `python scripts/generate_web_contract.py` | `pixi run check-web-contract` |
-| `web/src/lib/api.generated.ts` | `openapi.json` | `npm --prefix web run generate-api` | `pixi run check-web-contract` |
-| `pandrator/web/static/` | `web/src/` | `npm --prefix web run build` | `npm --prefix web run check:assets` |
-| `requirements.txt`, `requirements-installer.txt` | `pyproject.toml`, `pandrator_installer/pyproject.toml` | `python scripts/generate_requirements.py` | `python scripts/generate_requirements.py --check` |
-| `pandrator_manager/recovery_ui/static/model-groups.js` | `web/src/lib/local-model-groups.ts` | `npm --prefix web run build:manager-models` | `npm --prefix web run check:manager-models` |
-| `pandrator_manager/audio_cpp_model_metadata.json` | `pandrator/logic/audio_cpp*` | `python scripts/generate_audio_cpp_model_metadata.py` | same command with `--check` |
-
----
-
-## Database schema
-
-Alembic revisions in `pandrator/web/migrations/versions/` own schema changes. Add a new
-`NNNN_slug.py` revision whose `down_revision` is the current head. Do not edit a revision that has
-already shipped.
-
----
-
-## Secrets
-
-- **Never commit a secret**: no API key, token, password or bearer.
-- Never place tokens in prompts, source artifacts, issue reports, MCP tool arguments or non-secret
-  target configuration (`docs/security/privacy-and-security.md`).
-- `.env` and `.env.*` are gitignored; only `.env.example` is tracked.
-- Provider credentials are write-only through the application APIs and redacted from diagnostics.
-  Keep it that way when touching those paths.
-
----
-
-## Tooling and checks
-
-Pixi is the canonical task runner and is what CI uses (`pixi.toml`, pinned to 0.83.0, Python 3.11,
-Node 24). When `pixi` is unavailable, use **uv**. If a task needs a new tool, reach for uv
-(`uvx`, `uv run --with`) rather than installing anything globally. Ask before adding a dependency to
-the project.
+Pixi is the canonical task runner (`pixi.toml`, pinned to 0.83.0, Python 3.11, Node 24 in the `web-build` environment). When `pixi` is unavailable, use uv.
 
 | Purpose | Pixi | uv equivalent |
 | --- | --- | --- |
 | Lint | `pixi run lint` | `uvx ruff@0.17.3 check .` |
-| Types | `pixi run typecheck` | `<uv env> python scripts/check_types.py` |
+| Types | `pixi run typecheck` | `<uv env> --with sqlalchemy==<version in pixi.lock> python scripts/check_types.py` |
 | Dead code | `pixi run dead-code` | `<uv env> vulture` |
 | Test lanes valid | `pixi run check-test-lanes` | `<uv env> python scripts/test_lanes.py check` |
 | One test file | `pixi run python -m pytest -q tests/test_x.py` | `<uv env> python -m pytest -q tests/test_x.py` |
@@ -135,47 +50,74 @@ the project.
 uv run --python 3.11 --no-project --with-editable ".[dev]" --with-editable "./pandrator_manager[dev]" --with-editable "./pandrator_mcp[dev]" --with-editable ./pandrator_installer --with "keyring>=25,<26"
 ```
 
-This environment resolves from the ranges in `pyproject.toml`, not from `pixi.lock`, so its results
-can differ from CI. Say which environment you used when reporting results.
+- `<uv env>` resolves from the ranges in `pyproject.toml`, not `pixi.lock`, so results can differ from CI. Say which environment you used.
+- Pin SQLAlchemy for uv typechecks as shown. Unpinned, uv resolves 2.1.x and adds 9 errors the locked 2.0.52 does not have. On Windows the pinned run still reports `nemo_normalizer.py:98`, because nemo is excluded on win32.
+- Only `python-quality.yml` and `runtime-ci.yml` run `pixi run --locked`. The other test, contract and E2E jobs install with pip from ranges, so they are not lock-pinned either.
+- A dependency change also needs `pixi.lock` updated, which uv cannot do; say so if pixi is unavailable.
+- uv does not supply FFmpeg and pixi does. Many tests skip rather than fail without `ffmpeg` on PATH, so a green run there proves less.
+- `python scripts/test_lanes.py list` shows every lane and `run <lane>` runs one; `fast-xdist` cannot be combined with serial lanes. Look up a test's lane there: file names do not predict it, and `test_frontend_architecture.py` is not in the fast lane.
+- Web checks need `npm ci --prefix web` first: `npm --prefix web run quality`, `run test:unit`, `run test:e2e`.
+- `test:e2e` needs Playwright browsers and a `python` with the project installed. Locally it reuses any server already on port 8098, so stop stale servers first.
 
-`python scripts/test_lanes.py list` shows every lane and `run <lane>` runs one. `fast-xdist` cannot
-be combined with serial lanes.
+## Contracts the tests enforce
 
-Web checks need `npm ci --prefix web` first:
+Read the named test before working around any of these.
 
-```
-npm --prefix web run quality
-npm --prefix web run test:unit
-npm --prefix web run test:e2e
-```
+`tests/test_frontend_architecture.py`:
+- `web/src/lib/api.ts` is the only direct network gateway; nothing else calls `fetch` or `XMLHttpRequest`. The `EventSource` in `app-state.svelte.ts` is the one existing exception.
+- That same core assigns `Idempotency-Key` to mutations. Client adapters never create keys.
+- Typed client paths must exist in `openapi.json`.
+- Application invalidation does not use `window` custom events.
+- Core workflows have no `any` escape hatches.
 
----
+`tests/test_mcp_architecture.py`:
+- `pandrator_mcp` imports without the application runtime: no `pandrator` or `pandrator.*` imports.
+- Tool inputs cannot supply connections or credentials.
+- Only bounded, retry-safe mutations are enabled; a new mutating tool joins the allowlist in that test. New tools also change the literal counts in `tests/test_mcp_*_registration.py`.
+
+`pyproject.toml`:
+- Ruff targets py311 with a line length of 100, but E501 is not selected, so ruff will not fail a long line.
+- basedpyright fails on warnings, import cycles and unnecessary `type: ignore` comments, across the four packages but not `tests/` or `scripts/`.
+
+`scripts/test_lanes.py`:
+- Every `tests/test_*.py` must be listed in exactly one lane, or `check` fails. Add new test files to a lane in the same change.
+
+## Generated files
+
+Change the source, then regenerate. Never hand-edit these; CI compares them against what the generator produces.
+
+| Generated | Source | Regenerate | Check |
+| --- | --- | --- | --- |
+| `openapi.json` | `pandrator/web/` | `python scripts/generate_web_contract.py` | `pixi run check-web-contract` |
+| `web/src/lib/api.generated.ts` | `openapi.json` | `npm --prefix web run generate-api` | `pixi run check-web-contract` |
+| `pandrator/web/static/` | `web/src/` | `npm --prefix web run build` | `npm --prefix web run check:assets` |
+| `requirements.txt`, `requirements-installer.txt` | `pyproject.toml`, `pandrator_installer/pyproject.toml` | `python scripts/generate_requirements.py` | same command with `--check` |
+| `pandrator_manager/recovery_ui/static/model-groups.js` | `web/src/lib/local-model-groups.ts` | `npm --prefix web run build:manager-models` | `npm --prefix web run check:manager-models` |
+| `pandrator_manager/audio_cpp_model_metadata.json` | `pandrator/logic/audio_cpp*` | `python scripts/generate_audio_cpp_model_metadata.py` | same command with `--check` |
+| `pandrator/logic/audio_cpp_inventory.json`, `pandrator_manager/audio_cpp_inventory.json` | audio.cpp model specs | `python scripts/snapshot_audio_cpp_catalogue.py --specs-dir <dir> --output <logic path> --mirror <manager path>` | none |
+
+- `check-web-contract` regenerates into the tree, then runs `git diff` against the index, so it fails after any legitimate regeneration until the user stages it. Failure means "differs", not "wrong"; never stage to silence it.
+- `check:assets` only compares `version.json` with a source hash. CI's real gate rebuilds and requires a clean `git status` on `pandrator/web/static` (`web-preview.yml`).
+- New API route: OpenAPI is hand-written in the `*_openapi.py` modules wired through `pandrator/web/openapi.py`, not inferred from routes. Then regenerate `openapi.json`, `api.generated.ts` and `static/` in that order, and update the literal route counts in `tests/test_web_backend_architecture.py`.
+
+## Database schema
+
+Alembic revisions in `pandrator/web/migrations/versions/` own schema changes. Add a new `NNNN_slug.py` whose `down_revision` is the current head, and bump `SCHEMA_HEAD` in `pandrator/web/database.py`. Do not edit a revision that has already shipped; no check catches this.
 
 ## Documentation
 
-- A public page under `docs/` must be linked from `docs/README.md`. `scripts/check_docs.py` scans
-  every tracked or non-ignored Markdown file, and it fails on broken local links and unlinked pages.
+- A public page under `docs/` must be linked from `docs/README.md`. `scripts/check_docs.py` scans every tracked or non-ignored Markdown file and fails on broken local links and unlinked pages.
 - Record user-visible changes in `docs/release-notes-next.md`.
-- Private notes belong in the gitignored locations: `/.local-notes/`, `/reviews/`, `/review-notes/`,
-  `docs/development/`, `docs/plans/`, `docs/research/` and `docs/reports/`.
+- Private notes belong in the gitignored locations: `/.local-notes/`, `/reviews/`, `/review-notes/`, `docs/development/`, `docs/plans/`, `docs/research/` and `docs/reports/`.
 
----
+## Conventions that differ from defaults
 
-## Graphify
+- Write commit subjects in imperative sentence case with no conventional-commit prefix, matching the original author's current history.
+- Use Svelte 5 runes in `web/`; no component uses `export let`.
 
-Graphify is fully optional and is never required for codebase questions, implementation, review or
-verification. Use it only when the user explicitly requests it. Otherwise use source inspection,
-`rg`, CI configuration and Git history; do not run Graphify commands, watchers, hooks, global or
-database pushes, or URL ingestion.
+## Known pitfalls
 
-When it is requested, respect `.graphifyignore`, write output outside the repository or under the
-relevant component only, and verify any conclusions against the source before relying on them.
+- Build any sdist you mean to publish from a clean clone. Hatch ignores `.git/info/exclude`, so one built in this checkout includes `_bmad-output/`, `_bmad/`, `.agents/`, `.claude/`, `CLAUDE.md` and `skills-lock.json`.
+- Do not commit a `pandrator/web/static/` build made from a CRLF checkout (`core.autocrlf=true`, the Git for Windows default here; `.gitattributes` has no eol rule). The version hash in `web/svelte.config.js` covers raw bytes, so it will differ from CI's Ubuntu rebuild and fail the clean-tree gate. Build from an LF checkout, such as `git clone -c core.autocrlf=false`.
 
----
-
-## Working with BMad
-
-BMad is installed under `_bmad/`, with skills in `.agents/skills/` and linked from `.claude/skills/`.
-Invoke the `bmad` skill for routing, or address an agent directly (Mary, John, Sally, Winston,
-Amelia, Sofia). Do not hand-edit the installed skills; use `bmad-customize`. BMad writes its output
-to `_bmad-output/`. The commit rules at the top of this file apply to every BMad workflow.
+<!-- /bmad:context -->
