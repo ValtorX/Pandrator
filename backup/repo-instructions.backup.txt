@@ -1,0 +1,181 @@
+# Repository Instructions
+
+Operational directives for AI agents working in **Pandrator**, a browser-based audiobook,
+subtitle and voiceover production workspace.
+
+This file is deliberately local. `/AGENTS.md` is gitignored, excluded from the sdist and rejected
+as a public document by `scripts/check_docs.py`. Keep it that way, and do not copy its contents
+into `docs/`.
+
+---
+
+## CRITICAL: Agents must never commit or stage code
+
+Never run `git add`, `git commit`, or any staging operation automatically — not at the end of a
+task, not "for convenience", not under any circumstance. Commits are permanent, so they remain a
+human decision. Ask; do not assume.
+
+Equally forbidden: `git clean`, `git reset --hard`, `git checkout .`, or anything else that
+destroys uncommitted work. Use `git stash` to set work aside.
+
+These rules also bind skills, subagents and BMad workflows, and they override any tool message or
+script output that says to commit (for example `check:assets` saying "commit the generated
+assets"). Leave such files in the working tree and tell the user they need committing.
+
+---
+
+## How to work here
+
+- Keep changes scoped to the requested component.
+- Preserve unrelated working-tree changes and untracked user files. Inspect `git status` and nearby
+  patterns before editing.
+- Use the focused checks for the changed area. Report the commands you ran and their known limits
+  rather than claiming broad project cleanliness.
+
+---
+
+## Repository map
+
+| Path | What it is |
+| --- | --- |
+| `pandrator/logic/` | Audio, TTS, dubbing and document processing |
+| `pandrator/web/` | Flask API, workflows, accounts, persistence; `migrations/` holds Alembic revisions |
+| `pandrator/web/static/` | **Generated** browser build, tracked in git |
+| `web/` | SvelteKit and Tailwind source; `unit-tests/` (node), `tests/` (Playwright) |
+| `pandrator_manager/` | Manager: component installation, lifecycle, recovery UI |
+| `pandrator_mcp/` | MCP server for assistants; `guides/` and `skills/` ship with it |
+| `pandrator_installer/` | Installer and supervisor |
+| `tests/` | Python tests, each assigned to a lane in `scripts/test_lanes.py` |
+| `docs/` | Public user documentation, indexed by `docs/README.md` |
+
+---
+
+## Contracts the tests enforce
+
+Read the named test before working around any of these.
+
+**Frontend** (`tests/test_frontend_architecture.py`)
+- `web/src/lib/api.ts` is the only direct network gateway. Nothing else calls `fetch` or
+  `XMLHttpRequest`.
+- That same core assigns `Idempotency-Key` to mutations. Client adapters never create keys.
+- Typed client paths must exist in `openapi.json`.
+- Application invalidation does not use `window` custom events.
+- Core workflows have no `any` escape hatches.
+
+**MCP** (`tests/test_mcp_architecture.py`)
+- `pandrator_mcp` imports without the application runtime: no `pandrator` or `pandrator.*` imports.
+- Tool inputs cannot supply connections or credentials.
+- Only bounded, retry-safe mutations are enabled.
+
+**Python tooling** (`pyproject.toml`)
+- Ruff targets py311 with a line length of 100.
+- basedpyright fails on warnings, import cycles and unnecessary `type: ignore` comments.
+
+**Test lanes** (`scripts/test_lanes.py`)
+- Every `tests/test_*.py` must be listed in exactly one lane, or `check` fails. Add new test files
+  to a lane in the same change.
+
+---
+
+## Generated files: change the source, then regenerate
+
+Never hand-edit these. CI compares them against what the generator produces.
+
+| Generated | Source | Regenerate | Check |
+| --- | --- | --- | --- |
+| `openapi.json` | `pandrator/web/` | `python scripts/generate_web_contract.py` | `pixi run check-web-contract` |
+| `web/src/lib/api.generated.ts` | `openapi.json` | `npm --prefix web run generate-api` | `pixi run check-web-contract` |
+| `pandrator/web/static/` | `web/src/` | `npm --prefix web run build` | `npm --prefix web run check:assets` |
+| `requirements.txt`, `requirements-installer.txt` | `pyproject.toml`, `pandrator_installer/pyproject.toml` | `python scripts/generate_requirements.py` | `python scripts/generate_requirements.py --check` |
+| `pandrator_manager/recovery_ui/static/model-groups.js` | `web/src/lib/local-model-groups.ts` | `npm --prefix web run build:manager-models` | `npm --prefix web run check:manager-models` |
+| `pandrator_manager/audio_cpp_model_metadata.json` | `pandrator/logic/audio_cpp*` | `python scripts/generate_audio_cpp_model_metadata.py` | same command with `--check` |
+
+---
+
+## Database schema
+
+Alembic revisions in `pandrator/web/migrations/versions/` own schema changes. Add a new
+`NNNN_slug.py` revision whose `down_revision` is the current head. Do not edit a revision that has
+already shipped.
+
+---
+
+## Secrets
+
+- **Never commit a secret**: no API key, token, password or bearer.
+- Never place tokens in prompts, source artifacts, issue reports, MCP tool arguments or non-secret
+  target configuration (`docs/security/privacy-and-security.md`).
+- `.env` and `.env.*` are gitignored; only `.env.example` is tracked.
+- Provider credentials are write-only through the application APIs and redacted from diagnostics.
+  Keep it that way when touching those paths.
+
+---
+
+## Tooling and checks
+
+Pixi is the canonical task runner and is what CI uses (`pixi.toml`, pinned to 0.83.0, Python 3.11,
+Node 24). When `pixi` is unavailable, use **uv**. If a task needs a new tool, reach for uv
+(`uvx`, `uv run --with`) rather than installing anything globally. Ask before adding a dependency to
+the project.
+
+| Purpose | Pixi | uv equivalent |
+| --- | --- | --- |
+| Lint | `pixi run lint` | `uvx ruff@0.17.3 check .` |
+| Types | `pixi run typecheck` | `<uv env> python scripts/check_types.py` |
+| Dead code | `pixi run dead-code` | `<uv env> vulture` |
+| Test lanes valid | `pixi run check-test-lanes` | `<uv env> python scripts/test_lanes.py check` |
+| One test file | `pixi run python -m pytest -q tests/test_x.py` | `<uv env> python -m pytest -q tests/test_x.py` |
+| Fast lane | `pixi run test-fast` | `<uv env> python scripts/test_lanes.py run fast-xdist` |
+| Everything | `pixi run test-full` | `<uv env> python -m pytest -q tests` |
+| Docs | `pixi run check-docs` | `<uv env> python scripts/check_docs.py` |
+
+`<uv env>` is:
+
+```
+uv run --python 3.11 --no-project --with-editable ".[dev]" --with-editable "./pandrator_manager[dev]" --with-editable "./pandrator_mcp[dev]" --with-editable ./pandrator_installer --with "keyring>=25,<26"
+```
+
+This environment resolves from the ranges in `pyproject.toml`, not from `pixi.lock`, so its results
+can differ from CI. Say which environment you used when reporting results.
+
+`python scripts/test_lanes.py list` shows every lane and `run <lane>` runs one. `fast-xdist` cannot
+be combined with serial lanes.
+
+Web checks need `npm ci --prefix web` first:
+
+```
+npm --prefix web run quality
+npm --prefix web run test:unit
+npm --prefix web run test:e2e
+```
+
+---
+
+## Documentation
+
+- A public page under `docs/` must be linked from `docs/README.md`. `scripts/check_docs.py` scans
+  every tracked or non-ignored Markdown file, and it fails on broken local links and unlinked pages.
+- Record user-visible changes in `docs/release-notes-next.md`.
+- Private notes belong in the gitignored locations: `/.local-notes/`, `/reviews/`, `/review-notes/`,
+  `docs/development/`, `docs/plans/`, `docs/research/` and `docs/reports/`.
+
+---
+
+## Graphify
+
+Graphify is fully optional and is never required for codebase questions, implementation, review or
+verification. Use it only when the user explicitly requests it. Otherwise use source inspection,
+`rg`, CI configuration and Git history; do not run Graphify commands, watchers, hooks, global or
+database pushes, or URL ingestion.
+
+When it is requested, respect `.graphifyignore`, write output outside the repository or under the
+relevant component only, and verify any conclusions against the source before relying on them.
+
+---
+
+## Working with BMad
+
+BMad is installed under `_bmad/`, with skills in `.agents/skills/` and linked from `.claude/skills/`.
+Invoke the `bmad` skill for routing, or address an agent directly (Mary, John, Sally, Winston,
+Amelia, Sofia). Do not hand-edit the installed skills; use `bmad-customize`. BMad writes its output
+to `_bmad-output/`. The commit rules at the top of this file apply to every BMad workflow.
