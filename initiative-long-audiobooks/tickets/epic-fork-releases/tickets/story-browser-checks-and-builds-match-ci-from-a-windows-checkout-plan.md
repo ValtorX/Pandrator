@@ -3,7 +3,7 @@ title: 'Browser checks and builds match CI from a Windows checkout'
 type: chore
 ticket: '5'
 created: '2026-11-09'
-status: built
+status: done
 baseline_revision: '388a1bb77be93cba21f736b6f0ffebaa809447b0'
 route: oneshot
 route_source: auto
