@@ -134,6 +134,7 @@ def test_capture_selection_guards_uses_narrow_take_queries(case):
     assert "audio_takes.is_active" not in take_query.split(" WHERE ", 1)[1]
 
 
+@pytest.mark.usefixtures("host_execution_actor")
 def test_repeated_edits_keep_stale_take_and_late_regeneration(case):
     original = case._start()
     execute(case, original)
@@ -159,6 +160,7 @@ def test_repeated_edits_keep_stale_take_and_late_regeneration(case):
     assert current["items"][1]["text"] == "Edited two"
 
 
+@pytest.mark.usefixtures("host_execution_actor")
 def test_edit_during_synthesis_keeps_old_result_stale_and_other_blocks_current(case):
     run = case._start()
     handlers = case.app.extensions["pandrator"]["workflow_handlers"]
@@ -184,6 +186,7 @@ def test_edit_during_synthesis_keeps_old_result_stale_and_other_blocks_current(c
         assert not session.get(GenerationRun, run["id"]).pause_requested
 
 
+@pytest.mark.usefixtures("host_execution_actor")
 def test_standalone_regeneration_can_be_regenerated_again(case):
     original = case._start()
     execute(case, original)
@@ -200,6 +203,7 @@ def test_standalone_regeneration_can_be_regenerated_again(case):
     assert calls == ["New words"]
 
 
+@pytest.mark.usefixtures("host_execution_actor")
 def test_cross_revision_regeneration_yields_and_resumes_original_run(case):
     original = case._start()
     handlers = case.app.extensions["pandrator"]["workflow_handlers"]
@@ -249,6 +253,7 @@ def test_explicit_pause_revokes_cross_revision_auto_resume(case):
         assert "auto_resume_source_generation_run_id" not in session.get(Job, child["job_id"]).payload_json
 
 
+@pytest.mark.usefixtures("host_execution_actor")
 def test_a_later_text_edit_cannot_be_marked_current_by_an_older_request(case):
     original = case._start()
     execute(case, original)
@@ -263,6 +268,7 @@ def test_a_later_text_edit_cannot_be_marked_current_by_an_older_request(case):
     assert all(take["status"] == "stale" for take in row["takes"])
 
 
+@pytest.mark.usefixtures("host_execution_actor")
 def test_regeneration_follows_an_unrelated_edit_and_selects_the_new_take(case):
     original = case._start()
     execute(case, original)
@@ -279,6 +285,7 @@ def test_regeneration_follows_an_unrelated_edit_and_selects_the_new_take(case):
     assert selected["status"] == "completed"
 
 
+@pytest.mark.usefixtures("host_execution_actor")
 def test_manual_take_selection_after_queuing_is_not_overwritten(case):
     original = case._start()
     execute(case, original)
@@ -300,6 +307,7 @@ def test_manual_take_selection_after_queuing_is_not_overwritten(case):
     assert next(take for take in current["takes"] if take["is_active"])["id"] == old["id"]
 
 
+@pytest.mark.usefixtures("host_execution_actor")
 def test_inheritance_is_idempotent_and_does_not_cross_real_restore(case):
     from pandrator.web.generation_edit_audio import inherit_edit_copy_audio
 
@@ -554,6 +562,7 @@ def test_nested_revocation_clears_marker_even_when_it_names_another_ancestor(cas
         ).payload_json
 
 
+@pytest.mark.usefixtures("host_execution_actor")
 def test_failed_replacement_resumes_parent_and_keeps_stale_audio(case):
     original = case._start()
     handlers = case.app.extensions["pandrator"]["workflow_handlers"]
@@ -597,6 +606,7 @@ def test_cancel_replacement_does_not_undo_explicit_pause(case):
 
 @pytest.mark.parametrize("edited_plan", [False, True])
 @pytest.mark.parametrize("fails", [False, True])
+@pytest.mark.usefixtures("host_execution_actor")
 def test_paused_replacement_retains_parent_resume_permission(case, edited_plan, fails):
     original = case._start()
     selected_id = edit(case, 0, "Replacement")["id"] if edited_plan else case.segment_ids[0]
@@ -629,6 +639,7 @@ def test_paused_replacement_retains_parent_resume_permission(case, edited_plan, 
         assert not session.get(GenerationRun, child["id"]).resume_source_on_completion
 
 
+@pytest.mark.usefixtures("host_execution_actor")
 def test_resuming_replacement_does_not_restore_revoked_parent_permission(case):
     original = case._start()
     selected_id = edit(case, 0, "Replacement")["id"]
@@ -652,6 +663,7 @@ def test_resuming_replacement_does_not_restore_revoked_parent_permission(case):
         assert root.pause_requested
 
 
+@pytest.mark.usefixtures("host_execution_actor")
 def test_interrupting_a_targeted_output_does_not_expand_resume_to_full_plan(case):
     original = case._start()
     execute(case, original)
@@ -689,6 +701,7 @@ def test_interrupting_a_targeted_output_does_not_expand_resume_to_full_plan(case
     assert calls == ["Two"], "The unrequested third block must not be synthesized"
 
 
+@pytest.mark.usefixtures("host_execution_actor")
 def test_standalone_partial_run_pins_guarded_audio_through_later_selection(case):
     original = case._start()
     execute(case, original)
@@ -808,6 +821,7 @@ def test_standalone_partial_run_pins_guarded_audio_through_later_selection(case)
     assert manifest_ids == frozen_ids
 
 
+@pytest.mark.usefixtures("host_execution_actor")
 def test_failed_requested_regeneration_is_missing_and_finalizes_partial(case):
     original = case._start()
     execute(case, original)
@@ -844,6 +858,7 @@ def test_failed_requested_regeneration_is_missing_and_finalizes_partial(case):
     assert (final_status, incomplete) == ("partial", 1)
 
 
+@pytest.mark.usefixtures("host_execution_actor")
 def test_partial_run_ignores_cross_plan_and_unguarded_clones(case):
     original = case._start()
     execute(case, original)

@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from unittest.mock import patch
 
+import pytest
 from pydub import AudioSegment
 from sqlalchemy import select
 
@@ -225,6 +226,7 @@ class GenerationRegenerationTests(unittest.TestCase):
             threading.Event(),
         )
 
+    @pytest.mark.usefixtures("host_execution_actor")
     def test_cloud_pause_saves_current_wave_and_resume_keeps_its_takes(self):
         root = self._start(
             run_override={"tts": {"service": "openai", "tts_concurrent_requests": 2}}
@@ -283,6 +285,7 @@ class GenerationRegenerationTests(unittest.TestCase):
                 ),
             )
 
+    @pytest.mark.usefixtures("host_execution_actor")
     def test_cloud_failure_saves_other_wave_results_without_extra_retry(self):
         root = self._start(
             run_override={"tts": {"service": "openai", "tts_concurrent_requests": 2}}
@@ -740,6 +743,7 @@ class GenerationRegenerationTests(unittest.TestCase):
         self.assertEqual(2, len(batch_calls[-1]))
         self.assertNotIn(segment_ids[0], batch_calls[-1])
 
+    @pytest.mark.usefixtures("host_execution_actor")
     def test_stale_or_missing_artifact_takes_do_not_satisfy_resume_checkpoint(self):
         root = self._start(run_override={"tts": {"tts_batch_size": 1}})
         handlers = self.app.extensions["pandrator"]["workflow_handlers"]
@@ -786,6 +790,7 @@ class GenerationRegenerationTests(unittest.TestCase):
         self.assertEqual(3, result["generated"])
         self.assertEqual({"One", "Two", "Three"}, set(calls))
 
+    @pytest.mark.usefixtures("host_execution_actor")
     def test_failed_replacement_keeps_previous_active_take_and_wav(self):
         root = self._start(run_override={"tts": {"tts_batch_size": 1}})
         handlers = self.app.extensions["pandrator"]["workflow_handlers"]
@@ -846,6 +851,7 @@ class GenerationRegenerationTests(unittest.TestCase):
             self.assertIsNone(takes[0].parent_take_id)
         self.assertTrue(old_path.is_file())
 
+    @pytest.mark.usefixtures("host_execution_actor")
     def test_terminal_parent_filled_by_grouped_regeneration_becomes_completed(self):
         root = self._start(run_override={"tts": {"tts_batch_size": 1}})
         with self.database.session() as session:

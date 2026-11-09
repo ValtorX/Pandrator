@@ -9,6 +9,7 @@ from flask import Flask, session
 from PIL import Image
 from sqlalchemy import func, select
 
+from pandrator.web.accounts.execution_actor import execution_actor_scope
 from pandrator.web.api import create_app
 from pandrator.web.auth import PRINCIPAL_KINDS, BootstrapTokenStore
 from pandrator.web.http_lifecycle import ApiGuards
@@ -329,8 +330,10 @@ class PrincipalContractTests(unittest.TestCase):
             ):
                 self.assertEqual(expected, self.guards._network_zone())
 
+    @execution_actor_scope(None)
     def test_session_principal_kind_scope_and_request_cache_contract(self):
-        for kind in sorted(PRINCIPAL_KINDS):
+        # A browser session never resolves to a project link; that refusal is asserted below.
+        for kind in sorted(PRINCIPAL_KINDS - {"project_link"}):
             with self.subTest(kind=kind), self.app.test_request_context():
                 self.session_store.resolve.reset_mock()
                 self.session_store.resolve.return_value = SimpleNamespace(
@@ -351,6 +354,15 @@ class PrincipalContractTests(unittest.TestCase):
                 session["authenticated"] = False
                 self.assertIs(principal, self.guards.principal())
                 self.session_store.resolve.assert_called_once_with("synthetic-opaque-session")
+        with self.subTest(kind="project_link"), self.app.test_request_context():
+            self.session_store.resolve.reset_mock()
+            self.session_store.resolve.return_value = SimpleNamespace(
+                subject="server-actor", kind="project_link", scopes=frozenset({"app.read"}),
+                client_id=None, user_id="server-user-id", auth_revision=7, session_id="server-session-id",
+            )
+            session.update(authenticated=True, auth_session="synthetic-opaque-session")
+            self.assertIsNone(self.guards.principal())
+            self.session_store.resolve.assert_called_once_with("synthetic-opaque-session")
         with self.app.test_request_context():
             self.session_store.resolve.return_value = None
             session.update(authenticated=True, auth_session="revoked-opaque-session", principal_scopes=["invalid-scope"])

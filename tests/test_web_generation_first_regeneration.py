@@ -27,6 +27,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
+import pytest
 from pydub import AudioSegment
 from sqlalchemy import select
 
@@ -196,6 +197,7 @@ class FirstRegenerationTests(unittest.TestCase):
             next(i for i in live["items"] if i["id"] == edited["id"])["status"],
         )
 
+    @pytest.mark.usefixtures("host_execution_actor")
     def test_adopted_response_regenerates_first_try(self):
         """UI-derived ordering: build regenerate purely from the save response."""
         page = self._segments()
@@ -383,6 +385,7 @@ class FirstRegenerationTests(unittest.TestCase):
         self.assertEqual("stale", cleared["optimization_status"])
         self.assertEqual("stale", cleared["status"])
 
+    @pytest.mark.usefixtures("host_execution_actor")
     def test_effective_speech_decides_audio_stale(self):
         """Same effective speech retains takes; altered speech stales."""
         page = self._segments()

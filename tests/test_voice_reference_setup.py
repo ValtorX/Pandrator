@@ -5,6 +5,7 @@ import threading
 import unittest
 from unittest import mock
 
+import pytest
 from sqlalchemy import func, select
 
 from pandrator.web.accounts.execution_actor import HostActor, execution_actor_scope
@@ -156,6 +157,7 @@ class VoiceReferenceSetupTests(unittest.TestCase):
                 "sample_id": receipt["sample_id"], "sample_artifact_id": receipt["artifact_id"],
                 "sample_sha256": receipt["sample_sha256"]}
 
+    @pytest.mark.usefixtures("host_execution_actor")
     def test_native_registration_reuse_and_endpoint_text_invalidation(self):
         extension, voice, _, _, _, prepared, handler = self._designed()
         settings = {"id": "audio_cpp", "name": "audio.cpp", "adapter": "audio_cpp", "api_base": "http://local/a"}
@@ -231,6 +233,7 @@ class VoiceReferenceSetupTests(unittest.TestCase):
         conflict = self.client.post(path, json={**request, "recipe_signature": "b" * 64}, headers=self._headers("recipe-signature-key"))
         self.assertEqual("idempotency_conflict", conflict.get_json()["error"]["code"])
 
+    @pytest.mark.usefixtures("host_execution_actor")
     def test_explicit_pins_select_older_sample_for_remote_publication(self):
         extension, voice, _, _, body, prepared, handler = self._designed()
         newer_path = extension["paths"].voices / voice["id"] / "newer.wav"
@@ -289,6 +292,7 @@ class VoiceReferenceSetupTests(unittest.TestCase):
                 artifact.metadata_json = metadata
             self.assertEqual(202, self.client.post(path, json=body, headers=self._headers()).status_code)
 
+    @pytest.mark.usefixtures("host_execution_actor")
     def test_hash_change_during_provider_configuration_is_checked_before_upload(self):
         extension, voice, _, _, _, prepared, handler = self._designed()
         with extension["database"].session() as session:
@@ -303,6 +307,7 @@ class VoiceReferenceSetupTests(unittest.TestCase):
             handler.publish_voice({**self._pinned(voice, prepared), "service_id": "kobold_qwen"}, lambda *_: None, threading.Event())
         upload.assert_not_called()
 
+    @pytest.mark.usefixtures("host_execution_actor")
     def test_native_historical_pin_is_rejected_without_registration_or_revision_change(self):
         extension, voice, _, _, _, prepared, handler = self._designed()
         newer_path = extension["paths"].voices / voice["id"] / "current-native.wav"

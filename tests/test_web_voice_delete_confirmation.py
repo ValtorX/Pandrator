@@ -65,6 +65,7 @@ def row_snapshot(database: Database) -> dict[str, list[dict[str, Any]]]:
     ),
     ids=("unknown-object", "error-object", "unknown-entry", "verified-absence", "deleted"),
 )
+@pytest.mark.usefixtures("host_execution_actor")
 def test_native_unpublish_requires_confirmation_and_retains_samples(
     tmp_path,
     payload: object,

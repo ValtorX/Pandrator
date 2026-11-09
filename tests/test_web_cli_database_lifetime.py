@@ -407,6 +407,7 @@ def test_output_failure_occurs_after_native_pool_retirement(owner: HeldDatabase)
     owner.assert_retired()
 
 
+@pytest.mark.usefixtures("host_execution_actor")
 def test_native_fifteen_command_round_trip_disposes_before_every_output(
     tmp_path: Path,
 ) -> None:
