@@ -58,6 +58,7 @@ Found while writing the stories, by comparing CI's failure list with the classif
 - `test_epub_narration::test_page_list_cannot_create_duplicate_consumed_note_chapter`, both operating systems. Reproduced here. It stops at its own check that the fixture's navigation holds a `page-list`, before reaching the product. The cause isn't known yet: the fixture or the EPUB library may have changed. Assigned to story 10.
 - `test_xtts_training_process::test_silent_training_cancellation_reaps_parent_and_child_and_preserves_unrelated`, Ubuntu only: "Process fixture did not become ready". It is skipped on Windows, so it wasn't run here. Assigned to story 10.
 - `test_release_upgrade_preservation::test_published_release_tree_survives_normal_startup`, Windows only. Reproduced here as a hash mismatch on a fixture file. A line-ending change is the likely cause, which is inferred. Assigned to story 7.
+  Resolved by story 7: confirmed as a line-ending change (the fixture's text files were `w/crlf` under `core.autocrlf=true` while the test hashes raw bytes). `.gitattributes` now marks `tests/fixtures/release-0.13.0-rich/**` as `-text`, and the working-tree copies were refreshed from the index.
 
 ## The 35 tests missing an actor
 
@@ -104,6 +105,7 @@ No new product bug was found. Three points need care when these are fixed:
 - **Q8's `test_administrator_model_jobs` asserts the payload is unread before authorization.** The product now reads the two artifact ids and then authorizes. That looks intended and reads nothing else, but it loosens a stated rule, so the story should confirm it rather than only relax the test.
 - **W1 needs a very short temp root.** A 38-character root still overflows in the session bundle tests and a 5-character one passes. Story 6's choice of root has to account for that, not just the earlier 74-character and 102-character measures.
   Resolved by story 6: on Windows with no `--basetemp`, `tests/conftest.py` now uses `<drive>:\tmp\pt\<4 random chars>` (see `tests/windows_temp_root.py`), so W1 needs no hand-set `PYTEST_ADDOPTS`.
+- **W2 to W7, W8, J1 and L1 to L4 resolved by story 7** (test-side only). Symlink tests skip only on WinError 1314 through `tests/platform_support.py`; W4 and the four `sleep` tests use its `direct_python()`; W3, W5, W6, W7, L3 and L4 are fixture fixes; POSIX modes, FIFOs and the security log file sink (L2, until `bug-security-log-drops-events-on-windows` is fixed) skip with a stated reason; the release fixture is `-text` in `.gitattributes`; the J1 test has its `host_model_acquisition` mark; the sqlite files use `sqlite_url`. The 3 G3 tests still fail on `SCHEMA_HEAD == TARGET` and stay with story 10.
 
 ## CI's result for the split
 
