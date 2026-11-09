@@ -41,6 +41,10 @@ class ApplicationVersionTests(unittest.TestCase):
     ):
         self.assertEqual("0+unknown", resolve_application_version())
 
+    def test_fork_build_identifies_itself(self):
+        self.assertRegex(PANDRATOR_VERSION, r"\+fork\.\d+$")
+        self.assertEqual(public_version(PANDRATOR_VERSION), PANDRATOR_PUBLIC_VERSION)
+
     def test_public_version_drops_only_the_local_segment(self):
         self.assertEqual("0.14.2", public_version("0.14.2+fork.1"))
         self.assertEqual("0.14.2", public_version("0.14.2"))
