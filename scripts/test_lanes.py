@@ -571,7 +571,7 @@ TEST_LANES: dict[str, tuple[str, ...]] = {
         "tests/test_speech_plan_audio_reuse.py",
         "tests/test_generation_provider_preflight.py",
     ),
-    # web-07 and web-19 to web-23 were one lane that outran the CI job time limit; split into contiguous runs.
+    # web-07, web-19 to web-23: one lane split to fit CI's time limit; keep their file order.
     "web-07-serial": (
         "tests/test_passage_markers.py",
         "tests/test_source_passage_sentence_policy.py",

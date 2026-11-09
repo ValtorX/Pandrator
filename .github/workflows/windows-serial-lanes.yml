@@ -36,6 +36,9 @@ jobs:
             pandrator_installer/pyproject.toml
             pandrator_manager/pyproject.toml
             pandrator_mcp/pyproject.toml
+      - name: Install Windows FFmpeg
+        timeout-minutes: 10
+        uses: ./.github/actions/install-windows-ffmpeg
       - name: Install Python lane dependencies
         run: >-
           python -m pip install --disable-pip-version-check

@@ -95,6 +95,7 @@ def _matrix_lanes_by_os(workflow_text: str) -> dict[str, list[str]]:
     _, found, job = workflow_text.partition("\n  python-lanes:\n")
     if not found:
         raise AssertionError("web-preview.yml has no python-lanes job")
+    job = re.split(r"^  \S", job, maxsplit=1, flags=re.M)[0]
     _, found, after = job.partition("\n        include:\n")
     if not found:
         raise AssertionError("web-preview.yml has no python-lanes matrix")
@@ -129,11 +130,34 @@ def _matrix_problems(by_os: dict[str, list[str]], manifest_lanes: set[str]) -> l
     return problems
 
 
+def _manual_windows_lanes(workflow_text: str) -> list[str]:
+    """Read the lane list of windows-serial-lanes.yml without a YAML parser."""
+    _, found, after = workflow_text.partition("\n        lane:\n")
+    listed = re.match(r"(?: {10}- \S+\n)+", after) if found else None
+    if listed is None:
+        raise AssertionError("windows-serial-lanes.yml has no lane list")
+    return re.findall(r"- (\S+)", listed.group())
+
+
+def _workflow_text(name: str) -> str:
+    return (test_lanes.REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+
+
 class TestLaneMatrixTests(unittest.TestCase):
     def test_ci_matrix_runs_every_manifest_lane_on_both_operating_systems(self):
-        workflow = test_lanes.REPO_ROOT / ".github" / "workflows" / "web-preview.yml"
-        by_os = _matrix_lanes_by_os(workflow.read_text(encoding="utf-8"))
+        by_os = _matrix_lanes_by_os(_workflow_text("web-preview.yml"))
         self.assertEqual([], _matrix_problems(by_os, set(test_lanes.TEST_LANES)))
+
+    def test_manual_windows_workflow_names_only_manifest_lanes(self):
+        lanes = _manual_windows_lanes(_workflow_text("windows-serial-lanes.yml"))
+        self.assertEqual([], sorted(set(lanes) - set(test_lanes.TEST_LANES)))
+
+    def test_windows_jobs_install_ffmpeg_through_the_checked_action(self):
+        for name, jobs in (("web-preview.yml", 2), ("windows-serial-lanes.yml", 1)):
+            with self.subTest(workflow=name):
+                text = _workflow_text(name)
+                self.assertEqual(jobs, text.count("uses: ./.github/actions/install-windows-ffmpeg"))
+                self.assertNotIn("choco install", text)
 
     def test_matrix_check_names_a_missing_lane_and_an_unknown_lane(self):
         manifest_lanes = {"fast-xdist", "web-01-serial", "web-02-serial"}
@@ -150,6 +174,66 @@ class TestLaneMatrixTests(unittest.TestCase):
             ],
             _matrix_problems(by_os, manifest_lanes),
         )
+
+    def test_matrix_check_names_a_duplicate_lane_and_an_absent_operating_system(self):
+        self.assertEqual(
+            [
+                "ubuntu-latest: lane web-01-serial is listed twice",
+                "windows-latest: lane web-01-serial is missing from the matrix",
+            ],
+            _matrix_problems(
+                {"ubuntu-latest": ["web-01-serial", "web-01-serial"]}, {"web-01-serial"}
+            ),
+        )
+
+    def test_a_lane_in_two_entries_stays_listed_twice(self):
+        text = (
+            "jobs:\n"
+            "  python-lanes:\n"
+            "    strategy:\n"
+            "      matrix:\n"
+            "        include:\n"
+            "          - name: ubuntu-services\n"
+            "            os: ubuntu-latest\n"
+            "            lanes: >-\n"
+            "              mcp-serial manager-serial\n"
+            "          - name: ubuntu-mcp\n"
+            "            os: ubuntu-latest\n"
+            "            lanes: mcp-serial\n"
+        )
+        self.assertEqual(
+            {"ubuntu-latest": ["mcp-serial", "manager-serial", "mcp-serial"]},
+            _matrix_lanes_by_os(text),
+        )
+
+    def test_an_unreadable_matrix_fails_instead_of_passing_empty(self):
+        job = "jobs:\n  python-lanes:\n    steps:\n"
+        later_matrix = (
+            "  e2e:\n"
+            "    strategy:\n"
+            "      matrix:\n"
+            "        include:\n"
+            "          - os: ubuntu-latest\n"
+            "            lanes: not-counted\n"
+        )
+        entry = "jobs:\n  python-lanes:\n    strategy:\n      matrix:\n        include:\n"
+        for name, text in {
+            "no job": "jobs:\n  other:\n    steps:\n",
+            "no matrix": job,
+            "matrix only in a later job": job + later_matrix,
+            "entry without lanes": entry + "          - os: ubuntu-latest\n",
+            "entry without os": entry + "          - lanes: web-01-serial\n",
+        }.items():
+            with self.subTest(name), self.assertRaises(AssertionError):
+                _matrix_lanes_by_os(text)
+
+    def test_a_missing_manual_lane_list_fails_instead_of_passing_empty(self):
+        for name, text in {
+            "no list": "jobs:\n  python-lanes:\n    steps:\n",
+            "empty list": "      matrix:\n        lane:\n    steps:\n",
+        }.items():
+            with self.subTest(name), self.assertRaises(AssertionError):
+                _manual_windows_lanes(text)
 
     def test_folded_lane_lists_count_every_lane(self):
         text = (
