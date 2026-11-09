@@ -13,6 +13,7 @@ from pandrator.logic import audio_cpp_assets as shared_assets
 from pandrator.logic import audio_cpp_generation_assets as generation_assets
 from pandrator.logic import audio_cpp_generation_models as registry
 from pandrator.logic.audio_cpp_assets import AudioAssetsError
+from tests.platform_support import symlink_or_skip
 
 
 class FakeResponse:
@@ -72,7 +73,7 @@ def test_package_and_nested_paths_cannot_escape_through_symlinks(tmp_path):
     package.parent.mkdir(parents=True)
     outside = tmp_path / "outside"
     outside.mkdir()
-    package.symlink_to(outside, target_is_directory=True)
+    symlink_or_skip(package, outside, target_is_directory=True)
     with pytest.raises(AudioAssetsError, match="must not be a symlink"):
         generation_assets.file_path(model_id, "config.json", settings)
     with pytest.raises(AudioAssetsError, match="must not be a symlink"):
@@ -81,7 +82,7 @@ def test_package_and_nested_paths_cannot_escape_through_symlinks(tmp_path):
     package.unlink()
     package.mkdir()
     nested = package / "tokenizer"
-    nested.symlink_to(outside, target_is_directory=True)
+    symlink_or_skip(nested, outside, target_is_directory=True)
     with pytest.raises(AudioAssetsError, match="escapes its cache directory"):
         generation_assets.file_path(model_id, "tokenizer/tokenizer.json", settings)
 

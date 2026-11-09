@@ -11,9 +11,10 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import String
-from sqlalchemy.engine import URL, Connection
+from sqlalchemy.engine import Connection
 
 from pandrator.web.accounts.private_work_models import QuickTranscriptionOwner
+from pandrator.web.database import sqlite_url
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS = ROOT / "pandrator" / "web" / "migrations"
@@ -132,7 +133,7 @@ IDS = {
 def _config(path: Path) -> Config:
     config = Config()
     config.set_main_option("script_location", str(MIGRATIONS))
-    config.set_main_option("sqlalchemy.url", str(URL.create("sqlite", database=str(path))))
+    config.set_main_option("sqlalchemy.url", sqlite_url(path))
     return config
 
 

@@ -26,6 +26,7 @@ from pandrator.web.projects.copy_files import (
     cleanup_staged_project_files,
     stage_project_files,
 )
+from tests.platform_support import symlink_or_skip
 
 
 def _id() -> str:
@@ -237,7 +238,7 @@ def test_unavailable_nonregular_and_escaping_sources_are_rejected(
         outside = tmp_path / "outside.bin"
         outside.write_bytes(expected_data)
         source_path.parent.mkdir(parents=True)
-        source_path.symlink_to(outside)
+        symlink_or_skip(source_path, outside)
     snapshot = _snapshot((source,))
     copy_id = _id()
 
@@ -451,7 +452,7 @@ def test_cleanup_is_idempotent_and_refuses_replacement_or_symlink(
     external_marker = external / "preserve.txt"
     external_marker.write_text("do not follow", encoding="utf-8")
     original_path.rename(moved_path)
-    original_path.symlink_to(external, target_is_directory=True)
+    symlink_or_skip(original_path, external, target_is_directory=True)
 
     cleanup_staged_project_files(paths, second)
 

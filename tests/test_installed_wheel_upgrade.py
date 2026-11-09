@@ -11,9 +11,8 @@ from typing import Any
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy.engine import URL
 
-from pandrator.web.database import SCHEMA_HEAD
+from pandrator.web.database import SCHEMA_HEAD, sqlite_url
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS = ROOT / "pandrator" / "web" / "migrations"
@@ -32,7 +31,7 @@ def _quote(identifier: str) -> str:
 def _config(path: Path) -> Config:
     config = Config()
     config.set_main_option("script_location", str(MIGRATIONS))
-    config.set_main_option("sqlalchemy.url", str(URL.create("sqlite", database=str(path))))
+    config.set_main_option("sqlalchemy.url", sqlite_url(path))
     return config
 
 

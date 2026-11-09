@@ -13,13 +13,12 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import CheckConstraint, Table, event, select
-from sqlalchemy.engine import URL
 from sqlalchemy.orm import Session
 
 from pandrator.web import project_speech_references as speech_reference_store
 from pandrator.web import speech_inputs
 from pandrator.web.access.contracts import AccessDenied
-from pandrator.web.database import SCHEMA_HEAD, Database
+from pandrator.web.database import SCHEMA_HEAD, Database, sqlite_url
 from pandrator.web.model_base import Base, new_id
 from pandrator.web.models import (
     AppSetting,
@@ -64,7 +63,7 @@ def _migration_config(path: Path) -> Config:
     config = Config()
     config.set_main_option("script_location", str(MIGRATIONS))
     config.set_main_option(
-        "sqlalchemy.url", str(URL.create("sqlite", database=str(path)))
+        "sqlalchemy.url", sqlite_url(path)
     )
     return config
 

@@ -23,6 +23,7 @@ from pandrator.web.quick_transcription_schemas import (
     TranscriptionSnapshot,
 )
 from pandrator_mcp.schemas.transcription import TranscribeInput
+from tests.platform_support import direct_python
 
 
 def _wav(path: Path, seconds: float = 2.0) -> Path:
@@ -395,9 +396,9 @@ def test_cancel_and_timeout():
     event = threading.Event()
     event.set()
     with pytest.raises(ProcessCancelled):
-        qwen_asr._run_tool(["sleep", "30"], run_func=subprocess.run, cancel_event=event, timeout=1)
+        qwen_asr._run_tool([direct_python(), "-c", "import time; time.sleep(30)"], run_func=subprocess.run, cancel_event=event, timeout=1)
     with pytest.raises(QwenASRError, match="timed out after 1 seconds"):
-        qwen_asr._run_tool(["sleep", "30"], run_func=subprocess.run, cancel_event=None, timeout=1, backend="cpu")
+        qwen_asr._run_tool([direct_python(), "-c", "import time; time.sleep(30)"], run_func=subprocess.run, cancel_event=None, timeout=1, backend="cpu")
 
 
 def test_pinned_assets_verified_atomic_reuse_and_cancel(tmp_path, monkeypatch, host_model_acquisition):

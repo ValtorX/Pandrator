@@ -9,6 +9,7 @@ import pytest
 from pandrator.logic import audio_cpp_assets as assets
 from pandrator.logic import audio_cpp_yue2_adapter as adapter
 from pandrator.logic.cancellable_process import ProcessCancelled
+from tests.platform_support import symlink_or_skip
 
 
 class FakeResponse:
@@ -118,7 +119,7 @@ def test_cache_path_rejects_symlink_package_and_destination(tmp_path):
     def opener(*_args, **_kwargs):
         pytest.fail("symlinked path called network")
 
-    package.symlink_to(outside, target_is_directory=True)
+    symlink_or_skip(package, outside, target_is_directory=True)
     with pytest.raises(assets.AudioAssetsError, match="package cache directory.*symlink"):
         adapter.cache_path(settings)
     with pytest.raises(assets.AudioAssetsError, match="package cache directory.*symlink"):
@@ -129,7 +130,7 @@ def test_cache_path_rejects_symlink_package_and_destination(tmp_path):
     destination = package / adapter.FILENAME
     outside_file = outside / "adapter.safetensors"
     outside_file.write_bytes(b"outside")
-    destination.symlink_to(outside_file)
+    symlink_or_skip(destination, outside_file)
     with pytest.raises(assets.AudioAssetsError, match="cache file.*symlink"):
         adapter.cache_path(settings)
     with pytest.raises(assets.AudioAssetsError, match="cache file.*symlink"):

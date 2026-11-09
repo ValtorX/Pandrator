@@ -25,6 +25,8 @@ class _Response:
         self.status_code = status_code
         self._lines = lines
         self.closed = False
+        # A real requests.Response always has .raw; the Windows timeout preparation reads it.
+        self.raw = None
 
     def __enter__(self) -> _Response:
         return self

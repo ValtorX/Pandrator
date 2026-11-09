@@ -21,6 +21,7 @@ from pandrator.web.sound_mix_render import (
     normalize_mix_audio,
     render_sound_mix,
 )
+from tests.platform_support import symlink_or_skip
 
 
 def _write_pcm(path: Path, values: list[int], *, rate: int = 8000) -> None:
@@ -346,7 +347,7 @@ def test_renderer_rejects_symlink_audio_inputs(tmp_path: Path) -> None:
     linked_base = tmp_path / "linked-base.wav"
     output = tmp_path / "mixed.wav"
     _write_pcm(base, [12, 34, 56])
-    linked_base.symlink_to(base)
+    symlink_or_skip(linked_base, base)
     with pytest.raises(ValueError, match="non-symlink"):
         render_sound_mix(
             linked_base,

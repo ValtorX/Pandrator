@@ -161,6 +161,8 @@ class MediaEditServiceTests(unittest.TestCase):
 
         bootstrap = BootstrapTokenStore()
         token = bootstrap.issue()
+        # Windows refuses the legacy rename while this fixture still holds the SQLite file.
+        self.database.dispose()
         app = create_app(data_root=self.directory.name, testing=True, bootstrap_tokens=bootstrap)
         client = app.test_client()
         csrf = client.post("/api/v1/auth/bootstrap", json={"token": token}).get_json()["csrf_token"]

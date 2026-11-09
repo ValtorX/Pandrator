@@ -24,6 +24,7 @@ TEST_LANES: dict[str, tuple[str, ...]] = {
         "tests/test_model_acquisition_policy.py",
         "tests/test_model_inference_policy.py",
         "tests/test_speech_input_files.py",
+        "tests/test_platform_support.py",
         "tests/test_idempotency_readonly_replay.py",
         "tests/test_prepared_model_client.py",
         "tests/test_model_acquisition_assets.py",

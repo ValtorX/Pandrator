@@ -286,6 +286,7 @@ class CrispASRTranscriptionTests(unittest.TestCase):
         self.assertEqual(commands[0][commands[0].index("-am") + 1], str(aligner))
         self.assertNotIn("--auto-download", commands[0])
 
+    @pytest.mark.usefixtures("host_model_acquisition")
     def test_transcribe_uses_prefetched_model_without_forcing_a_second_download(self):
         commands = []
 

@@ -2,7 +2,6 @@
 
 import json
 import subprocess
-import sys
 import threading
 import time
 from contextlib import ExitStack
@@ -30,6 +29,7 @@ from pandrator.web.models import (
 )
 from pandrator.web.sessions import SessionService
 from pandrator.web.workflow_handlers import WorkflowHandlers
+from tests.platform_support import direct_python
 from tests.web_test_support import prepare_web_test_data_root
 
 
@@ -501,7 +501,7 @@ def test_audio_probe_cancellation_reaps_native_child_and_retains_published_pair(
     started = case.paths.root / "probe-started"
     finished = case.paths.root / "probe-finished"
     code = "import os,pathlib,sys,time;pathlib.Path(sys.argv[1]).write_text(str(os.getpid()));print('0',flush=True);time.sleep(4);pathlib.Path(sys.argv[2]).write_text('finished')"
-    command = [sys.executable, "-c", code, str(started), str(finished)]
+    command = [direct_python(), "-c", code, str(started), str(finished)]
     native_popen = subprocess.Popen
     children, watchers, watcher_errors = [], [], []
 

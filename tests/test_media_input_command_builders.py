@@ -19,6 +19,8 @@ from pandrator.logic.dubbing import audio_sync, manual_timing, transcription, vi
 from pandrator.logic.media_input_policy import LOCAL_MEDIA_INPUT_OPTIONS
 
 _MEDIA_A = "source audio 'one' \"original\".mov"
+# Windows file names cannot contain a double quote; only tests that create the file use this.
+_MEDIA_A_FILE = _MEDIA_A.replace('"', "") if os.name == "nt" else _MEDIA_A
 _MEDIA_B = "speech audio 'two' \"final\".wav"
 _SUBTITLE_A = "English subtitles 'one'.srt"
 _SUBTITLE_B = 'German subtitles "two".srt'
@@ -314,7 +316,7 @@ def test_transcription_excerpt_and_vocal_isolation_commands_restrict_inputs(tmp_
 
 
 def test_audio_cpp_normalization_command_restricts_input(tmp_path, monkeypatch):
-    source = tmp_path / _MEDIA_A
+    source = tmp_path / _MEDIA_A_FILE
     source.write_bytes(b"synthetic non-WAV media")
     temporary = tmp_path / "normalization"
     captured: list[list[str]] = []
@@ -431,7 +433,7 @@ def test_book_video_keeps_lavfi_literal_and_restricts_audio_input(tmp_path, monk
 
 
 def test_manual_correction_extraction_command_restricts_input(tmp_path, monkeypatch):
-    video = tmp_path / _MEDIA_A
+    video = tmp_path / _MEDIA_A_FILE
     video.write_bytes(b"synthetic video placeholder")
     session = tmp_path / "manual correction"
     captured: list[list[str]] = []

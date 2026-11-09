@@ -17,6 +17,7 @@ from pandrator.web.database import Database
 from pandrator.web.delivery_publication import publish_delivery_artifact
 from pandrator.web.models import Artifact, ArtifactEdge, SessionRecord
 from pandrator.web.projects.identity import create_session_project
+from tests.platform_support import symlink_or_skip
 from tests.web_test_support import prepare_web_test_data_root
 
 
@@ -161,20 +162,20 @@ def test_symlink_and_identical_paths_are_rejected_before_preparation(publication
 
     monkeypatch.setattr(case.artifacts, "prepare_registration", unexpected_prepare)
 
+    with pytest.raises(ValueError, match="must differ"):
+        _publish(case, requested_destination=case.rendered)
+
     rendered_link = case.rendered.with_name("rendered-link.wav")
-    rendered_link.symlink_to(case.rendered)
+    symlink_or_skip(rendered_link, case.rendered)
     with pytest.raises(ValueError, match="regular file"):
         _publish(case, rendered=rendered_link)
 
     linked_target = case.requested_destination.with_name("linked-target.wav")
     linked_target.write_bytes(b"existing managed target")
     requested_link = case.requested_destination.with_name("requested-link.wav")
-    requested_link.symlink_to(linked_target)
+    symlink_or_skip(requested_link, linked_target)
     with pytest.raises(ValueError, match="must not be a symlink"):
         _publish(case, requested_destination=requested_link)
-
-    with pytest.raises(ValueError, match="must differ"):
-        _publish(case, requested_destination=case.rendered)
 
     assert case.rendered.read_bytes() == b"synthetic rendered audio"
     assert not case.requested_destination.exists()

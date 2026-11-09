@@ -26,6 +26,7 @@ from pandrator.web.models import (
 from pandrator.web.sessions import SessionService
 from pandrator.web.workflow_handlers import WorkflowHandlers
 from pandrator.web.workspace import SourceLibraryService
+from tests.platform_support import symlink_or_skip
 from tests.web_test_support import prepare_web_test_data_root
 
 
@@ -397,7 +398,7 @@ class SessionOutputStorageTests(unittest.TestCase):
         artifact, path = self.artifact("exports/final.wav", "export_video", kind="export")
         _source, source_path = self.artifact("original.wav", "upload")
         path.unlink()
-        path.symlink_to(source_path)
+        symlink_or_skip(path, source_path)
         with self.assertRaisesRegex(ValueError, "same file"):
             self.artifacts.remove_output(self.record.id, artifact.id)
         self.assertTrue(source_path.exists())
@@ -448,7 +449,7 @@ class SessionOutputStorageTests(unittest.TestCase):
         artifact, path = self.artifact()
         _source, source_path = self.artifact("original.wav", "upload")
         path.unlink()
-        path.symlink_to(source_path)
+        symlink_or_skip(path, source_path)
         with self.assertRaisesRegex(ValueError, "same file"):
             self.artifacts.remove_output(self.record.id, artifact.id)
         self.assertTrue(source_path.exists())

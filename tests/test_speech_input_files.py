@@ -19,6 +19,7 @@ from pandrator.web.speech_input_files import (
     stage_file,
     validate_wav,
 )
+from tests.platform_support import symlink_or_skip
 
 
 def wav_bytes(value: int = 1) -> bytes:
@@ -68,21 +69,37 @@ def test_path_traversal(tmp_path: Path, relative: str) -> None:
         read_verified_file(paths, relative, limit=100)
 
 
-def test_rejects_symlinks_directories_and_fifo_without_blocking(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "file_symlink",
+        "directory_alias",
+        "directory",
+        pytest.param(
+            "fifo",
+            marks=pytest.mark.skipif(
+                not hasattr(os, "mkfifo"), reason="FIFOs do not exist on this platform"
+            ),
+        ),
+    ],
+)
+def test_rejects_symlinks_directories_and_fifo_without_blocking(tmp_path: Path, kind: str) -> None:
     paths = DataPaths.from_value(tmp_path).ensure()
     (paths.uploads / "real.wav").write_bytes(wav_bytes())
-    (paths.uploads / "link.wav").symlink_to(paths.uploads / "real.wav")
-    (paths.root / "alias").symlink_to(paths.uploads, target_is_directory=True)
-    (paths.uploads / "directory.wav").mkdir()
-    os.mkfifo(paths.uploads / "fifo.wav")
-    for relative in (
-        "uploads/link.wav",
-        "alias/real.wav",
-        "uploads/directory.wav",
-        "uploads/fifo.wav",
-    ):
-        with pytest.raises(SpeechInputError):
-            read_verified_file(paths, relative, limit=1024)
+    if kind == "file_symlink":
+        symlink_or_skip(paths.uploads / "link.wav", paths.uploads / "real.wav")
+        relative = "uploads/link.wav"
+    elif kind == "directory_alias":
+        symlink_or_skip(paths.root / "alias", paths.uploads, target_is_directory=True)
+        relative = "alias/real.wav"
+    elif kind == "directory":
+        (paths.uploads / "directory.wav").mkdir()
+        relative = "uploads/directory.wav"
+    else:
+        os.mkfifo(paths.uploads / "fifo.wav")
+        relative = "uploads/fifo.wav"
+    with pytest.raises(SpeechInputError):
+        read_verified_file(paths, relative, limit=1024)
 
 
 def test_private_staging_and_cleanup_retains_replacements_and_borrowed_files(
@@ -92,14 +109,21 @@ def test_private_staging_and_cleanup_retains_replacements_and_borrowed_files(
     directory, identity = create_staging_directory(paths)
     first = stage_file(paths, directory, wav_bytes(), ".wav")
     second = stage_file(paths, directory, b"{}", ".json")
-    assert stat.S_IMODE(paths.managed_path(directory).stat().st_mode) == 0o700
-    assert stat.S_IMODE(paths.managed_path(first.relative_path).stat().st_mode) == 0o600
     replacement = paths.uploads / "replacement"
     replacement.write_bytes(b"replacement")
     replacement.replace(paths.managed_path(first.relative_path))
     cleanup_files(paths, (first, second), directory, identity)
     assert paths.managed_path(first.relative_path).read_bytes() == b"replacement"
     assert not paths.managed_path(second.relative_path).exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission modes do not exist on NTFS")
+def test_private_staging_uses_owner_only_modes(tmp_path: Path) -> None:
+    paths = DataPaths.from_value(tmp_path).ensure()
+    directory, _identity = create_staging_directory(paths)
+    first = stage_file(paths, directory, wav_bytes(), ".wav")
+    assert stat.S_IMODE(paths.managed_path(directory).stat().st_mode) == 0o700
+    assert stat.S_IMODE(paths.managed_path(first.relative_path).stat().st_mode) == 0o600
 
 
 def test_cleanup_preserves_replaced_directory(tmp_path: Path) -> None:
@@ -132,7 +156,7 @@ def test_path_replacement_during_open_is_detected(
     changed = []
 
     def changing_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
-        if path == "source.wav" and not changed:
+        if Path(os.fsdecode(path)).name == "source.wav" and not changed:
             changed.append(True)
             replacement.replace(source)
         return original(path, flags, *args, **kwargs)  # type: ignore[arg-type]

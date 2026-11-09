@@ -20,6 +20,7 @@ from pandrator.web import project_export_bundles as bundle_module
 from pandrator.web.access.contracts import AccessDenied, ProjectNotFound
 from pandrator.web.accounts.actor_authorization import ActorAuthorizationDenied
 from pandrator.web.project_export_bundles import ProjectExportBundleError
+from tests.platform_support import symlink_or_skip
 from tests.test_project_export_bundles import (
     _claim_bundle_job,
     _complete_exports,
@@ -223,7 +224,7 @@ def test_symlink_substitution_never_reads_foreign_bytes(bundle_case, monkeypatch
             else directory / substitution
         )
         path.unlink()
-        path.symlink_to(foreign)
+        symlink_or_skip(path, foreign)
         substituted.append(path)
         # Rename moves a staging link to its deterministic publication path.
         forbidden = {foreign, path, _output(case, payload) / path.name}

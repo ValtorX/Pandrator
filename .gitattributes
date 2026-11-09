@@ -8,3 +8,6 @@ pandrator/web/static/_app/immutable/** -diff -whitespace
 web/** text=auto eol=lf
 pandrator/web/static/** text=auto eol=lf
 pandrator_manager/recovery_ui/static/model-groups.js text eol=lf
+
+# The release fixture is hashed byte for byte, so it must keep its stored line endings.
+tests/fixtures/release-0.13.0-rich/** -text

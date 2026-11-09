@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import socket
+import sys
+import threading
 from contextlib import contextmanager
 from types import SimpleNamespace
 
@@ -35,7 +37,26 @@ def no_network(monkeypatch):
     def denied(*_args, **_kwargs):
         raise AssertionError("Only synthetic provider boundaries are permitted")
 
-    monkeypatch.setattr(socket.socket, "connect", denied)
+    real_connect = socket.socket.connect
+    real_socketpair = socket.socketpair
+    in_socketpair = threading.local()
+
+    def guarded_socketpair(*args, **kwargs):
+        in_socketpair.active = True
+        try:
+            return real_socketpair(*args, **kwargs)
+        finally:
+            in_socketpair.active = False
+
+    def guarded_connect(self, address, *args, **kwargs):
+        # Only on Windows, and only while socket.socketpair runs (its fallback connects to
+        # loopback for asyncio's self-pipe); every other connect is denied.
+        if sys.platform == "win32" and getattr(in_socketpair, "active", False):
+            return real_connect(self, address, *args, **kwargs)
+        return denied()
+
+    monkeypatch.setattr(socket, "socketpair", guarded_socketpair)
+    monkeypatch.setattr(socket.socket, "connect", guarded_connect)
     monkeypatch.setattr(socket, "create_connection", denied)
 
 

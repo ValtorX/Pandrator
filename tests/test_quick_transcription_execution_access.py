@@ -38,6 +38,7 @@ from pandrator.web.job_execution import JobLease, current_job_lease
 from pandrator.web.jobs import JobQueue
 from pandrator.web.quick_transcription_execution import prepare_private_transcription_execution
 from pandrator.web.sessions import SessionService
+from tests.platform_support import symlink_or_skip
 from tests.web_test_support import prepare_web_test_data_root
 
 
@@ -334,7 +335,7 @@ def test_source_integrity_uses_proved_private_path_and_exact_hash(private, chang
             other = work.source.parent / "other.wav"
             other.write_bytes(work.source.read_bytes())
             work.source.unlink()
-            work.source.symlink_to(other)
+            symlink_or_skip(work.source, other)
         with pytest.raises(
             ValueError, match="temporary transcription source changed or is unavailable"
         ):

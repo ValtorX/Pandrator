@@ -16,6 +16,7 @@ import pytest
 
 from pandrator.logic import audio_cpp_processing as proc
 from pandrator.logic.cancellable_process import ProcessCancelled
+from tests.platform_support import direct_python, symlink_or_skip
 
 
 def make_wav(path: Path, seconds: float = 1.0, rate: int = 44100, channels: int = 2):
@@ -407,7 +408,7 @@ def test_clean_voice_sample_uses_dfn2_route(tmp_path, native):
 def test_watchdog_timeout_is_explicit(tmp_path):
     with pytest.raises(proc.AudioProcessingError, match="[Tt]imed out"):
         proc._run_child(
-            ["sleep", "30"],
+            [direct_python(), "-c", "import time; time.sleep(30)"],
             {"audio_cpp_timeout_seconds": 0.2},
             None,
             None,
@@ -419,7 +420,7 @@ def test_timeout_never_sets_caller_event():
     event = threading.Event()
     with pytest.raises(proc.AudioProcessingError, match="[Tt]imed out"):
         proc._run_child(
-            ["sleep", "30"],
+            [direct_python(), "-c", "import time; time.sleep(30)"],
             {"audio_cpp_timeout_seconds": 0.2},
             event,
             None,
@@ -435,7 +436,7 @@ def test_mid_run_cancellation_propagates_without_timeout_error():
     try:
         with pytest.raises(ProcessCancelled):
             proc._run_child(
-                ["sleep", "30"],
+                [direct_python(), "-c", "import time; time.sleep(30)"],
                 {"audio_cpp_timeout_seconds": 30},
                 event,
                 None,
@@ -474,8 +475,11 @@ def test_same_source_and_destination_are_rejected(tmp_path, native, monkeypatch)
             {"transcription_vocal_isolation": "bs_roformer"},
             run_func=runner,
         )
+    ensure.assert_not_called()
+    runner.assert_not_called()
+    assert source.stat().st_size > 0  # original untouched
     link = tmp_path / "alias.wav"
-    link.symlink_to(source)
+    symlink_or_skip(link, source)
     with pytest.raises(proc.AudioProcessingError, match="[Ss]ame file"):
         proc.clean_voice_sample(source, link, {}, run_func=runner)
     ensure.assert_not_called()

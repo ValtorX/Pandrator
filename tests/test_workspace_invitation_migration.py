@@ -11,9 +11,8 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy.engine import URL
 
-from pandrator.web.database import SCHEMA_HEAD
+from pandrator.web.database import SCHEMA_HEAD, sqlite_url
 from pandrator.web.models import Base, WorkspaceInvitation
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,7 +25,7 @@ TARGET = "0083_workspace_invitations"
 def config(path: Path) -> Config:
     result = Config()
     result.set_main_option("script_location", str(MIGRATIONS))
-    result.set_main_option("sqlalchemy.url", str(URL.create("sqlite", database=str(path))))
+    result.set_main_option("sqlalchemy.url", sqlite_url(path))
     return result
 
 
