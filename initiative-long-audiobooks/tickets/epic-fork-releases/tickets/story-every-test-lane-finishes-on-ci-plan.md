@@ -78,8 +78,8 @@ Split by measured time, each about 12.5 local and 19 CI minutes plus setup:
 - [x] `.github/workflows/windows-serial-lanes.yml` -- add the new lanes -- keeps the manual run covering the same files.
 - [x] `tests/test_test_lanes.py` -- add a test that each OS's matrix entries cover exactly the manifest's lanes, covering the I/O matrix -- stops a lane silently dropping out of CI.
 - [x] Run each new lane serially with the exact CI command, and compare by test name with the whole-lane run -- shows what the split alone changes.
-- [ ] `findings-ci-failures.md` -- group the failures by cause, map each group to its story, and name any proposed new story -- required by the ticket. Windows results first, CI's after the run. Windows results are recorded; CI's are pending.
-- [ ] Owner gate -- ask for the go-ahead to commit and push, then have CI run on the branch and read its results per lane on both operating systems.
+- [x] `findings-ci-failures.md` -- group the failures by cause, map each group to its story, and name any proposed new story -- required by the ticket. Windows results first, CI's after the run.
+- [x] Owner gate -- ask for the go-ahead to commit and push, then have CI run on the branch and read its results per lane on both operating systems.
 
 **Acceptance Criteria:**
 - Given the new manifest, when `check` runs, then it passes and every test file of the old lane is in exactly one of the six.
@@ -89,7 +89,10 @@ Split by measured time, each about 12.5 local and 19 CI minutes plus setup:
 
 ## Implementation Notes
 
-- **Not finished: the ticket's Verify needs a fork CI run.** Acceptance criteria 2 and 3, and CI's half of the findings, wait on it. The owner approved the commit and push on 2026-11-09: the code is `93c0e68e3277e8fa9f6eda4119fcf9440aaacc4e` on `epic-fork-releases`. A push to that branch doesn't trigger CI, so the owner starts `Web migration preview` on it from the Actions page.
+- **The ticket's Verify is met on fork run `42638129618`, at `93c0e68e3277e8fa9f6eda4119fcf9440aaacc4e`.** All 50 Python jobs finished within their limits with JUnit artifacts, the six lanes took 12.2 to 17.8 minutes on Ubuntu and 18.1 to 22.8 on Windows, the lease fix's tests report a result on both, and `test_lanes.py check` passed as a step of each job. The run's own conclusion is `cancelled`, because one E2E job ran out of time in its browser install; that job runs no lane.
+- CI shows 255 failures in the six lanes on Ubuntu and 334 on Windows, and both reconcile with the local 293 by per-file counts. Details are in `findings-ci-failures.md`, "CI's result for the split". Per-test results come from log summaries rather than the JUnit files, which need a download.
+- A failed Chocolatey install doesn't fail its step, which caused 16 failures on `windows-web-20`. Fixing it isn't part of this story's intent, so it is recorded and left for the owner to decide.
+- The review of `f94fd9f6..93c0e68e3277e8fa9f6eda4119fcf9440aaacc4e` is the owner's next step in another session. On the same day, `3b4484ce` was merged into this branch as `7e96cf5b`. That belongs to story 5, not this story.
 - Results, Windows, uv from `AGENTS.md` with SQLAlchemy 2.0.52. `pixi` isn't installed. The six lanes ran side by side, each serially with CI's command and its own short temp root, in 655 to 760 seconds each.
 - Compared by test name with the whole-lane run: the same 5,312 tests, 293 failing or erroring against 298, and none failing only after the split. The 5 that failed only in the whole-lane run were path-length failures, from the longer temp path `xdist` creates.
 - The six lanes concatenated match the old lane's 304 files in the same order, checked against `f94fd9f6`.

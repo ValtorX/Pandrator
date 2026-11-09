@@ -85,7 +85,16 @@ Added by story 4 at `f94fd9f6`, for the 253 failures in the split `web-07` lanes
 | W6 | 1 | test_mcp_source_workspace (1) | **`no_network` blocks the loopback connect** Windows asyncio uses for its self-pipe. | PLATFORM | V | `tests/test_provider_workspace_access.py:34-36`. Passes when loopback is allowed. | About 3 lines, 1 file |
 | W7 | 1 | test_credential_workspace_scope (1) | **`file-path:/synthetic/fixture` isn't absolute on Windows.** Only that parameter fails. | PLATFORM | V | `tests/test_credential_workspace_scope.py:395-405`, `credentials.py:622-624`. | About 2 lines, 1 file |
 
-**Count check:** Q1 140 + Q2 2 + Q3 3 + Q4 9 + Q5 10 + Q6 41 + Q7 4 + Q8 6 + W1 25 + W2 7 + W3 2 + W4 1 + W5 1 + W6 1 + W7 1 = **253**, and 253 + 40 = 293, the whole set of failures in the six lanes.
+**Count check:** Q1 140 + Q2 2 + Q3 3 + Q4 9 + Q5 10 + Q6 41 + Q7 4 + Q8 6 + W1 25 + W2 7 + W3 2 + W4 1 + W5 1 + W6 1 + W7 1 = **253**, and 253 + 40 = 293, the whole set of failures in the local run of the six lanes.
+
+Seen only on Windows CI, from run `42638129618`, and read from its logs rather than run here:
+
+| ID | Tests | Files | Root cause | Verdict | How | Evidence | Fix size |
+|---|---|---|---|---|---|---|---|
+| W8 | 58 | test_credential_resource_storage (26), test_private_transcription_owners (25), test_workspace_invitation_migration (5), test_project_speech_reference_store (2) | **`sqlite:///C%3A` interpolation under SQLAlchemy 2.1.8.** The same fault as the group under "Outside the 135", in two more files. The configparser error is `invalid interpolation syntax`. | STALE | R | CI's `FAILED` and `ERROR` lines. Earlier reproduced with 2.1.8 for the other files. | About 1 line per file, 2 more files |
+| W9 | 16 | test_sound_library_workspace_http (8), test_voice_reference_import_workspace (4), test_sound_import_workspace_access (4) | **FFmpeg missing after a failed install.** Chocolatey couldn't reach its feed on `windows-web-20` and installed nothing, but the step passed. `Could not start ffprobe` and `invalid_audio` follow. These tests pass locally, with FFmpeg on PATH. | CI SETUP | R | The job's log: `Chocolatey installed 0/0 packages`. | About 2 workflow lines to fail or retry the step |
+
+W1, W2 and W4 don't appear on CI. The likely reasons are that its temp path is shorter, its runner can create symlinks and it uses no virtual environment, all inferred from their absence.
 
 ## Real bugs
 

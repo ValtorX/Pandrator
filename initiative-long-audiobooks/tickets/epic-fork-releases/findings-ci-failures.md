@@ -6,7 +6,7 @@ Gathered 2026-11-09 at `ebe7194d` (`v.0.14.2+fork.1`). Evidence for `epic-fork-r
 
 Upstream's `main` has not had a green `Web migration preview` run since `e0b9fb24` on 2026-10-12. The fork fails the same tests as upstream at `112501b2`, so none of this came from the fork.
 
-CI reports about 270 failed tests per OS in the lanes that finish, but that overstates the work. One test causes about 150 of them, and almost all the rest are tests left behind by the workspace and access work in `68c444a1` (2026-11-01). Two tests found real product bugs. One lane never finished, which hid 293 more failures on Windows, none of them a new product bug; see "What splitting `web-07` revealed".
+CI reports about 270 failed tests per OS in the lanes that finish, but that overstates the work. One test causes about 150 of them, and almost all the rest are tests left behind by the workspace and access work in `68c444a1` (2026-11-01). Two tests found real product bugs. One lane never finished, which hid 255 more failures on Ubuntu and 334 on Windows, none of them a new product bug; see "What splitting `web-07` revealed" and "CI's result for the split".
 
 ## Groups
 
@@ -21,7 +21,7 @@ Counts are distinct tests on Windows with `pixi.lock` versions, each file run al
 | Real bugs | 3 tests, 2 bugs | See below | About 5 to 15 product lines for the first; second not sized | Reproduced |
 | Author's choice | 1 | `test_web_database_efficiency`: 85 SELECTs at 3 segments, 667 at 100 | Throttle `prove()` or relax the test | Measured |
 | `sqlite:///C%3A` | 11 on Windows CI | Tests pass `str(URL.create(...))` to configparser under SQLAlchemy 2.1.8; the product uses `sqlite_url` | About 1 line per file | Reproduced with 2.1.8 only; several of these tests also carry a stale literal |
-| Not reachable until story 4 | 293 on Windows | `web-07` hit its time limit at 24% on Ubuntu and about 29% on Windows, on both fork and upstream | Split into six lanes; see below | Windows run; CI pending |
+| Not reachable until story 4 | 255 on Ubuntu CI, 334 on Windows CI | `web-07` hit its time limit at 24% on Ubuntu and about 29% on Windows, on both fork and upstream | Split into six lanes; see below | Observed on CI |
 
 Ten further failures in the classification were artefacts of this triage's long temp path and two came from its actor probe. Neither appears in CI, and both are excluded above.
 
@@ -47,9 +47,8 @@ No test requires these today.
 
 ## Limits of this triage
 
-- Run on Windows. Ubuntu facts come from CI logs. Project copy failing on Ubuntu too is inferred, because `web-07` doesn't get that far there.
+- Run on Windows. Ubuntu facts come from CI logs. Causes in the Q and W clusters were found on Windows; Ubuntu's agreement with them rests on per-file counts, not on reading each test's message there.
 - `test_web_api_shutdown` (4, Ubuntu only) is stale by reading only, with moderate confidence.
-- The rest of `web-07` has now been seen on Windows only, under SQLAlchemy 2.0.52. Ubuntu and CI's SQLAlchemy 2.1.8 may add or remove failures until the CI run.
 - E2E jobs were not examined. They pass on the fork, while one failed on upstream.
 
 ## Failures the first count missed
@@ -105,6 +104,47 @@ No new product bug was found. Three points need care when these are fixed:
 - **Q8's `test_administrator_model_jobs` asserts the payload is unread before authorization.** The product now reads the two artifact ids and then authorizes. That looks intended and reads nothing else, but it loosens a stated rule, so the story should confirm it rather than only relax the test.
 - **W1 needs a very short temp root.** A 38-character root still overflows in the session bundle tests and a 5-character one passes. Story 6's choice of root has to account for that, not just the earlier 74-character and 102-character measures.
 
+## CI's result for the split
+
+Fork run `42638129618`, at `93c0e68e`, on `epic-fork-releases`. Counts come from each job's log summary and per-file `FAILED` and `ERROR` lines.
+
+All 50 Python jobs finished, none was cancelled, and every lane has its JUnit artifact. The slowest Python job was `windows-services`, at 27.3 of 45 minutes.
+
+| Lane | Ubuntu minutes of 35 | Ubuntu failed or errored | Windows minutes of 45 | Windows failed or errored |
+|---|---|---|---|---|
+| `web-07-serial` | 15.2 | 30 | 22.8 | 35 |
+| `web-19-serial` | 12.2 | 9 | 18.1 | 11 |
+| `web-20-serial` | 15.9 | 0 | 22.6 | 17 |
+| `web-21-serial` | 17.3 | 2 | 22.5 | 5 |
+| `web-22-serial` | 12.9 | 181 | 22.6 | 232 |
+| `web-23-serial` | 17.8 | 33 | 22.0 | 34 |
+| **Six lanes** | | **255** | | **334** |
+
+The lease fix's tests report a result on both operating systems. The only failure in `test_generation_workspace_execution` is `test_generation_ignores_saved_preview_routing_metadata`, the known bug R2.
+
+The whole run has 338 failures on Ubuntu and 423 on Windows. `web-17` shows 5 on each, down from about 160, so story 3's fix holds on CI. The Ubuntu fast and services summaries were read cut off after their warning counts, so an error count there wouldn't have shown; their Windows equivalents have none.
+
+**The six lanes reconcile with the Windows run, by per-file counts:**
+
+| Step | Tests |
+|---|---|
+| Local Windows run | 293 |
+| Local only: path length (W1 25), symlink privilege (W2 7), venv launcher (W4 1) | -33 |
+| `sqlite:///C%3A` under SQLAlchemy 2.1.8 (W8) | +58 |
+| FFmpeg missing after a failed install (W9) | +16 |
+| **Windows on CI** | **334** |
+| Windows only: W3 2, W5 1, W6 1, W7 1, W8 58, W9 16 | -79 |
+| **Ubuntu on CI** | **255** |
+
+So Q1 to Q8 and the known clusters fail on Ubuntu too, and Ubuntu shows no failure the Windows run lacks. That settles the inference above that project copy fails on Ubuntu.
+
+W1 and W2 don't appear on CI, but they still fail in a local checkout, so stories 6 and 7 keep them.
+
+**Two CI faults that aren't test failures:**
+
+- **A failed FFmpeg install doesn't fail the job (W9).** On `windows-web-20`, Chocolatey couldn't reach its feed and reported `installed 0/0 packages`, yet `Install Windows FFmpeg` finished as a success, so 16 tests then failed on a missing `ffprobe`. The other 20 Windows jobs read show `1/1`; `web-08`, `web-10`, `web-14` and `web-15` weren't read. It looks transient, but tests that skip without FFmpeg would pass quietly when this happens.
+- **One E2E job hit its limit.** `E2E (ubuntu-latest, firefox, 2/2)` spent 16.4 minutes in its browser install and was cancelled at its 30-minute limit, which is why the run's conclusion is `cancelled`. It ran no lane, and the same job took 21.1 minutes at `ebe7194d`. It passed its other shard and has not been rerun.
+
 ## Where each group went
 
 | Group | Ticket |
@@ -112,7 +152,8 @@ No new product bug was found. Three points need care when these are fixed:
 | Contamination, missing actor | Story 3 |
 | `web-07` not finishing | Story 4 |
 | W1 path length | Story 6 |
-| Platform, `sqlite:///C%3A`, dubbing prefetch test (J1), W2 to W7 | Story 7 |
+| Platform, `sqlite:///C%3A` including W8, dubbing prefetch test (J1), W2 to W7 | Story 7 |
+| W9, a failed FFmpeg install not failing the job | Not assigned; the owner decides |
 | A1, A2, E1 | Story 8 |
 | B1 to B9 | Story 9 |
 | The other stale clusters, `test_web_api_shutdown`, `test_epub_narration`, `test_xtts_training_process` | Story 10 |

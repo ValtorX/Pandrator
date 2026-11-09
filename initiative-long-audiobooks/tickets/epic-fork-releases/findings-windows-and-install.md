@@ -22,7 +22,7 @@ The index holds LF throughout; 2,105 tracked files are CRLF only in the working 
 
 ## Windows-specific problems
 
-1. **Line endings.** See the table. `keep-browser-build-lf` has an unpushed commit, `3b4484ce`, adding LF rules for `web/**`, `pandrator/web/static/**` and `model-groups.js` with a guard test. It has not been verified against these results.
+1. **Line endings.** See the table. Commit `3b4484ce`, merged into `epic-fork-releases` on 2026-11-09, adds LF rules for `web/**`, `pandrator/web/static/**` and `model-groups.js` with a guard test. It has not been verified against these results.
 2. **Long paths.** Default pytest temp paths exceed the limit (about 27 failures). `test_lanes.py run` has no basetemp option; `PYTEST_ADDOPTS` works.
 3. **12 tests in the fast lane:**
    - Symlinks need privileges (`WinError 1314`): `test_audio_cpp_processing::test_same_source_and_destination_are_rejected`, `test_speech_input_files::test_rejects_symlinks_directories_and_fifo_without_blocking` (also needs `os.mkfifo`), `test_audio_cpp_generation_assets::test_package_and_nested_paths_cannot_escape_through_symlinks`, `test_audio_cpp_yue2_adapter::test_cache_path_rejects_symlink_package_and_destination`.
