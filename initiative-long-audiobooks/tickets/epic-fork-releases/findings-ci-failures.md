@@ -103,6 +103,7 @@ No new product bug was found. Three points need care when these are fixed:
 - **Q2 is a real omission that can't be fixed where it is.** `0001_web_schema.py` doesn't defer the `project_link_*` tables, so a foreign key dangles at old revisions. It is harmless at head, and revision 0001 has shipped, so the fix belongs in the two tests.
 - **Q8's `test_administrator_model_jobs` asserts the payload is unread before authorization.** The product now reads the two artifact ids and then authorizes. That looks intended and reads nothing else, but it loosens a stated rule, so the story should confirm it rather than only relax the test.
 - **W1 needs a very short temp root.** A 38-character root still overflows in the session bundle tests and a 5-character one passes. Story 6's choice of root has to account for that, not just the earlier 74-character and 102-character measures.
+  Resolved by story 6: on Windows with no `--basetemp`, `tests/conftest.py` now uses `<drive>:\pt\<8 random chars>` (see `tests/windows_temp_root.py`), so W1 needs no hand-set `PYTEST_ADDOPTS`.
 
 ## CI's result for the split
 
