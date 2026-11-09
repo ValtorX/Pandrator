@@ -31,6 +31,7 @@ context:
 
 - Owner, 2026-11-09: proceed to implementation without a separate approval if the spec has no open questions. Nothing is deferred to `deferred-work.md`.
 - A failure that is more than a session's work goes to a new story, per the ticket. The ticket tree is the owner's, so a proposed story is named in the findings and put to the owner rather than added to `tickets.toml` unasked.
+- Owner, 2026-11-09, after the CI run: fix the FFmpeg install in this story, because a failed install doesn't fail its step and that undermines the CI results later stories rely on. Add the two proposed stories as 11 and 12, renumbering the old 11 and 12.
 
 ## Boundaries & Constraints
 
@@ -91,12 +92,12 @@ Split by measured time, each about 12.5 local and 19 CI minutes plus setup:
 
 - **The ticket's Verify is met on fork run `42638129618`, at `93c0e68e3277e8fa9f6eda4119fcf9440aaacc4e`.** All 50 Python jobs finished within their limits with JUnit artifacts, the six lanes took 12.2 to 17.8 minutes on Ubuntu and 18.1 to 22.8 on Windows, the lease fix's tests report a result on both, and `test_lanes.py check` passed as a step of each job. The run's own conclusion is `cancelled`, because one E2E job ran out of time in its browser install; that job runs no lane.
 - CI shows 255 failures in the six lanes on Ubuntu and 334 on Windows, and both reconcile with the local 293 by per-file counts. Details are in `findings-ci-failures.md`, "CI's result for the split". Per-test results come from log summaries rather than the JUnit files, which need a download.
-- A failed Chocolatey install doesn't fail its step, which caused 16 failures on `windows-web-20`. Fixing it isn't part of this story's intent, so it is recorded and left for the owner to decide.
-- The review of `f94fd9f6..93c0e68e3277e8fa9f6eda4119fcf9440aaacc4e` is the owner's next step in another session. On the same day, `3b4484ce` was merged into this branch as `7e96cf5b`. That belongs to story 5, not this story.
+- A failed Chocolatey install doesn't fail its step, which caused 16 failures on `windows-web-20`. The owner asked for the fix in this story: `e2ca83b817f12aed9da3282ebbc14e9b89dcd57b` retries the install and fails the step if `ffprobe` is still missing, in both the Python and E2E jobs. Its script was run here against a stubbed `choco`, passing on the first and third tries and failing when `ffprobe` never appears. **No CI run covers this commit yet**, so one is needed after the push.
+- The review is the owner's next step in another session. It covers `f94fd9f6..93c0e68e3277e8fa9f6eda4119fcf9440aaacc4e` plus `e2ca83b817f12aed9da3282ebbc14e9b89dcd57b`. Between them sits `7e96cf5b`, the merge of `3b4484ce`, which belongs to story 5.
 - Results, Windows, uv from `AGENTS.md` with SQLAlchemy 2.0.52. `pixi` isn't installed. The six lanes ran side by side, each serially with CI's command and its own short temp root, in 655 to 760 seconds each.
 - Compared by test name with the whole-lane run: the same 5,312 tests, 293 failing or erroring against 298, and none failing only after the split. The 5 that failed only in the whole-lane run were path-length failures, from the longer temp path `xdist` creates.
 - The six lanes concatenated match the old lane's 304 files in the same order, checked against `f94fd9f6`.
-- All 293 are assigned in `findings-ci-failures.md`, with 253 in new clusters in the classification file. None is a new product bug. Two proposed stories cover 215 of them and wait on the owner's decision; `tickets.toml` is unchanged.
+- All 293 are assigned in `findings-ci-failures.md`, with 253 in new clusters in the classification file. None is a new product bug. Stories 11 and 12 cover 215 of them, added with the owner's approval after the CI run.
 - The implementing agent skipped the serial runs, reading 75 minutes of summed test time as wall clock, so the orchestrator ran them. The whole-lane run took 9 minutes at `-n 10`.
 - Story 3 recorded 102 errors in 6 `web-07` files, from a whole-suite run. These runs show 80 errors in 3 files. That difference wasn't investigated.
 

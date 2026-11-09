@@ -39,7 +39,7 @@ notes = ["Don't use an autouse actor: two test_web_workflow_handlers tests fail 
 id = 4
 type = "story"
 title = "Every test lane finishes on CI"
-description = "Splits web-07-serial, which hits its job time limit about a quarter of the way through, into lanes that finish on both operating systems, so the lease fix's tests get a CI result. Records in the findings each failure this reveals, and assigns it to a story, or to a new one if it is more than a session's work. Delivers the part of R8 that shows the true total. Provides the CI results stories 9 and 10 check against, and is worth offering upstream."
+description = "Splits web-07-serial, which hits its job time limit about a quarter of the way through, into lanes that finish on both operating systems, so the lease fix's tests get a CI result. Records in the findings each failure this reveals, and assigns it to a story, or to a new one if it is more than a session's work. Delivers the part of R8 that shows the true total. Provides the CI results stories 9 to 12 check against, and is worth offering upstream."
 verify = "On a fork CI run, every lane finishes within its time limit on Ubuntu and Windows, the lease fix's tests report a result, and python scripts/test_lanes.py check passes."
 covers = ["R8"]
 after = []
@@ -50,7 +50,7 @@ risk = "medium"
 id = 5
 type = "story"
 title = "Browser checks and builds match CI from a Windows checkout"
-description = "Verifies and lands the LF rules from commit 3b4484ce on keep-browser-build-lf, then has the owner's checkout pick them up on Node 24, so web quality passes and the build leaves the tree clean."
+description = "Verifies the LF rules from commit 3b4484ce, already merged into the epic branch, then has the owner's checkout pick them up on Node 24, so web quality passes and the build leaves the tree clean."
 verify = "On the owner's checkout, npm --prefix web run quality passes, and after npm --prefix web run build, git status shows pandrator/web/static unchanged."
 covers = ["R5"]
 after = []
@@ -119,6 +119,30 @@ notes = ["test_web_api_shutdown and test_xtts_training_process can't run on Wind
 [[entry]]
 id = 11
 type = "story"
+title = "Schema-pinned tests run at the revision they pin"
+description = "Corrects the 145 tests in clusters Q1 to Q3 of the failure classification, which move to an older schema and then use current models, or insert rows its triggers now refuse. Delivers this part of R8. Q1 uses one shared helper rather than a separate change in each of its 8 files."
+verify = "All 145 tests pass on Windows and on fork CI, and with one pinned migration's trigger removed its tests fail, showing they still check that migration."
+covers = ["R8"]
+after = [4, 6]
+hitl = false
+risk = "medium"
+notes = ["The triage's probe added the two missing columns to the old schema. That proves the cause but tests a schema that never existed, so the helper should leave the schema at the pinned revision, for example by not going through the current models.", "Q2 comes from revision 0001 not deferring the project_link tables. That revision has shipped and must not be edited, so fix the two tests."]
+
+[[entry]]
+id = 12
+type = "story"
+title = "Access tests match the current role model"
+description = "Corrects the 70 tests in clusters Q4 to Q8 of the failure classification, where the shared fixture's project-only editor lost edit rights on purpose, and patches, mocks and expectations lag moved seams and the permissions now in force. Delivers this part of R8. Clusters marked as read in the triage get proved first, and any that shows a product fault becomes a backlog bug instead of a test edit."
+verify = "All 70 tests pass on Windows and on fork CI, the viewer cases still show a viewer being refused, and each read-only verdict's outcome is recorded."
+covers = ["R8"]
+after = [4, 6, 11] # shares test_job_media_workspace with story 11
+hitl = false
+risk = "medium"
+notes = ["test_rvc_admission_keeps_private_workspace_and_selected_project still returned 404 after the triage's membership probe, so its cause is unknown.", "test_administrator_model_jobs asserts the payload is unread before authorization, and the product now reads the two artifact ids first. Confirm that's intended rather than only relaxing the test.", "In test_job_run_admission a deleted grant returns 404 where the test expects 403. Whether the test or the product is right isn't settled."]
+
+[[entry]]
+id = 13
+type = "story"
 title = "Upstream merges and fork releases have a rehearsed procedure"
 description = "Writes how upstream changes reach fork main, including rebuilding generated files, how a fork version and tag are cut, and how PR branches stay clean, then rehearses it on a scratch branch."
 verify = "Following the procedure on a scratch branch merges current upstream main with regenerated files passing their checks, and a scratch PR branch's diff against upstream main shows no fork-only change."
@@ -128,12 +152,12 @@ hitl = false
 risk = "medium"
 
 [[entry]]
-id = 12
+id = 14
 type = "story"
 title = "A fresh Windows clone follows a written setup to passing checks"
 description = "Writes the Windows setup, including Node 24, pixi or uv, and Playwright browsers, into AGENTS.md and its backup, retires pitfalls the earlier stories removed, records each remaining failure with its reason, and, with the owner's go-ahead, offers upstream as focused PRs the fixes useful there."
 verify = "A fresh clone in a new folder, following only the written setup, passes lint, types, every test lane, web quality and the browser build, or shows only the failures listed as explained; a list shows each fix's upstream PR or why it wasn't offered."
 covers = ["R9"]
-after = [3, 4, 5, 6, 7, 8, 9, 10, 11]
+after = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
 hitl = true # the owner approves any tool installs, and test:e2e needs Playwright browsers
 risk = "low"

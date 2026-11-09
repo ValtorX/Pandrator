@@ -129,6 +129,6 @@ title = "Verified on real data in a released build"
 description = "Runs the timing script and a small regenerate against a fresh copy of the real database on a released fork build, on the stock 30-second lease, records the results against every line of this epic, and, with the owner's go-ahead, offers upstream as focused PRs any fixes not yet offered."
 verify = "The owner sees every timing inside its limit or target, a small regenerate completing on the released build, and a list showing each fix's upstream PR or why it wasn't offered."
 covers = ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8"]
-after = [11, "1.2", "1.11"] # cuts a new fork version by 1.11's procedure and installs it with 1.2's script
+after = [11, "1.2", "1.13"] # cuts a new fork version by 1.13's procedure and installs it with 1.2's script
 hitl = true # the owner provides the copy and runs the released build
 risk = "medium"

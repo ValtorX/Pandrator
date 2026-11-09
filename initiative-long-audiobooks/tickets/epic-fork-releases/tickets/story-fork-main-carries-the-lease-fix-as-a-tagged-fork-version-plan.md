@@ -55,7 +55,7 @@ Results at `ebe7194d1dc35157ff6b576a22a5b13b3e89fdce` (tag `v.0.14.2+fork.1`, pu
 
 Test-level CI comparison, added after the owner signed in to GitHub (56 job logs read): supersedes the job-only limit above. All 26 finished failing job pairs have identical failure names and counts, so no test fails on the fork that does not fail at upstream's `112501b2`. Fast-lane passes are 4 higher than upstream on each OS (Ubuntu 3629 against 3625, Windows 3626 against 3622), matching the 4 tests added to `tests/test_version.py`. The cancelled `web-07` lanes can be compared only by progress: 39 failures at 24% on Ubuntu on both sides, and 46 on Windows on both sides (fork at 29%, upstream at 25%). Their logs stop before any summary on three of the four, so the lease-fix tests still have no CI verdict. Failures in CI far exceed the fast-lane list in the findings, which story work on R8 should expect.
 
-For the merge procedure (story 11): an upstream version bump conflicts on `pyproject.toml`'s version line, and `test_fork_build_identifies_itself` fails if the `+fork.N` segment is lost. Regenerated upstream `openapi.json` should keep the public version.
+For the merge procedure (story 13): an upstream version bump conflicts on `pyproject.toml`'s version line, and `test_fork_build_identifies_itself` fails if the `+fork.N` segment is lost. Regenerated upstream `openapi.json` should keep the public version.
 
 ## Verification
 

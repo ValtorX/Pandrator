@@ -92,11 +92,11 @@ The old lane held 304 files and 5,312 tests. Compared by test name with one whol
 | Known bug R2 | 1 | `backlog/bug-saved-preview-settings-fail-generation.md` |
 | Path length (W1) | 25 | Story 6 |
 | Other Windows-only causes (W2 to W7) | 13 | Story 7 |
-| Tests using current models on an older schema (Q1 to Q3) | 145 | Proposed story: "Schema-pinned tests run at the revision they pin" |
-| Tests behind the access model and moved seams (Q4 to Q8) | 70 | Proposed story: "Access tests match the current role model" |
+| Tests using current models on an older schema (Q1 to Q3) | 145 | Story 11 |
+| Tests behind the access model and moved seams (Q4 to Q8) | 70 | Story 12 |
 | **Total** | **293** | |
 
-The two proposed stories are 215 tests and too much to add to stories 8 and 10. They wait on the owner's decision, and the tree is unchanged until then.
+Those last two rows are 215 tests, too much to add to stories 8 and 10, so the owner approved new stories for them.
 
 No new product bug was found. Three points need care when these are fixed:
 
@@ -142,7 +142,7 @@ W1 and W2 don't appear on CI, but they still fail in a local checkout, so storie
 
 **Two CI faults that aren't test failures:**
 
-- **A failed FFmpeg install doesn't fail the job (W9).** On `windows-web-20`, Chocolatey couldn't reach its feed and reported `installed 0/0 packages`, yet `Install Windows FFmpeg` finished as a success, so 16 tests then failed on a missing `ffprobe`. The other 20 Windows jobs read show `1/1`; `web-08`, `web-10`, `web-14` and `web-15` weren't read. It looks transient, but tests that skip without FFmpeg would pass quietly when this happens.
+- **A failed FFmpeg install doesn't fail the job (W9).** On `windows-web-20`, Chocolatey couldn't reach its feed and reported `installed 0/0 packages`, yet `Install Windows FFmpeg` finished as a success, so 16 tests then failed on a missing `ffprobe`. The other 20 Windows jobs read show `1/1`; `web-08`, `web-10`, `web-14` and `web-15` weren't read. It looks transient, but tests that skip without FFmpeg would pass quietly when this happens. Story 4 fixes it in `e2ca83b8`: the step now retries, and fails if `ffprobe` is still missing.
 - **One E2E job hit its limit.** `E2E (ubuntu-latest, firefox, 2/2)` spent 16.4 minutes in its browser install and was cancelled at its 30-minute limit, which is why the run's conclusion is `cancelled`. It ran no lane, and the same job took 21.1 minutes at `ebe7194d`. It passed its other shard and has not been rerun.
 
 ## Where each group went
@@ -153,12 +153,12 @@ W1 and W2 don't appear on CI, but they still fail in a local checkout, so storie
 | `web-07` not finishing | Story 4 |
 | W1 path length | Story 6 |
 | Platform, `sqlite:///C%3A` including W8, dubbing prefetch test (J1), W2 to W7 | Story 7 |
-| W9, a failed FFmpeg install not failing the job | Not assigned; the owner decides |
+| W9, a failed FFmpeg install not failing the job | Story 4 |
 | A1, A2, E1 | Story 8 |
 | B1 to B9 | Story 9 |
 | The other stale clusters, `test_web_api_shutdown`, `test_epub_narration`, `test_xtts_training_process` | Story 10 |
-| Q1 to Q3 | Proposed: "Schema-pinned tests run at the revision they pin" |
-| Q4 to Q8 | Proposed: "Access tests match the current role model" |
+| Q1 to Q3 | Story 11 |
+| Q4 to Q8 | Story 12 |
 | Real bug 1 | `backlog/bug-alternate-take-model-refused-on-audio-cpp.md` |
 | Real bug 2 | `backlog/bug-saved-preview-settings-fail-generation.md` |
 | `test_web_database_efficiency` | `backlog/bug-assembly-checks-access-for-every-segment.md` |
