@@ -1,0 +1,91 @@
+# Stories of epic-fork-releases, in build order.
+
+[[entry]]
+id = 1
+type = "story"
+title = "Fork main carries the lease fix as a tagged fork version"
+description = "Merges the lease fix into fork main, sets a fork version in pyproject.toml only, leaving web/package.json alone so the browser assets need no rebuild, and tags it. Provides the release line story 8 installs and Epic 1's cancel story builds on."
+verify = "From a clean clone of the tag, the app reports the fork version, the lease fix's tests and tests/test_version.py pass, and fork CI on main shows no new failures."
+covers = ["R1"]
+after = []
+hitl = true # the owner approves the merge and the tag
+risk = "low"
+
+[[entry]]
+id = 8 # split from story 1 before any work started
+type = "story"
+title = "The owner's install runs the fork build and the real book"
+description = "Adds a fork-only script on fork-files that clones the tag into a new version slot named by commit, prepares its runtime with the install's pixi, activates it, and can return to the previous slot, then runs the real book on the stock 30-second lease. Provides the install path Epic 1's real-data check uses."
+verify = "The owner's app reports the fork version, the real book's generation run passes the opening check on the stock 30-second lease, and the script goes back to the previous version and forward again."
+covers = ["R2", "R3"]
+after = [1]
+hitl = true # the owner stops the app and runs the activation and the real book
+risk = "high"
+notes = ["The Manager's Update or Repair re-clones upstream, so the owner must not use them on the app; the script's output should say so.", "Keep the patched slot until the real run passes, and back up current.json before activating."]
+
+[[entry]]
+id = 2
+type = "story"
+title = "Browser checks and builds match CI from a Windows checkout"
+description = "Verifies and lands the LF rules from commit 3b4484ce on keep-browser-build-lf, then has the owner's checkout pick them up on Node 24, so web quality passes and the build leaves the tree clean."
+verify = "On the owner's checkout, npm --prefix web run quality passes, and after npm --prefix web run build, git status shows pandrator/web/static unchanged."
+covers = ["R5"]
+after = []
+hitl = true # the owner installs Node 24 and refreshes their checkout's line endings
+risk = "medium"
+
+[[entry]]
+id = 3
+type = "story"
+title = "Test lanes run on Windows without hand settings"
+description = "Stops default pytest temp paths exceeding the Windows path limit, so the lanes run as written, with no effect on other platforms."
+verify = "python scripts/test_lanes.py run fast-xdist from the owner's checkout, with no PYTEST_ADDOPTS, reports no path-length errors."
+covers = ["R6"]
+after = []
+hitl = false
+risk = "low"
+
+[[entry]]
+id = 4
+type = "story"
+title = "Windows-only test failures pass or skip with a reason"
+description = "Resolves the 12 tests listed in the findings: symlink and POSIX tests skip only where the behaviour can't exist, the sleep tests use a portable process, and the two Windows code-path tests get fixed, or filed as bugs if they show a product fault."
+verify = "The fast lane on Windows shows none of the 12 failing, each skip states its reason, and the same tests still run on Linux in CI."
+covers = ["R7"]
+after = [3]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 5
+type = "story"
+title = "Tests failing on every platform are fixed or filed"
+description = "Works through the 10 tests listed in the findings: corrects each that is out of date, and files a backlog bug for each that shows the product is wrong, leaving it visibly marked."
+verify = "Those 10 tests pass, or each is marked with a linked backlog bug, and the findings' reasoning is recorded per test."
+covers = ["R8"]
+after = [3]
+hitl = false
+risk = "medium"
+notes = ["Treat the generation and preview failures as possible real bugs until shown otherwise: they touch speech binding and cast routing."]
+
+[[entry]]
+id = 6
+type = "story"
+title = "Upstream merges and fork releases have a rehearsed procedure"
+description = "Writes how upstream changes reach fork main, including rebuilding generated files, how a fork version and tag are cut, and how PR branches stay clean, then rehearses it on a scratch branch."
+verify = "Following the procedure on a scratch branch merges current upstream main with regenerated files passing their checks, and a scratch PR branch's diff against upstream main shows no fork-only change."
+covers = ["R4"]
+after = [2, 8] # the procedure writes down the tag and install steps, and rebuilds assets under the LF rules
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 7
+type = "story"
+title = "A fresh Windows clone follows a written setup to passing checks"
+description = "Writes the Windows setup, including Node 24, pixi or uv, and Playwright browsers, into AGENTS.md and its backup, retires pitfalls the earlier stories removed, records each remaining failure with its reason, and, with the owner's go-ahead, offers upstream as focused PRs the fixes useful there."
+verify = "A fresh clone in a new folder, following only the written setup, passes lint, types, the fast lane, web quality and the browser build, or shows only the failures listed as explained; a list shows each fix's upstream PR or why it wasn't offered."
+covers = ["R9"]
+after = [2, 3, 4, 5, 6]
+hitl = true # the owner approves any tool installs, and test:e2e needs Playwright browsers
+risk = "low"

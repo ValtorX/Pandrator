@@ -107,7 +107,7 @@ title = "A cancel stops the opening check"
 description = "Gives the identity loop a cancellation hook, so a cancel during the opening check frees the worker promptly. Builds on the release line carrying 415aaa8a."
 verify = "A test cancelling during a slow identity check shows the worker free within seconds and the job closed as cancelled."
 covers = ["R8"]
-after = [2, 9, "epic-fork-releases"]
+after = [2, 8, 9, "5.1"]
 hitl = false
 risk = "medium"
 
@@ -129,6 +129,6 @@ title = "Verified on real data in a released build"
 description = "Runs the timing script and a small regenerate against a fresh copy of the real database on a released fork build, on the stock 30-second lease, records the results against every line of this epic, and, with the owner's go-ahead, offers upstream as focused PRs any fixes not yet offered."
 verify = "The owner sees every timing inside its limit or target, a small regenerate completing on the released build, and a list showing each fix's upstream PR or why it wasn't offered."
 covers = ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8"]
-after = [11, "epic-fork-releases"]
+after = [11, "5.6", "5.8"] # cuts a new fork version by 5.6's procedure and installs it with 5.8's script
 hitl = true # the owner provides the copy and runs the released build
 risk = "medium"
