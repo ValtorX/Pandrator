@@ -6,7 +6,7 @@ Gathered 2026-11-09 at `ebe7194d` (`v.0.14.2+fork.1`). Evidence for `epic-fork-r
 
 Upstream's `main` has not had a green `Web migration preview` run since `e0b9fb24` on 2026-10-12. The fork fails the same tests as upstream at `112501b2`, so none of this came from the fork.
 
-CI reports about 270 failed tests per OS in the lanes that finish, but that overstates the work. One test causes about 150 of them, and almost all the rest are tests left behind by the workspace and access work in `68c444a1` (2026-11-01). Two tests found real product bugs. One lane never finishes, so the true total is unknown.
+CI reports about 270 failed tests per OS in the lanes that finish, but that overstates the work. One test causes about 150 of them, and almost all the rest are tests left behind by the workspace and access work in `68c444a1` (2026-11-01). Two tests found real product bugs. One lane never finished, which hid 293 more failures on Windows, none of them a new product bug; see "What splitting `web-07` revealed".
 
 ## Groups
 
@@ -21,7 +21,7 @@ Counts are distinct tests on Windows with `pixi.lock` versions, each file run al
 | Real bugs | 3 tests, 2 bugs | See below | About 5 to 15 product lines for the first; second not sized | Reproduced |
 | Author's choice | 1 | `test_web_database_efficiency`: 85 SELECTs at 3 segments, 667 at 100 | Throttle `prove()` or relax the test | Measured |
 | `sqlite:///C%3A` | 11 on Windows CI | Tests pass `str(URL.create(...))` to configparser under SQLAlchemy 2.1.8; the product uses `sqlite_url` | About 1 line per file | Reproduced with 2.1.8 only; several of these tests also carry a stale literal |
-| Not reachable | Unknown | `web-07` hits its time limit at 24% on Ubuntu and about 29% on Windows, on both fork and upstream | Split the lane, then measure | Observed |
+| Not reachable until story 4 | 293 on Windows | `web-07` hit its time limit at 24% on Ubuntu and about 29% on Windows, on both fork and upstream | Split into six lanes; see below | Windows run; CI pending |
 
 Ten further failures in the classification were artefacts of this triage's long temp path and two came from its actor probe. Neither appears in CI, and both are excluded above.
 
@@ -49,7 +49,7 @@ No test requires these today.
 
 - Run on Windows. Ubuntu facts come from CI logs. Project copy failing on Ubuntu too is inferred, because `web-07` doesn't get that far there.
 - `test_web_api_shutdown` (4, Ubuntu only) is stale by reading only, with moderate confidence.
-- The rest of `web-07` was never seen, so more failures may appear once it finishes.
+- The rest of `web-07` has now been seen on Windows only, under SQLAlchemy 2.0.52. Ubuntu and CI's SQLAlchemy 2.1.8 may add or remove failures until the CI run.
 - E2E jobs were not examined. They pass on the fork, while one failed on upstream.
 
 ## Failures the first count missed
@@ -71,16 +71,53 @@ Each passes with an actor set. Assigned to story 3.
 - `test_web_generation_regeneration` (5): `test_cloud_failure_saves_other_wave_results_without_extra_retry`, `test_cloud_pause_saves_current_wave_and_resume_keeps_its_takes`, `test_failed_replacement_keeps_previous_active_take_and_wav`, `test_stale_or_missing_artifact_takes_do_not_satisfy_resume_checkpoint`, `test_terminal_parent_filled_by_grouped_regeneration_becomes_completed`.
 - `test_web_voice_delete_confirmation` (5): `test_native_unpublish_requires_confirmation_and_retains_samples` (5 parameters).
 
+## What splitting `web-07` revealed
+
+Story 4, at `f94fd9f6`, Windows, uv with SQLAlchemy 2.0.52. Each new lane ran serially with CI's command. Cluster detail is in [findings-ci-failure-classification.md](findings-ci-failure-classification.md), under "Clusters from the split".
+
+The old lane held 304 files and 5,312 tests. Compared by test name with one whole-lane run, the split adds no failure. Five tests failed only in the whole-lane run, all from the longer temp path `xdist` creates.
+
+| Lane | Files | Tests | Failed or errored |
+|---|---|---|---|
+| `web-07-serial` | 46 | 875 | 33 |
+| `web-19-serial` | 27 | 460 | 9 |
+| `web-20-serial` | 40 | 603 | 1 |
+| `web-21-serial` | 54 | 790 | 30 |
+| `web-22-serial` | 43 | 842 | 181 |
+| `web-23-serial` | 94 | 1,742 | 39 |
+
+| Where | Tests | Goes to |
+|---|---|---|
+| Known clusters B1 to B9 | 30 | Story 9 |
+| Known clusters G2, G3, I1, K1, M1 | 9 | Story 10 |
+| Known bug R2 | 1 | `backlog/bug-saved-preview-settings-fail-generation.md` |
+| Path length (W1) | 25 | Story 6 |
+| Other Windows-only causes (W2 to W7) | 13 | Story 7 |
+| Tests using current models on an older schema (Q1 to Q3) | 145 | Proposed story: "Schema-pinned tests run at the revision they pin" |
+| Tests behind the access model and moved seams (Q4 to Q8) | 70 | Proposed story: "Access tests match the current role model" |
+| **Total** | **293** | |
+
+The two proposed stories are 215 tests and too much to add to stories 8 and 10. They wait on the owner's decision, and the tree is unchanged until then.
+
+No new product bug was found. Three points need care when these are fixed:
+
+- **Q2 is a real omission that can't be fixed where it is.** `0001_web_schema.py` doesn't defer the `project_link_*` tables, so a foreign key dangles at old revisions. It is harmless at head, and revision 0001 has shipped, so the fix belongs in the two tests.
+- **Q8's `test_administrator_model_jobs` asserts the payload is unread before authorization.** The product now reads the two artifact ids and then authorizes. That looks intended and reads nothing else, but it loosens a stated rule, so the story should confirm it rather than only relax the test.
+- **W1 needs a very short temp root.** A 38-character root still overflows in the session bundle tests and a 5-character one passes. Story 6's choice of root has to account for that, not just the earlier 74-character and 102-character measures.
+
 ## Where each group went
 
 | Group | Ticket |
 |---|---|
 | Contamination, missing actor | Story 3 |
 | `web-07` not finishing | Story 4 |
-| Platform, `sqlite:///C%3A`, dubbing prefetch test (J1) | Story 7 |
+| W1 path length | Story 6 |
+| Platform, `sqlite:///C%3A`, dubbing prefetch test (J1), W2 to W7 | Story 7 |
 | A1, A2, E1 | Story 8 |
 | B1 to B9 | Story 9 |
 | The other stale clusters, `test_web_api_shutdown`, `test_epub_narration`, `test_xtts_training_process` | Story 10 |
+| Q1 to Q3 | Proposed: "Schema-pinned tests run at the revision they pin" |
+| Q4 to Q8 | Proposed: "Access tests match the current role model" |
 | Real bug 1 | `backlog/bug-alternate-take-model-refused-on-audio-cpp.md` |
 | Real bug 2 | `backlog/bug-saved-preview-settings-fail-generation.md` |
 | `test_web_database_efficiency` | `backlog/bug-assembly-checks-access-for-every-segment.md` |
