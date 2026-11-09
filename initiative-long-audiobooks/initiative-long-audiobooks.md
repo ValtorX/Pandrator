@@ -76,15 +76,15 @@ Someone producing a very long audiobook can list, edit, regenerate, assemble and
 
 ## Notes
 
-- Source conflict: Problem 1 "admission holds the DB lock about 10 min" — job history and code show admission preparation runs without a writer (640+ s admits succeeded on the stock lease); the writer held through the opening check was the 30-second failure, now fixed. R6 is written against the observed slowness, and why reads stall during admission is for Epic 1 to establish.
+- Source conflict: Problem 1 "admission holds the DB lock about 10 min" — job history and code show admission preparation runs without a writer (640+ s admits succeeded on the stock lease); the writer held through the opening check was the 30-second failure, now fixed. R6 is written against the observed slowness, and why reads stall during admission is for Epic 2 to establish.
 - Source conflict: Problem 2 "on a large project, the edit creates an `edit_copy`" — code forks one whenever the revision is approved, already used by a run, or not the latest, whatever its size (`speech_plan_workspace.py:261-281`).
 - Source conflict: Problem 2 "`copy_from_id` copies nothing" — lineage copying exists (`audiobook_resegmentation.py:26-90`) but matches on strict structure keys; whether it returns 0 needs a reproduction. The refusal of a stale source is confirmed (`performance_plans.py:458`).
 - Source conflict: Suggested order 1 "reproduce on the installed commit" — the owner asked for current upstream `main`, 5 commits ahead, and the 0.14.2 notes mention none of these problems.
-- Decision (2026-11-08): Four product epics, cut by distinct outcome, in the order responsiveness, speaker plan, export and regenerate, chapter pauses. Epic 1 builds the synthetic project and timing check the later ones reuse.
-- Decision (2026-11-08): Generation start (admission, the opening check, cancel) stays in Epic 1, because it shares the audio identity cost with the reads. If Epic 1 outgrows about 12 stories, moving it to its own epic gets offered.
-- Decision (2026-11-08): Reads are held to the 15 s MCP timeout; the R6 and R7 targets are set from Epic 1's baseline.
-- Decision (2026-11-08): No separate architecture document for now, because Epic 1's profile has to come first.
+- Decision (2026-11-08): Four product epics, cut by distinct outcome, in the order responsiveness, speaker plan, export and regenerate, chapter pauses. Epic 2 builds the synthetic project and timing check the later ones reuse.
+- Decision (2026-11-08): Generation start (admission, the opening check, cancel) stays in Epic 2, because it shares the audio identity cost with the reads. If Epic 2 outgrows about 12 stories, moving it to its own epic gets offered.
+- Decision (2026-11-08): Reads are held to the 15 s MCP timeout; the R6 and R7 targets are set from Epic 2's baseline.
+- Decision (2026-11-08): No separate architecture document for now, because Epic 2's profile has to come first.
 - Decision (2026-11-08): Problem 4 is not a software defect and R17 is retired. The owner confirmed the "1." was generated; they expected "Chapter 1", which the source text doesn't say. This overrides the brief's "swallowed".
 - Decision (2026-11-08): "Delivered" means in a fork release and verified here. Upstream PRs are still offered, but nothing waits on them. This replaces the same-day decision that an open upstream PR counted as delivered.
 - Decision (2026-11-08): Windows dev setup and fork releases share a new opening epic as the platform baseline, because they have a distinct outcome, a CRLF build would fail the release's asset gate, and the lease fix can ship through it first.
-- Open question: What should R12 do: carry the plan over, warn, or refuse? Epic 2 settles this when refined.
+- Open question: What should R12 do: carry the plan over, warn, or refuse? Epic 3 settles this when refined.

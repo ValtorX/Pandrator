@@ -14,7 +14,7 @@ risk: medium
 
 ## Description
 
-A partly regenerated book can be assembled and exported from the intended version, and the default plan and source replacement no longer threaten existing takes. This epic settles the partial-assembly path Epic 4 relies on.
+A partly regenerated book can be assembled and exported from the intended version, and the default plan and source replacement no longer threaten existing takes. This epic settles the partial-assembly path Epic 5 relies on.
 
 ## Outcome
 
@@ -30,7 +30,7 @@ Someone who regenerates part of a long book gets a complete, correct export, wit
 
 ## Boundaries
 
-- Belongs to siblings: speaker plan carry-over (Epic 2), chapter pause settings (Epic 4).
+- Belongs to siblings: speaker plan carry-over (Epic 3), chapter pause settings (Epic 5).
 - Must not change: a source whose text really differs still warns.
 
 ## References

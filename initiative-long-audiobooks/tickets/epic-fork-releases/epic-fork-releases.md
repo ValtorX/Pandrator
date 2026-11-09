@@ -15,7 +15,7 @@ risk: high
 
 ## Description
 
-The project's checks and builds work from a Windows checkout, and a build of the fork can be released and installed as the owner's working app, so fixes reach real use without waiting on upstream. The first release carries the lease fix (`415aaa8a`), which lets the install's 19-hour patch go. This epic provides the working dev setup every later epic uses and the release path Epic 1's cancel story and real-data check rely on.
+The project's checks and builds work from a Windows checkout, and a build of the fork can be released and installed as the owner's working app, so fixes reach real use without waiting on upstream. The first release carries the lease fix (`415aaa8a`), which lets the install's 19-hour patch go. This epic provides the working dev setup every later epic uses and the release path Epic 2's cancel story and real-data check rely on.
 
 ## Outcome
 

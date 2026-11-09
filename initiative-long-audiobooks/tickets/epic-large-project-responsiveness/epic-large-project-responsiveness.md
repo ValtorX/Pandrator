@@ -14,7 +14,7 @@ risk: high
 
 ## Description
 
-On a 5,000-segment project, segment listing, plan status and generation start stay within their limits, and heavy or abandoned reads no longer stall other requests. This epic also builds the synthetic project and timing check the later epics reuse, and the reworked audio identity path Epic 2 builds on.
+On a 5,000-segment project, segment listing, plan status and generation start stay within their limits, and heavy or abandoned reads no longer stall other requests. This epic also builds the synthetic project and timing check the later epics reuse, and the reworked audio identity path Epic 3 builds on.
 
 ## Outcome
 
@@ -51,7 +51,7 @@ Someone working on a very long book gets answers from the app and MCP without ti
 
 ## Boundaries
 
-- Belongs to siblings: fork release mechanics (Epic 5), speaker plan carry-over (Epic 2), export and partial assembly (Epic 3), chapter pauses (Epic 4).
+- Belongs to siblings: fork release mechanics (Epic 1), speaker plan carry-over (Epic 3), export and partial assembly (Epic 4), chapter pauses (Epic 5).
 - Out: a storage-engine change, unless query, caching and transaction work is shown to be insufficient.
 - Out: the 30-second lease failure, fixed by `415aaa8a`.
 - Must not change: a take is only reused when its audio identity truly matches.

@@ -4,7 +4,7 @@
 id = 1
 type = "story"
 title = "Fork main carries the lease fix as a tagged fork version"
-description = "Merges the lease fix into fork main, sets a fork version in pyproject.toml only, leaving web/package.json alone so the browser assets need no rebuild, and tags it. Provides the release line story 8 installs and Epic 1's cancel story builds on."
+description = "Merges the lease fix into fork main, sets a fork version in pyproject.toml only, leaving web/package.json alone so the browser assets need no rebuild, and tags it. Provides the release line story 8 installs and Epic 2's cancel story builds on."
 verify = "From a clean clone of the tag, the app reports the fork version, the lease fix's tests and tests/test_version.py pass, and fork CI on main shows no new failures."
 covers = ["R1"]
 after = []
@@ -15,7 +15,7 @@ risk = "low"
 id = 8 # split from story 1 before any work started
 type = "story"
 title = "The owner's install runs the fork build and the real book"
-description = "Adds a fork-only script on fork-files that clones the tag into a new version slot named by commit, prepares its runtime with the install's pixi, activates it, and can return to the previous slot, then runs the real book on the stock 30-second lease. Provides the install path Epic 1's real-data check uses."
+description = "Adds a fork-only script on fork-files that clones the tag into a new version slot named by commit, prepares its runtime with the install's pixi, activates it, and can return to the previous slot, then runs the real book on the stock 30-second lease. Provides the install path Epic 2's real-data check uses."
 verify = "The owner's app reports the fork version, the real book's generation run passes the opening check on the stock 30-second lease, and the script goes back to the previous version and forward again."
 covers = ["R2", "R3"]
 after = [1]

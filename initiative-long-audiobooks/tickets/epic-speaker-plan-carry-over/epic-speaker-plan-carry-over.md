@@ -14,7 +14,7 @@ risk: high
 
 ## Description
 
-Editing a segment keeps the rest of the book's reuse status and adopted speaker plan, across edit-copied and restored revisions. This epic settles the edit-copy handling Epic 3 relies on and the pause rules Epic 4 relies on.
+Editing a segment keeps the rest of the book's reuse status and adopted speaker plan, across edit-copied and restored revisions. This epic settles the edit-copy handling Epic 4 relies on and the pause rules Epic 5 relies on.
 
 ## Outcome
 
@@ -29,7 +29,7 @@ Someone correcting one line of a long book keeps the speaker plan and reusable a
 
 ## Boundaries
 
-- Belongs to siblings: audio identity speed (Epic 1), export and partial assembly (Epic 3), chapter pause settings (Epic 4).
+- Belongs to siblings: audio identity speed (Epic 2), export and partial assembly (Epic 4), chapter pause settings (Epic 5).
 - Must not change: a segment whose text or speech really changed loses its reuse.
 
 ## References

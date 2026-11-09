@@ -28,7 +28,7 @@ Someone producing an audiobook gets the chapter pacing they want from settings, 
 
 ## Boundaries
 
-- Belongs to siblings: partial assembly (Epic 3).
+- Belongs to siblings: partial assembly (Epic 4).
 - Out: rewriting heading text, such as speaking "1." as "Chapter 1"; setting a title's spoken text covers that.
 - Must not change: pauses at non-chapter boundaries.
 
