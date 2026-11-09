@@ -38,6 +38,7 @@ from pandrator_mcp.tools.e2e import (
     refresh_tts_catalog,
     tts_catalog,
 )
+from tests.platform_support import symlink_or_skip
 
 
 def test_audio_cpp_model_selectability_preserves_unknown_health_and_advertisement():
@@ -829,11 +830,6 @@ class McpEndToEndToolTests(unittest.TestCase):
             root = Path(directory)
             source = root / "lesson.srt"
             source.write_bytes(b"one\ntwo\n")
-            outside = root.parent / f"{root.name}-outside.txt"
-            outside.write_bytes(b"outside")
-            link = root / "escape.txt"
-            link.symlink_to(outside)
-            self.addCleanup(outside.unlink, missing_ok=True)
             runtime, application = _runtime(root)
 
             listed = browse_local_sources(
@@ -859,6 +855,20 @@ class McpEndToEndToolTests(unittest.TestCase):
             self.assertEqual("source-1", imported.result["source_asset_id"])
             self.assertEqual("attach", application.calls[-1][0])
 
+            # The symlink checks come last, so a host without the symlink privilege still
+            # runs the regular-file checks above.
+            outside = root.parent / f"{root.name}-outside.txt"
+            outside.write_bytes(b"outside")
+            self.addCleanup(outside.unlink, missing_ok=True)
+            symlink_or_skip(root / "escape.txt", outside)
+            listed = browse_local_sources(
+                runtime,
+                BrowseLocalSourcesInput(root="downloads", sort="name_asc"),
+            )
+            self.assertEqual(
+                ["lesson.srt"], [item["relative_path"] for item in listed["items"]]
+            )
+            self.assertNotIn(str(root), str(listed))
             with self.assertRaises(PandratorMcpError) as captured:
                 import_local_source(
                     runtime,

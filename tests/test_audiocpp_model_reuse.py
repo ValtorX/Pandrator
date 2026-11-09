@@ -11,6 +11,7 @@ import pytest
 
 from pandrator_manager.components.audiocpp import AudioCppModelPackage
 from pandrator_manager.components.audiocpp_reuse import reuse_verified_package
+from tests.platform_support import symlink_or_skip
 
 
 def digest(path: Path) -> str:
@@ -75,7 +76,7 @@ def test_symlink_cannot_reuse_files_outside_managed_slot(package, tmp_path):
     source = definition.required_paths(active / "models")[0]
     outside = tmp_path / "outside.gguf"
     source.rename(outside)
-    source.symlink_to(outside)
+    symlink_or_skip(source, outside)
     assert reuse(active, target, definition) is None
     assert not target.exists()
 

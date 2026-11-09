@@ -60,6 +60,18 @@ def no_network(monkeypatch):
     monkeypatch.setattr(socket, "create_connection", denied)
 
 
+def test_no_network_denies_connects_outside_socketpair():
+    first, second = socket.socketpair()
+    with first, second:
+        first.sendall(b"x")
+        assert second.recv(1) == b"x"
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+        with pytest.raises(AssertionError, match="synthetic provider boundaries"):
+            client.connect(("127.0.0.1", 9))
+    with pytest.raises(AssertionError, match="synthetic provider boundaries"):
+        socket.create_connection(("127.0.0.1", 9))
+
+
 def provider(client, csrf, *, workspace=None, label="Synthetic provider", enabled=True):
     query = {} if workspace is None else {"workspace_id": workspace}
     return body(

@@ -62,9 +62,7 @@ _SELECTOR = {"voice": "Narrator", "service": "audio_cpp", "model": "model-one"}
 def _migration_config(path: Path) -> Config:
     config = Config()
     config.set_main_option("script_location", str(MIGRATIONS))
-    config.set_main_option(
-        "sqlalchemy.url", sqlite_url(path)
-    )
+    config.set_main_option("sqlalchemy.url", sqlite_url(path))
     return config
 
 

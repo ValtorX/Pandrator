@@ -32,6 +32,7 @@ from pandrator_mcp.tools.transcription import (
     get_transcription_result,
     transcribe,
 )
+from tests.platform_support import symlink_or_skip
 
 
 class _Application:
@@ -379,10 +380,6 @@ class QuickTranscriptionToolTests(unittest.TestCase):
     def test_source_bounds_and_containment_are_enforced(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            outside = root.parent / f"{root.name}-outside.wav"
-            outside.write_bytes(b"outside")
-            self.addCleanup(outside.unlink, missing_ok=True)
-            (root / "escape.wav").symlink_to(outside)
             application = _Application()
 
             with self.assertRaises(PandratorMcpError) as traversal:
@@ -396,18 +393,6 @@ class QuickTranscriptionToolTests(unittest.TestCase):
                     ),
                 )
             self.assertEqual("validation_error", traversal.exception.code)
-
-            with self.assertRaises(PandratorMcpError) as symlink:
-                transcribe(
-                    _runtime(root, application),
-                    TranscribeInput(
-                        source=LocalFileTranscriptionSource(
-                            root="approved", path="escape.wav"
-                        ),
-                        idempotency_key="transcribe:symlink",
-                    ),
-                )
-            self.assertEqual("network_policy_denied", symlink.exception.code)
 
             with (root / "large.wav").open("wb") as handle:
                 handle.truncate(256 * 1024 * 1024 + 1)
@@ -434,6 +419,24 @@ class QuickTranscriptionToolTests(unittest.TestCase):
                     ),
                 )
             self.assertEqual("validation_error", invalid_base64.exception.code)
+
+            # The symlink check comes last, so a host without the symlink privilege still
+            # runs the bounds checks above.
+            outside = root.parent / f"{root.name}-outside.wav"
+            outside.write_bytes(b"outside")
+            self.addCleanup(outside.unlink, missing_ok=True)
+            symlink_or_skip(root / "escape.wav", outside)
+            with self.assertRaises(PandratorMcpError) as symlink:
+                transcribe(
+                    _runtime(root, application),
+                    TranscribeInput(
+                        source=LocalFileTranscriptionSource(
+                            root="approved", path="escape.wav"
+                        ),
+                        idempotency_key="transcribe:symlink",
+                    ),
+                )
+            self.assertEqual("network_policy_denied", symlink.exception.code)
 
     def test_status_result_cancel_delete_forward_controls(self):
         with tempfile.TemporaryDirectory() as directory:

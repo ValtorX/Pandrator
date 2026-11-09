@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -77,3 +78,15 @@ def test_direct_python_uses_the_base_interpreter_in_a_windows_venv(monkeypatch):
     monkeypatch.setattr(sys, "base_prefix", "base-prefix")
     monkeypatch.setattr(sys, "_base_executable", "base-python.exe")
     assert platform_support.direct_python() == "base-python.exe"
+
+
+def test_direct_python_child_pid_is_the_spawned_process():
+    # The property the helper exists for: the pid Popen reports is the script's own.
+    process = subprocess.Popen(
+        [platform_support.direct_python(), "-c", "import os; print(os.getpid())"],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    output, _ = process.communicate(timeout=30)
+    assert process.returncode == 0
+    assert int(output.strip()) == process.pid

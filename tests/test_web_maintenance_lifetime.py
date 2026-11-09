@@ -27,6 +27,7 @@ from pandrator.web.models import (
     utcnow,
 )
 from pandrator.web.projects.identity import create_session_project
+from tests.platform_support import symlink_or_skip
 from tests.web_test_support import prepare_web_test_data_root
 
 
@@ -80,18 +81,12 @@ def test_retention_counts_native_deletes_and_preserves_recent_and_external_files
         os.utime(expired[-1], (old.timestamp(), old.timestamp()))
         current.append(root / "retention-current")
         current[-1].write_text("current")
-    outside = services.paths.uploads / "retention-protected"
-    outside.write_text("protected source")
-    os.utime(outside, (old.timestamp(), old.timestamp()))
-    link = services.paths.temporary / "retention-external-link"
-    link.symlink_to(outside)
     assert apply_retention(services.database, services.paths, 30) == {
         "job_events": 1, "app_setting_history": 1, "session_setting_history": 1, "files": 2,
         "workspace_setting_history": 1,
     }
     assert all(not path.exists() for path in expired)
     assert all(path.read_text() == "current" for path in current)
-    assert outside.read_text() == "protected source" and link.is_symlink()
     with services.database.session() as session:
         assert len(list(session.scalars(select(JobEvent).where(JobEvent.event_type == "retention.contract")))) == 1
         assert len(list(session.scalars(select(AppSettingHistory).where(AppSettingHistory.key == "retention.contract")))) == 1
@@ -102,6 +97,18 @@ def test_retention_counts_native_deletes_and_preserves_recent_and_external_files
         "job_events": 0, "app_setting_history": 0, "session_setting_history": 0, "files": 0,
         "workspace_setting_history": 0,
     }
+
+
+def test_retention_never_follows_a_link_to_an_old_external_file(services):
+    old = utcnow() - timedelta(days=40)
+    services.paths.temporary.mkdir(parents=True, exist_ok=True)
+    outside = services.paths.uploads / "retention-protected"
+    outside.write_text("protected source")
+    os.utime(outside, (old.timestamp(), old.timestamp()))
+    link = services.paths.temporary / "retention-external-link"
+    symlink_or_skip(link, outside)
+    assert apply_retention(services.database, services.paths, 30)["files"] == 0
+    assert outside.read_text() == "protected source" and link.is_symlink()
 
 
 @pytest.mark.parametrize("owner", ["startup", "quick"])

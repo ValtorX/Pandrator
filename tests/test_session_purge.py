@@ -54,6 +54,7 @@ from pandrator.web.source_library import SourceLibraryService
 from pandrator.web.upload_activity import UploadBusy, upload_activity
 from pandrator.web.uploads import ChunkUploadService
 from pandrator.web.workspace_settings import WorkspaceSettingsService
+from tests.platform_support import symlink_or_skip
 
 
 def _project_operation(harness, *, status="running"):
@@ -882,7 +883,7 @@ def test_symlink_at_legacy_subtitle_path_remains_blocked(harness):
     target = paths.managed_path("artifacts/legacy-subtitle-target.srt")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("preserved symlink target")
-    path.symlink_to(target)
+    symlink_or_skip(path, target)
     with database.session() as session:
         ownership = resolve_artifact_ownership(session, session_id=record.id)
         session.add(Artifact(
@@ -1393,7 +1394,7 @@ def test_symlink_and_escape_block_without_unlink(harness, tmp_path):
     record, folder = _session(harness)
     external = tmp_path.parent / (tmp_path.name + "-keep.txt")
     external.write_text("keep")
-    (folder / "escape.txt").symlink_to(external)
+    symlink_or_skip(folder / "escape.txt", external)
     _trashed(harness, record)
     preview = purge.preview(record.id)
     assert not preview["can_purge"]
@@ -1658,9 +1659,9 @@ def test_unsafe_upload_storage_blocks_purge(harness, unsafe):
             row.temporary_relative_path = f"tmp/uploads/./{upload['id']}"
         elif unsafe == "directory_symlink":
             directory.rmdir()
-            directory.symlink_to(paths.root, target_is_directory=True)
+            symlink_or_skip(directory, paths.root, target_is_directory=True)
         elif unsafe == "file_symlink":
-            (directory / "linked.part").symlink_to(sentinel)
+            symlink_or_skip(directory / "linked.part", sentinel)
         else:
             os.mkfifo(directory / "pipe.part")
     _trashed(harness, record)
@@ -1989,7 +1990,7 @@ def test_activity_lock_rejects_unsafe_paths(harness, unsafe):
     if unsafe == "identifier":
         identifier = "../escape"
     elif unsafe == "ancestor_symlink":
-        directory.symlink_to(paths.sessions, target_is_directory=True)
+        symlink_or_skip(directory, paths.sessions, target_is_directory=True)
     elif unsafe == "ancestor_file":
         directory.write_text("retain")
     else:
@@ -1998,7 +1999,7 @@ def test_activity_lock_rejects_unsafe_paths(harness, unsafe):
         if unsafe == "lock_symlink":
             sentinel = paths.root / "sentinel-lock"
             sentinel.write_text("retain")
-            lock.symlink_to(sentinel)
+            symlink_or_skip(lock, sentinel)
         else:
             os.mkfifo(lock)
     with pytest.raises(ValueError):

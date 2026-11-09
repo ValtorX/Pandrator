@@ -30,6 +30,7 @@ from pandrator_mcp.credentials import (
 from pandrator_mcp.errors import PandratorMcpError
 from pandrator_mcp.network_policy import NetworkPolicy, TargetMode
 from pandrator_mcp.targets import TargetProfile, TargetRegistry
+from tests.platform_support import symlink_or_skip
 
 
 class FakeResponse:
@@ -328,7 +329,7 @@ class ApplicationClientTests(unittest.TestCase):
             other = Path(directory) / "other.bin"
             other.write_bytes(b"do not overwrite")
             malicious = Path(directory) / ".blocked.bin.part"
-            malicious.symlink_to(other)
+            symlink_or_skip(malicious, other)
             with self.assertRaises(PandratorMcpError) as captured:
                 client.download_artifact(
                     "artifact-2",

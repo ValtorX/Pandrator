@@ -19,7 +19,8 @@ from pandrator.logic.dubbing import audio_sync, manual_timing, transcription, vi
 from pandrator.logic.media_input_policy import LOCAL_MEDIA_INPUT_OPTIONS
 
 _MEDIA_A = "source audio 'one' \"original\".mov"
-# Windows file names cannot contain a double quote; only tests that create the file use this.
+# Windows file names cannot contain a double quote; only tests that create the file use this,
+# so those two check double-quote handling on POSIX only. Argv-only tests keep _MEDIA_A.
 _MEDIA_A_FILE = _MEDIA_A.replace('"', "") if os.name == "nt" else _MEDIA_A
 _MEDIA_B = "speech audio 'two' \"final\".wav"
 _SUBTITLE_A = "English subtitles 'one'.srt"

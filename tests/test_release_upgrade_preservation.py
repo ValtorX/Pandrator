@@ -55,7 +55,11 @@ def test_published_release_tree_survives_normal_startup(tmp_path: Path) -> None:
         for table, oracle in metadata["tables"].items():
             assert _rows(connection, table, oracle["columns"]) == oracle["rows"], table
     for relative, digest in metadata["files"].items():
-        assert hashlib.sha256((paths.root / relative).read_bytes()).hexdigest() == digest
+        assert hashlib.sha256((paths.root / relative).read_bytes()).hexdigest() == digest, (
+            f"{relative} differs from the release fixture. A checkout made before the fixture's "
+            "-text rule in .gitattributes may hold CRLF copies: with a clean git status, delete "
+            "tests/fixtures/release-0.13.0-rich and run git checkout -- on that folder."
+        )
 
     # The normal service constructor owns both migration and startup, without a
     # Flask surface or a worker/provider being started by this qualification.

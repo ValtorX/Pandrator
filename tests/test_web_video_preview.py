@@ -33,6 +33,7 @@ from pandrator.web.video_previews import (
     VideoPreviewUnsupported,
     probe_video,
 )
+from tests.platform_support import symlink_or_skip
 from tests.web_test_support import prepare_web_test_data_root
 
 
@@ -387,7 +388,7 @@ def test_only_regular_managed_source_files_are_eligible(harness, monkeypatch, un
     else:
         path.unlink()
         if unsafe == "symlink":
-            path.symlink_to(sentinel)
+            symlink_or_skip(path, sentinel)
         else:
             path.mkdir()
     response = _request(harness, source)

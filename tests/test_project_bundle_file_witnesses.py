@@ -213,6 +213,10 @@ def test_symlink_substitution_never_reads_foreign_bytes(bundle_case, monkeypatch
     payload = _requested(case)
     foreign = case.root / "foreign-file"
     foreign.write_bytes(b"foreign bytes must never be read")
+    # Probe first: a skip raised inside mutate would cross the product's BaseException path.
+    probe = case.root / "symlink-probe"
+    symlink_or_skip(probe, foreign)
+    probe.unlink()
     substituted = []
     original_open = io.open
     original_os_open = os.open
@@ -224,7 +228,7 @@ def test_symlink_substitution_never_reads_foreign_bytes(bundle_case, monkeypatch
             else directory / substitution
         )
         path.unlink()
-        symlink_or_skip(path, foreign)
+        path.symlink_to(foreign)
         substituted.append(path)
         # Rename moves a staging link to its deterministic publication path.
         forbidden = {foreign, path, _output(case, payload) / path.name}

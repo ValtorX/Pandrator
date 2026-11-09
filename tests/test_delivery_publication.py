@@ -164,6 +164,8 @@ def test_symlink_and_identical_paths_are_rejected_before_preparation(publication
 
     with pytest.raises(ValueError, match="must differ"):
         _publish(case, requested_destination=case.rendered)
+    assert case.rendered.read_bytes() == b"synthetic rendered audio"
+    assert not case.requested_destination.exists()
 
     rendered_link = case.rendered.with_name("rendered-link.wav")
     symlink_or_skip(rendered_link, case.rendered)

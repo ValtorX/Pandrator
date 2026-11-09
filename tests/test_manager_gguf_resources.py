@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from pandrator_manager.artifacts.gguf_resources import embed_gguf_files
+from tests.platform_support import symlink_or_skip
 
 _HEADER = struct.Struct("<4sIQQ")
 _U32 = struct.Struct("<I")
@@ -313,7 +314,7 @@ def test_symlink_destination_is_never_followed_or_replaced(tmp_path):
     _write_fixture(source)
     target.write_bytes(b"symlink target")
     resource.write_bytes(b"resource")
-    destination.symlink_to(target)
+    symlink_or_skip(destination, target)
 
     with pytest.raises(FileExistsError):
         embed_gguf_files(source, destination, {"resource.bin": resource}, _noop)
