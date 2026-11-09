@@ -142,7 +142,7 @@ W1 and W2 don't appear on CI, but they still fail in a local checkout, so storie
 
 **Two CI faults that aren't test failures:**
 
-- **A failed FFmpeg install doesn't fail the job (W9).** On `windows-web-20`, Chocolatey couldn't reach its feed and reported `installed 0/0 packages`, yet `Install Windows FFmpeg` finished as a success, so 16 tests then failed on a missing `ffprobe`. The other 20 Windows jobs read show `1/1`; `web-08`, `web-10`, `web-14` and `web-15` weren't read. It looks transient, but tests that skip without FFmpeg would pass quietly when this happens. Story 4 fixes it in `e2ca83b8`: the step now retries, and fails if `ffprobe` is still missing.
+- **A failed FFmpeg install doesn't fail the job (W9).** On `windows-web-20`, Chocolatey couldn't reach its feed and reported `installed 0/0 packages`, yet `Install Windows FFmpeg` finished as a success, so 16 tests then failed on a missing `ffprobe`. The other 20 Windows jobs read show `1/1`; `web-08`, `web-10`, `web-14` and `web-15` weren't read. It looks transient, but tests that skip without FFmpeg would pass quietly when this happens. Story 4 fixes it in `e2ca83b8` and its review: the step now retries within a 10-minute limit, fails if `ffprobe` is still missing, and also runs in `windows-serial-lanes.yml`, which had no FFmpeg install at all.
 - **One E2E job hit its limit.** `E2E (ubuntu-latest, firefox, 2/2)` spent 16.4 minutes in its browser install and was cancelled at its 30-minute limit, which is why the run's conclusion is `cancelled`. It ran no lane, and the same job took 21.1 minutes at `ebe7194d`. It passed its other shard and has not been rerun.
 
 ## Where each group went
@@ -154,6 +154,7 @@ W1 and W2 don't appear on CI, but they still fail in a local checkout, so storie
 | W1 path length | Story 6 |
 | Platform, `sqlite:///C%3A` including W8, dubbing prefetch test (J1), W2 to W7 | Story 7 |
 | W9, a failed FFmpeg install not failing the job | Story 4 |
+| One E2E job hitting its limit in its browser install | Story 4 reads it on its next CI run; if it recurs, it goes to the owner as a proposed story |
 | A1, A2, E1 | Story 8 |
 | B1 to B9 | Story 9 |
 | The other stale clusters, `test_web_api_shutdown`, `test_epub_narration`, `test_xtts_training_process` | Story 10 |

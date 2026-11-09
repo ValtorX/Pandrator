@@ -3,7 +3,7 @@ title: 'Every test lane finishes on CI'
 type: chore
 ticket: '4'
 created: '2026-11-09'
-status: built
+status: done
 baseline_revision: 'f94fd9f6f853c940b402d36d09792b4a1e2b93de'
 route: full
 route_source: auto
@@ -137,3 +137,52 @@ The ticket's CI run does not have to touch `main`: `web-preview.yml` has `workfl
 
 **Manual checks:**
 - On the CI run, read each job's conclusion and duration, and download or read the JUnit results for the failure list. Logs need a GitHub sign-in, and `gh` isn't installed.
+
+## Code Review
+
+### 2026-11-09
+
+**Code review complete.** 0 `decision-needed`, 10 `patch`, 0 `defer`, 14 rejected. Range: `f94fd9f6..93c0e68e` plus `e2ca83b8`. Lenses: blind hunter, edge case hunter, verification gap and intent alignment; none failed.
+
+- [x] [Review][Patch] Manual Windows lanes run with no FFmpeg [.github/workflows/windows-serial-lanes.yml:39]
+- [x] [Review][Patch] The FFmpeg step has no time limit [.github/workflows/web-preview.yml:216] -- a precaution: no stall has been observed. The bound is 10 minutes against a measured maximum of 51 seconds across the run's 33 Windows jobs.
+- [x] [Review][Patch] Lane names in `windows-serial-lanes.yml` aren't checked against the manifest [tests/test_test_lanes.py]
+- [x] [Review][Patch] The duplicate branch, an absent OS and parser failures are untested [tests/test_test_lanes.py]
+- [ ] [Review][Patch] No CI run covers HEAD, and the lease fix's results are inferred from no `FAILED` line [this plan, Implementation Notes] -- the checks are written below, and stay open until the owner's run.
+- [x] [Review][Patch] The install script is copied into each job [.github/actions/install-windows-ffmpeg/action.yml]
+- [x] [Review][Patch] The retry sleeps after its last attempt, with a fixed wait [.github/actions/install-windows-ffmpeg/action.yml:11]
+- [x] [Review][Patch] The matrix parser isn't bounded to the `python-lanes` job [tests/test_test_lanes.py:98]
+- [x] [Review][Patch] The lane comment omits the rule and runs to 110 characters [scripts/test_lanes.py:574]
+- [x] [Review][Patch] The E2E job's time limit has no row in "Where each group went" [findings-ci-failures.md]
+
+**Checks after the patches**, Windows, uv from `AGENTS.md` with SQLAlchemy 2.0.52; `pixi` isn't installed. Nothing here is committed.
+
+- `test_lanes.py check` passes; `tests/test_test_lanes.py` has 19 passed, 11 subtests passed; `ruff@0.17.3` passes on `scripts` and that file; `actionlint-py` 1.7.12.25, through `uvx`, passes on both workflows.
+- Each new guard failed when broken on purpose, then the files were restored: the parser's job bound, keeping duplicates, the listed-twice branch, a dead manual lane and a bare `choco` in the manual workflow.
+- The action's script ran against a stubbed `choco` with a clean PATH: passes on the first and third tries, sleeping 30 then 60 seconds, and exits 1 with its message when `ffprobe` never appears. That used Windows PowerShell 5.1, because `pwsh` isn't installed here and CI uses `pwsh`.
+- Rechecked independently: the six lanes concatenate to the baseline's 304 files in order, with no other lane changed, and the public API confirms the plan's job list and durations for run `42638129618`. JUnit files and logs need a sign-in, so they weren't read.
+
+**Rejected:**
+
+- `false`: the guard checks `ffprobe` but not `ffmpeg`, and an absent `ffmpeg` shim (two lenses). The package ships and shims both together, and a failed install goes to `lib-bad`.
+- `false`: retries need `--force`. A failed install isn't registered, and a successful one creates the shims.
+- `false`: a failed install passes if `ffprobe` is already on PATH. W9 shows the runner has none first, and if it had, the tests would have what they need.
+- `false`: `check` doesn't see the matrix. Verify names it as a manifest check, and the plan puts the matrix rule in a test.
+- `false`: the workflow needs a manual dispatch on this branch. Known, and in the design notes.
+- `false`: one test goes to a backlog bug rather than a story. The epic's 2026-11-09 decision puts product faults there.
+- `false`: the intent's wording changed during the work. An owner-approved renumbering, recorded in the epic.
+- `low`: the parser drops per-entry data. Real only after a future hand edit, loud at runtime for duplicate names and combined lanes, and the fix reshapes the parser.
+- `low`: jitter, a cached FFmpeg download and a fuller `throw` message. Extra machinery; `choco`'s output sits just above the `throw`.
+- `low`: nothing warns as a lane nears its limit. A lane that outruns it is cancelled visibly, and a warning is new CI machinery.
+- `low`: the guard runs only in `fast-xdist`. Dropping that lane from both operating systems is a large visible edit.
+- `low`: the run's conclusion is `cancelled`. Verify says lanes, and that job runs none. Its findings row is the patch above.
+- `low`: counts are firm only by per-file count, and 102 against 80 errors wasn't investigated. The limits are stated, and CI's own counts reconcile with the lane runs, so the old whole-suite figure feeds nothing.
+- `low`: the baseline is by lane and cluster, not per test. Later stories check clusters and rerun CI themselves.
+
+**The owner marked this story done on 2026-11-09, before this run.**
+
+**Still open, for the owner's gate:** one fork CI run of the committed fixes, started by `workflow_dispatch` on `epic-fork-releases`, because a push to this branch doesn't trigger `web-preview.yml`. On that run, read these:
+
+1. `windows-*` jobs: `Install Windows FFmpeg` succeeds through the new local action and its `timeout-minutes`, which actionlint accepts but no run has exercised.
+2. The `web-23` JUnit files on both operating systems: each `test_generation_workspace_execution` test has a result, which settles criterion 3 by test name.
+3. `E2E (ubuntu-latest, firefox, 2/2)`: whether it finishes this time.
