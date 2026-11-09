@@ -4,10 +4,26 @@ from pathlib import Path
 
 import pytest
 
+from tests.windows_temp_root import ShortRootUnavailable, make_run_dir
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 repo_root_str = str(REPO_ROOT)
 if repo_root_str not in sys.path:
     sys.path.insert(0, repo_root_str)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_configure(config: pytest.Config) -> None:
+    """Give Windows runs a short temp root so test paths stay under MAX_PATH."""
+    try:
+        run_dir = make_run_dir(explicit_basetemp=config.option.basetemp)
+    except ShortRootUnavailable as error:
+        config.issue_config_time_warning(
+            pytest.PytestConfigWarning(f"Using pytest's default temp root: {error}"), stacklevel=2
+        )
+        return
+    if run_dir is not None:
+        config.option.basetemp = run_dir
 
 
 @pytest.fixture
