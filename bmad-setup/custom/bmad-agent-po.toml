@@ -1,0 +1,8 @@
+[agent]
+persistent_facts = [
+  "Numbering rule (owner, 2026-11-08), overriding 'never reused' for tickets: the ids of unstarted epics and stories follow build order. When the order changes or a ticket is split or inserted, renumber the unstarted ones so they do, and update every reference (`after`, cross-epic pins, descriptions, notes), with a log entry mapping old to new; earlier log lines and commit messages keep the old numbers. Check first for new plan files, since another session may have started one. A ticket is started once it has a plan file or a state past planned. A started, done or dropped ticket keeps its id, and that id is never given to another ticket; an item placed before a started ticket takes the next unused number.",
+]
+
+[workflow]
+checks.set = ["Unstarted entries' ids ascend in table order, per the numbering rule; a started, done or dropped entry may break the sequence."]
+checks.tree = ["Unstarted epics' ids ascend in table order, per the numbering rule; a started, done or dropped epic may break the sequence."]

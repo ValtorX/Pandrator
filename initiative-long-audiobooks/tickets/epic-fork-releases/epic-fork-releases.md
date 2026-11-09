@@ -39,7 +39,7 @@ The owner runs a released build of the fork on the real book, on the stock 30-se
 - Changes to the owner's machine and install (Node, pixi, Playwright browsers, activating a build) are the owner's to run or authorize. No registry or system setting is changed by an agent.
 - Merging, committing, tagging and pushing need the owner's direct go-ahead, per `AGENTS.md`.
 - Fork-only files stay on `fork-files`. A change to `/AGENTS.md` also updates `_bmad-output/backup/repo-instructions.backup.txt`.
-- A `pandrator/web/static` build is committed only from an LF checkout until story 2 lands.
+- A `pandrator/web/static` build is committed only from an LF checkout until story 3 lands.
 - `web/package.json` keeps upstream's version, because `web/svelte.config.js:44` puts it in the build's name and changing it would force an asset rebuild.
 - Local paths and the book's title stay out of PRs and this public branch.
 
@@ -66,9 +66,9 @@ The owner runs a released build of the fork on the real book, on the stock 30-se
 
 ## Notes
 
-- Decision (2026-11-08): Stories 1 and 8 together are the tracer bullet, split because one session couldn't hold both: they take the lease fix through a tagged version, a hand activation and a real run. That is the riskiest path and the owner's first real gain. Story 1 changes no browser assets, so neither waits on the Windows work.
-- Decision (2026-11-08): Story 2 stands alone because story 1 leaves the browser assets untouched. Stories 4 and 5 wait on story 3 so they run under its temp path fix. Story 6 waits on stories 2 and 8 because it writes down their asset rebuild and install steps. Story 7 goes last because it documents the result.
+- Decision (2026-11-08): Stories 1 and 2 together are the tracer bullet, split because one session couldn't hold both: they take the lease fix through a tagged version, a hand activation and a real run. That is the riskiest path and the owner's first real gain. Story 1 changes no browser assets, so neither waits on the Windows work.
+- Decision (2026-11-08): Story 3 stands alone because story 1 leaves the browser assets untouched. Stories 5 and 6 wait on story 4 so they run under its temp path fix. Story 7 waits on stories 2 and 3 because it writes down their asset rebuild and install steps. Story 8 goes last because it documents the result.
 - Decision (2026-11-08): Releases are for the owner's own install. The build is a tag on fork `main`, activated by a fork-only script on `fork-files` into a new version slot.
 - Decision (2026-11-08): Fork `main` is the release line, because it is the default branch and the CI triggers already cover it.
 - Decision (2026-11-08): No refactor sweep, because this epic changes setup, tests and procedures rather than product code.
-- Assumption: The Manager accepts a hand-activated slot. Its code reads only the pointer file and slot markers, with `revision` optional, but this hasn't been run; story 8 finds out.
+- Assumption: The Manager accepts a hand-activated slot. Its code reads only the pointer file and slot markers, with `revision` optional, but this hasn't been run; story 2 finds out.
