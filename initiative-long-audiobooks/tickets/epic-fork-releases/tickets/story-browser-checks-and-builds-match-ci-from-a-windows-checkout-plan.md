@@ -82,3 +82,7 @@ Verified on Windows with Node 24.22.2 and the uv environment:
 - The guard passes as is and fails with the override, and all 11 tests in the file pass.
 - `check:assets` passes on this checkout and fails on a CRLF copy of `web/src/app.html`; that file was restored afterwards. It passes with `GIT_DIR` pointing nowhere.
 - `quality` and ruff pass.
+
+CI on 2026-11-09, `web-preview.yml` run 42664104401 (`workflow_dispatch` on `0a07679dcd57f9e324e9c7d854fd9d1c63b0c88f`):
+- The new guard test passes in `ubuntu-services` and `windows-services`. Each job has 8 failures, all MCP tool-registration tests that are already in `findings-ci-failure-classification.md`.
+- Compared with run 42638129618 on `93c0e68e`, no test fails that didn't fail before, in any job.

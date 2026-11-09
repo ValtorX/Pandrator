@@ -186,3 +186,10 @@ The ticket's CI run does not have to touch `main`: `web-preview.yml` has `workfl
 1. `windows-*` jobs: `Install Windows FFmpeg` succeeds through the new local action and its `timeout-minutes`, which actionlint accepts but no run has exercised.
 2. The `web-23` JUnit files on both operating systems: each `test_generation_workspace_execution` test has a result, which settles criterion 3 by test name.
 3. `E2E (ubuntu-latest, firefox, 2/2)`: whether it finishes this time.
+
+**Owner's gate run, 2026-11-09:** `web-preview.yml` run 42664104401, `workflow_dispatch` on `epic-fork-releases` at `0a07679dcd57f9e324e9c7d854fd9d1c63b0c88f`, which includes `e2ca83b8` and `388a1bb7`.
+1. `Install Windows FFmpeg` succeeds in all 33 Windows test jobs. `Wheels (windows-latest)` has no such step.
+2. `web-23` JUnit: on both operating systems, all 20 `test_generation_workspace_execution` cases (17 functions, with parameters) have a result: 19 passed and 1 failed. The failure is `test_generation_ignores_saved_preview_routing_metadata[generation_case0]`, already classified.
+3. `E2E (ubuntu-latest, firefox, 2/2)` finished with success; on the previous run it was cancelled.
+
+Compared with run 42638129618, no new failing test appears in any job. 16 fewer fail, all in `windows-web-20`'s sound and voice-reference import tests, which the FFmpeg install fix targeted.
