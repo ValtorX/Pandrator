@@ -137,3 +137,44 @@ def symlink_or_skip(link: Path, target: Path, *, target_is_directory: bool = Fal
 - `<uv env> --with sqlalchemy==2.0.52 python scripts/test_lanes.py run <lane>` for `fast-xdist` and each serial lane holding a changed file -- expected: none of these tests fails.
 - `<uv env> python scripts/test_lanes.py check` and `uvx ruff@0.17.3 check tests scripts` -- expected: pass.
 - `git ls-files --eol tests/fixtures/release-0.13.0-rich` -- expected: no `w/crlf`.
+
+## Code Review
+
+### 2026-11-09
+
+Full diff review of `a5918f5b..04d8d142` (blind-hunter, edge-case-hunter, verification-gap, intent-alignment; no lens failed). 0 `decision-needed`, 7 `patch`, 0 `defer`, 16 rejected.
+
+A run of the 17 untouched test files that still created symlinks, FIFOs or POSIX modes found 13 more WinError 1314 failures that no story owned (the CI triage's W2 counted 7). They share this story's cause and approach, so they are fixed here rather than deferred.
+
+- [x] [Review][Patch] 13 untouched tests still call `symlink_to` bare and fail with WinError 1314 on Windows without the symlink privilege [tests/test_session_purge.py:885, :1396, :1661, :1663, :1992, :2001; tests/test_audiocpp_model_reuse.py:78; tests/test_manager_gguf_resources.py:316; tests/test_mcp_application_client.py:331; tests/test_mcp_e2e.py:835; tests/test_mcp_quick_transcription.py:385; tests/test_web_maintenance_lifetime.py:87; tests/test_web_video_preview.py:390]
+- [x] [Review][Patch] `test_delivery_publication`'s source-intact and no-destination checks still follow the symlink steps, so an unprivileged Windows run drops them [tests/test_delivery_publication.py:256]
+- [x] [Review][Patch] A checkout made before the `-text` rule keeps CRLF fixture copies and fails the byte hash with no hint [tests/test_release_upgrade_preservation.py:57]
+- [x] [Review][Patch] The bundle witness test raises its skip inside production's `except BaseException` path, which skips rollback; probe before production code runs [tests/test_project_bundle_file_witnesses.py:227]
+- [x] [Review][Patch] `direct_python()` does not say that the base interpreter lacks the venv's packages, and no test checks its pid promise [tests/platform_support.py:55]
+- [x] [Review][Patch] The `no_network` guard has no test of its own [tests/test_provider_workspace_access.py:37]
+- [x] [Review][Patch] Formatting: two qwen lines run far past 100 characters, a needless three-line wrap, and the `_MEDIA_A_FILE` comment doesn't say quote handling is checked on POSIX only [tests/test_qwen_asr_transcription.py:399]
+
+Applied, verified from PowerShell with `PYTEST_ADDOPTS` unset, `<uv env>` with SQLAlchemy 2.0.52:
+- The story's 28 files, the 8 newly fixed ones and `test_release_upgrade_preservation`: 2 failed (G3, story 10), 709 passed, 35 skipped. The skips are 29 symlink (WinError 1314; 13 new), 3 FIFO, 1 POSIX mode and 2 security log, each stating its cause.
+- `test_lanes.py check` passes; `fast-xdist`: 2 failed, both story 10's (G5 `test_tts_generation_limits`, `test_epub_narration`), 3670 passed.
+- `uvx ruff@0.17.3 check tests scripts` passes.
+- `test_mcp_e2e`, `test_mcp_quick_transcription` and `test_delivery_publication` run their non-symlink checks before the first symlink; the retention test's escaping-link case is its own test (`test_retention_never_follows_a_link_to_an_old_external_file`).
+- Not run: Linux (no WSL distribution here) and any symlink test with the symlink privilege.
+
+Rejected:
+- `symlink_or_skip` raises pytest's skip, which errors under `python -m unittest` — rejected after trying the fix: `unittest.SkipTest` is an `Exception`, so an `except Exception` around a call site would swallow or convert it, while pytest's skip is a `BaseException`. No unittest-runner task (`test-dubbing`, `test-web-foundation`, `runtime-ci`) runs a module that uses the helper. The helper's docstring now says this.
+- `symlink_or_skip` in the nt-skipped security log test can never skip — false: on POSIX it is exactly `symlink_to`; no wrong behaviour.
+- The skip reasons name a fork-only backlog ticket — rejected: the frozen Boundaries require that name. Matters only if this commit goes upstream.
+- The two security log skips contradict each other — false: deliberate; one asserts the POSIX `0o600` mode, the other needs only a working sink.
+- No Windows ACL check replaces the POSIX mode assertion — rejected: would need product code, which the frozen Boundaries forbid.
+- Other `S_IMODE` checks are unguarded — false: `test_project_copy_files` and `test_audit_contention` pass on Windows.
+- The credential reference depends on the cwd anchor — false: a UNC anchor still yields an absolute path, and the secret read is mocked.
+- `no_network` can be bypassed through `from socket import socketpair` — false: a pre-bound `socketpair` is denied and fails loudly.
+- The `no_network` allowance is not limited to loopback — false: the window covers only `socketpair`'s own listener connect.
+- 3 G3 tests still fail — rejected: the frozen Decisions give G3 to story 10.
+- manager-serial, mcp-serial, web-06 and web-10 were not run — false: no changed file is in those lanes.
+- The security log is skipped, not fixed — rejected: the frozen intent says skip and name the backlog bug.
+- Directory cases could use junctions — rejected: that probes product junction handling, outside the frozen approach.
+- `raw = None` bypasses the Windows timeout code — false: `test_kobold_qwen_stream_lifetime.py:676-744` covers it directly.
+- `sys._base_executable` may be missing — false: CPython 3.11 always defines it.
+- Nothing points new tests at the helpers — low, rejected: every symlink site now uses `symlink_or_skip`, so neighbouring tests show the pattern.
