@@ -3,7 +3,7 @@ title: 'Test lanes run on Windows without hand settings'
 type: chore
 ticket: '6'
 created: '2026-11-09'
-status: built
+status: done
 baseline_revision: '0a07679dcd57f9e324e9c7d854fd9d1c63b0c88f'
 route: full
 route_source: auto
@@ -22,18 +22,19 @@ context:
 
 **Problem:** On Windows without long paths, pytest's default temp root (`%TEMP%\pytest-of-<user>\pytest-N`, about 57 characters) pushes test paths past 260 characters, so about 25 tests fail with a misleading `FileNotFoundError` unless `PYTEST_ADDOPTS=--basetemp=<short path>` is set by hand.
 
-**Approach:** On Windows, when no `--basetemp` was given, `tests/conftest.py` gives the run its own short, unique temp root under a dedicated folder at the temp drive's root (`C:\pt\<8 random chars>`). Other platforms and an explicit `--basetemp` are untouched.
+**Approach:** On Windows, when no `--basetemp` (or `PYTEST_DEBUG_TEMPROOT`) was given, `tests/conftest.py` gives the run its own short, unique temp root under a dedicated folder on the temp drive, `C:\tmp\pt\<4 random chars>`, restricted to the current user. Other platforms and an explicit `--basetemp` are untouched.
 
 **Verify (from the ticket):** Every lane in `python scripts/test_lanes.py`, run from the owner's checkout with no `PYTEST_ADDOPTS`, reports no path-length errors.
 
 **Decisions:**
 
 - Owner, 2026-11-09: implement without a separate approval if the spec has no open questions. Nothing goes to `deferred-work.md`.
-- The root sits at the drive root because nothing shorter exists without a system change: the W1 tests fail at a 38-character root and pass at 5 (limit about 26), and `%TEMP%` alone is 33. Long paths and `subst` are system settings, which the epic rules out.
+- The root sits near the drive root because nothing shorter exists without a system change: the W1 tests fail at a 38-character root and pass at 5 (limit about 26), and `%TEMP%` alone is 33. Long paths and `subst` are system settings, which the epic rules out.
+- Owner, 2026-11-09 (code review, renegotiating this section): nothing goes directly under `C:\`; the root is `C:\tmp\pt` instead of `C:\pt`. Finished runs are kept by count (`tmp_path_retention_count`, 3) rather than for 24 hours, which had kept 27 GB in a day. A held lock file protects every running session.
 
 ## Boundaries & Constraints
 
-**Always:** Respect an explicit `--basetemp`, from the command line or `PYTEST_ADDOPTS`. Give each run its own directory, so concurrent lanes never share or delete one another's. Prune only inside a root this code created and marked. If the short root can't be used, fall back to pytest's default with a config-time warning. No fork-only content.
+**Always:** Respect an explicit `--basetemp`, from the command line or `PYTEST_ADDOPTS`. Give each run its own directory, so concurrent lanes never share or delete one another's. Prune only inside a root this code created and marked, and never a run whose session is still running. If the short root can't be used, fall back to pytest's default with a config-time warning. No fork-only content.
 
 **Never:** No effect on Linux or macOS. No change to the lane command, time limits or CI workflows. No system setting. No private `_pytest` API. No new dependency. No marks or skips on path-length tests. No staging or committing.
 
@@ -41,12 +42,12 @@ context:
 
 | Scenario | Input / State | Expected Output / Behavior | Error Handling |
 |----------|--------------|---------------------------|----------------|
-| Windows, no basetemp | `win32`, `option.basetemp is None` | `basetemp` = new empty `<drive>:\pt\<random>`; root holds a marker file | No error expected |
-| Explicit basetemp | `--basetemp` given, or an xdist worker | Unchanged | No error expected |
+| Windows, no basetemp | `win32`, `option.basetemp is None` | `basetemp` = new `<drive>:\tmp\pt\<random>` (pytest creates it), its lock held; root marked and restricted to the user | No error expected |
+| Explicit basetemp | `--basetemp` or `PYTEST_DEBUG_TEMPROOT` given, or an xdist worker | Unchanged | No error expected |
 | Other platform | not `win32` | Unchanged | No error expected |
-| Stale runs | Marked root, subdirs untouched over 24 hours | Those removed; newer kept | Removal errors ignored |
-| Foreign folder | `<drive>:\pt` exists unmarked | Left alone; pytest default | Config-time warning |
-| Root not creatable | `mkdir` raises `OSError` | pytest default | Config-time warning |
+| Finished runs | Marked root, runs whose lock is released | All but the newest `tmp_path_retention_count` removed; running ones never | Removal errors ignored |
+| Foreign folder | `<drive>:\tmp\pt` exists unmarked and not empty | Left alone; pytest default | Config-time warning naming the remedy |
+| Root not usable | `mkdir`, the restriction or the lock fails, or temp is on a network share | pytest default | Config-time warning |
 
 </frozen-after-approval>
 
@@ -85,6 +86,8 @@ context:
 
 ## Plan Change Log
 
+- 2026-11-09, code review: the owner moved the root to `C:\tmp\pt` and chose count-based retention (Decisions above). Run names shrank to 4 characters so `C:\tmp\pt\abcd` stays 14 characters. Runs hold a lock file; the root is restricted with `icacls`; `PYTEST_DEBUG_TEMPROOT` is respected.
+
 ## Review Triage Log
 
 Pass 1, quick lens: 0 high, 1 medium, 4 low, 1 false, 0 maybe-false. Nothing deferred.
@@ -101,7 +104,7 @@ Pass 1, quick lens: 0 high, 1 medium, 4 low, 1 false, 0 maybe-false. Nothing def
 
 ## Design Notes
 
-`C:\pt\k3j9x0a1` is 14 characters, 25 with xdist's `\popen-gw10`, under the limit of about 26. `mkdtemp` is race-free, so no lock. Pruning by age replaces pytest's "keep 3", which needs private API; a day far outlasts any lane.
+`C:\tmp\pt\abcd` is 14 characters, 25 with xdist's `\popen-gw10`, under the limit of about 26. The lock file is created first with `O_EXCL`, so names never collide, and pytest creates the folder on first use. Windows refuses to delete a file another process holds open, so failing to delete a lock means its session is running. Python's handles aren't inherited by child processes, so a leftover server can't keep a run alive. Retention reads the public `tmp_path_retention_count` ini, so no private API.
 
 ## Verification
 
@@ -114,4 +117,37 @@ Pass 1, quick lens: 0 high, 1 medium, 4 low, 1 false, 0 maybe-false. Nothing def
 - `<uv env> python scripts/test_lanes.py run <lane> --junitxml <path>` for every lane -- expected: no path-length failure; others already classified.
 
 **Manual checks:**
-- `C:\pt` holds the marker and one directory per run; no lane output shows a `pytest-of-` path.
+- `C:\tmp\pt` holds the marker, at most the newest 3 finished runs plus running ones, and grants only the current user (`icacls`); no lane output shows a `pytest-of-` path.
+
+## Code Review
+
+### 2026-11-09
+
+Code review (full diff `0a07679d..0ce71320`, four lenses, none failed): 2 `decision-needed` (both resolved by the owner), 12 `patch` plus 1 found while verifying, 0 `defer`, 5 rejected.
+
+- [x] [Review][Decision] Run folders pile up (27 GB, 38 runs in `C:\pt` after one day) — `--basetemp` bypasses pytest's keep-3 retention, and the 24-hour prune keeps every run from the day. The 24-hour rule is in the frozen I/O matrix. Options: (1) keep the newest `tmp_path_retention_count` finished runs (3 by default), with running ones protected by their lock; (2) keep 24 hours, and also remove a run's folder at session end when every test passed; (3) keep 24 hours as is. Recommended: 1 — it is the retention the lanes had before, honours the ini setting, and bounds disk to a few runs. **Resolved by the owner: option 1**, and the root moves to `C:\tmp\pt` (nothing directly under `C:\`); the 11 hand-made folders and `C:\pt` were deleted with the owner's go-ahead.
+- [x] [Review][Decision] Contributors aren't told about `<drive>:\pt` — nothing points someone who finds the folder to its source. Options: (1) one bullet in `AGENTS.md` "Running and verifying", with the backup copy refreshed; (2) no `AGENTS.md` change, relying on docstrings, the fallback warning and the memory note. Recommended: 1 — `AGENTS.md` is where someone looks. **Resolved by the owner: option 1**, describing `C:\tmp\pt`.
+- [x] [Review][Patch] Restrict the root to the current user; it inherits `C:\`'s "Authenticated Users: Modify" [tests/windows_temp_root.py:212]
+- [x] [Review][Patch] Hold a lock file for each run so pruning never deletes a live run; create the lock first and let pytest create the folder [tests/windows_temp_root.py:229]
+- [x] [Review][Patch] Re-check the marker after listing, so a lane racing the root's creation doesn't call it foreign [tests/windows_temp_root.py:218]
+- [x] [Review][Patch] Test that the hook forwards an explicit `--basetemp` through the real `make_run_dir` [tests/test_windows_temp_root.py:153]
+- [x] [Review][Patch] Windows-only test that a real session's `tmp_path` lands under the short root [tests/test_windows_temp_root.py]
+- [x] [Review][Patch] Respect `PYTEST_DEBUG_TEMPROOT` [tests/windows_temp_root.py:247]
+- [x] [Review][Patch] Refuse a UNC temp directory [tests/windows_temp_root.py:205]
+- [x] [Review][Patch] Turn a `gettempdir()` `OSError` into the fallback [tests/windows_temp_root.py:249]
+- [x] [Review][Patch] Docstring claims a long-path condition the code doesn't test [tests/windows_temp_root.py:1]
+- [x] [Review][Patch] Fallback warning names a remedy [tests/windows_temp_root.py:221]
+- [x] [Review][Patch] Test gaps: stray file makes a root foreign, files and marker survive pruning, `mkdtemp` failure, `patch.object`, setUp comment [tests/test_windows_temp_root.py]
+- [x] [Review][Patch] No empty run folder for `--help` or `--collect-only` (covered by the lock patch) [tests/windows_temp_root.py:252]
+
+- [x] [Review][Patch] Found while verifying: pruning left a finished run half-deleted, because `rmtree(ignore_errors=True)` can't remove read-only files on Windows (git objects from a test repo). `remove_tree` now clears the read-only bit and retries, as pytest does [tests/windows_temp_root.py]
+- [x] [Review][Patch] Owner's request during review: `tests/test_voice_collection_workspace.py` and `tests/test_voice_workspace_ownership.py` hardcoded `/tmp/...` (`C:\tmp\pandrator-voice-*-worker` on Windows); both fixtures now use `tmp_path`. Both files pass (30 tests) and the empty leftover folders were removed [tests/test_voice_collection_workspace.py:48, tests/test_voice_workspace_ownership.py:94]
+
+Verification after the patches (uv env from `AGENTS.md`, SQLAlchemy 2.0.52, no pixi, `PYTEST_ADDOPTS` unset): `ruff check tests scripts` and `ruff format --check` on the three files pass; `test_lanes.py check` passes; `tests/test_windows_temp_root.py` and `tests/test_test_lanes.py` give 43 passed on Windows, including the Windows-only lock, ACL and session-basetemp tests. `fast-xdist` ran beside the other lanes, and `web-07-serial`, `web-17-serial` and `web-21-serial` then ran together. Each failed exactly the tests it failed in the build's run (10, 32, 6 and 6), with no `pytest-of-` path and no fallback warning; `fast-xdist` had 17 more passes from the new tests. `C:\tmp\pt` grants only the owner's account. Each start pruned it to the newest three finished runs plus running ones, and it held 2.0 GB afterwards. A second process can't delete a held lock, and can once it is closed. Not covered: Linux CI (gated by `sys.platform`), the other 24 lanes after these patches, and the UNC and `icacls` failure paths, which only fake-driven tests reach.
+
+Rejected:
+- tempfile-based tests may still overflow — false: the Verify run over all 28 lanes found no path-length failure.
+- Fallback reverts to the long root — false: the frozen intent requires that fallback.
+- Fix lives in conftest, not the lane runner — false: the approved approach.
+- Persistent root and pruning are outside the intent — false: the frozen approach and matrix specify both.
+- Leak-guard's copied conftest relies on `PYTHONPATH` — low: passes today, and a self-contained copy adds machinery for a case nobody meets.

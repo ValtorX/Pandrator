@@ -56,6 +56,7 @@ uv run --python 3.11 --no-project --with-editable ".[dev]" --with-editable "./pa
 - A dependency change also needs `pixi.lock` updated, which uv cannot do; say so if pixi is unavailable.
 - uv does not supply FFmpeg and pixi does. Many tests skip rather than fail without `ffmpeg` on PATH, so a green run there proves less.
 - `python scripts/test_lanes.py list` shows every lane and `run <lane>` runs one; `fast-xdist` cannot be combined with serial lanes. Look up a test's lane there: file names do not predict it, and `test_frontend_architecture.py` is not in the fast lane.
+- On Windows, `tests/conftest.py` gives every pytest run without `--basetemp` or `PYTEST_DEBUG_TEMPROOT` a short temp folder, `<temp drive>:\tmp\pt\<4 chars>`, because pytest's default under `%TEMP%` pushes test paths past 260 characters. The root is restricted to your account, and only the newest `tmp_path_retention_count` (3) finished runs are kept. Don't hand-set `--basetemp`; if you must, use forward slashes in `PYTEST_ADDOPTS`, which strips backslashes.
 - Web checks need `npm ci --prefix web` first: `npm --prefix web run quality`, `run test:unit`, `run test:e2e`.
 - `test:e2e` needs Playwright browsers and a `python` with the project installed. Locally it reuses any server already on port 8098, so stop stale servers first.
 
