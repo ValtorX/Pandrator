@@ -19,6 +19,11 @@ jobs:
           - web-07-serial
           - web-17-serial
           - web-18-serial
+          - web-19-serial
+          - web-20-serial
+          - web-21-serial
+          - web-22-serial
+          - web-23-serial
 
     steps:
       - uses: actions/checkout@v4

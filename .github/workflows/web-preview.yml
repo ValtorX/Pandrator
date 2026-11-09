@@ -166,6 +166,36 @@ jobs:
           - name: windows-web-18
             os: windows-latest
             lanes: web-18-serial
+          - name: ubuntu-web-19
+            os: ubuntu-latest
+            lanes: web-19-serial
+          - name: ubuntu-web-20
+            os: ubuntu-latest
+            lanes: web-20-serial
+          - name: ubuntu-web-21
+            os: ubuntu-latest
+            lanes: web-21-serial
+          - name: ubuntu-web-22
+            os: ubuntu-latest
+            lanes: web-22-serial
+          - name: ubuntu-web-23
+            os: ubuntu-latest
+            lanes: web-23-serial
+          - name: windows-web-19
+            os: windows-latest
+            lanes: web-19-serial
+          - name: windows-web-20
+            os: windows-latest
+            lanes: web-20-serial
+          - name: windows-web-21
+            os: windows-latest
+            lanes: web-21-serial
+          - name: windows-web-22
+            os: windows-latest
+            lanes: web-22-serial
+          - name: windows-web-23
+            os: windows-latest
+            lanes: web-23-serial
 
     steps:
       - uses: actions/checkout@v4

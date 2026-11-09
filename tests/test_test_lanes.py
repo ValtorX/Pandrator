@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import re
 import tempfile
 import tomllib
 import unittest
@@ -86,6 +87,98 @@ class TestLaneManifestTests(unittest.TestCase):
         self.assertIn(
             "--durations=30 --durations-min=0.5",
             tasks["test-profile"]["cmd"],
+        )
+
+
+def _matrix_lanes_by_os(workflow_text: str) -> dict[str, list[str]]:
+    """Read the python-lanes matrix of web-preview.yml without a YAML parser."""
+    _, found, job = workflow_text.partition("\n  python-lanes:\n")
+    if not found:
+        raise AssertionError("web-preview.yml has no python-lanes job")
+    _, found, after = job.partition("\n        include:\n")
+    if not found:
+        raise AssertionError("web-preview.yml has no python-lanes matrix")
+    kept: list[str] = []
+    for line in after.splitlines():
+        if line.strip() and not line.startswith(" " * 10):
+            break
+        if not line.lstrip().startswith("#"):
+            kept.append(line)
+    by_os: dict[str, list[str]] = {}
+    for entry in re.split(r"^ {10}- ", "\n".join(kept), flags=re.M)[1:]:
+        os_match = re.search(r"^\s*os: (\S+)\s*$", entry, re.M)
+        lanes_match = re.search(
+            r"^\s*lanes: (?:>-?\s*)?(.*?)(?=^\s*\w+:|\Z)", entry, re.M | re.S
+        )
+        if os_match is None or lanes_match is None:
+            raise AssertionError(f"matrix entry lacks os or lanes: {entry!r}")
+        by_os.setdefault(os_match.group(1), []).extend(lanes_match.group(1).split())
+    return by_os
+
+
+def _matrix_problems(by_os: dict[str, list[str]], manifest_lanes: set[str]) -> list[str]:
+    problems: list[str] = []
+    for os_name in sorted({"ubuntu-latest", "windows-latest", *by_os}):
+        lanes = by_os.get(os_name, [])
+        for lane in sorted(manifest_lanes - set(lanes)):
+            problems.append(f"{os_name}: lane {lane} is missing from the matrix")
+        for lane in sorted(set(lanes) - manifest_lanes):
+            problems.append(f"{os_name}: matrix names unknown lane {lane}")
+        for lane in sorted({name for name in lanes if lanes.count(name) > 1}):
+            problems.append(f"{os_name}: lane {lane} is listed twice")
+    return problems
+
+
+class TestLaneMatrixTests(unittest.TestCase):
+    def test_ci_matrix_runs_every_manifest_lane_on_both_operating_systems(self):
+        workflow = test_lanes.REPO_ROOT / ".github" / "workflows" / "web-preview.yml"
+        by_os = _matrix_lanes_by_os(workflow.read_text(encoding="utf-8"))
+        self.assertEqual([], _matrix_problems(by_os, set(test_lanes.TEST_LANES)))
+
+    def test_matrix_check_names_a_missing_lane_and_an_unknown_lane(self):
+        manifest_lanes = {"fast-xdist", "web-01-serial", "web-02-serial"}
+        by_os = {
+            "ubuntu-latest": ["fast-xdist", "web-01-serial", "web-02-serial"],
+            "windows-latest": ["fast-xdist", "web-01-serial", "web-99-serial"],
+            "macos-latest": ["fast-xdist", "web-01-serial", "web-02-serial", "web-98-serial"],
+        }
+        self.assertEqual(
+            [
+                "macos-latest: matrix names unknown lane web-98-serial",
+                "windows-latest: lane web-02-serial is missing from the matrix",
+                "windows-latest: matrix names unknown lane web-99-serial",
+            ],
+            _matrix_problems(by_os, manifest_lanes),
+        )
+
+    def test_folded_lane_lists_count_every_lane(self):
+        text = (
+            "jobs:\n"
+            "  python-lanes:\n"
+            "    strategy:\n"
+            "      matrix:\n"
+            "        include:\n"
+            "          - name: ubuntu-services\n"
+            "            os: ubuntu-latest\n"
+            "            lanes: >-\n"
+            "              installer-serial manager-serial mcp-serial\n"
+            "              system-media-serial\n"
+            "        exclude:\n"
+            "          - name: ignored\n"
+            "            os: ubuntu-latest\n"
+            "            lanes: not-counted\n"
+            "    steps:\n"
+        )
+        self.assertEqual(
+            {
+                "ubuntu-latest": [
+                    "installer-serial",
+                    "manager-serial",
+                    "mcp-serial",
+                    "system-media-serial",
+                ]
+            },
+            _matrix_lanes_by_os(text),
         )
 
 

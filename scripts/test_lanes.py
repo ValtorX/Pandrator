@@ -571,6 +571,7 @@ TEST_LANES: dict[str, tuple[str, ...]] = {
         "tests/test_speech_plan_audio_reuse.py",
         "tests/test_generation_provider_preflight.py",
     ),
+    # web-07 and web-19 to web-23 were one lane that outran the CI job time limit; split into contiguous runs.
     "web-07-serial": (
         "tests/test_passage_markers.py",
         "tests/test_source_passage_sentence_policy.py",
@@ -618,6 +619,8 @@ TEST_LANES: dict[str, tuple[str, ...]] = {
         "tests/test_project_copy_evidence.py",
         "tests/test_project_copy_media_flow.py",
         "tests/test_project_copy_media.py",
+    ),
+    "web-19-serial": (
         "tests/test_provider_workspace_access.py",
         "tests/test_settings_workspace_access.py",
         "tests/test_speech_catalogue_workspace_access.py",
@@ -645,6 +648,8 @@ TEST_LANES: dict[str, tuple[str, ...]] = {
         "tests/test_generation_run_speech_preparation.py",
         "tests/test_generation_audible_speech_preparation.py",
         "tests/test_generation_cast_source_compatibility.py",
+    ),
+    "web-20-serial": (
         "tests/test_cast_source_boundaries.py",
         "tests/test_project_cast_retention.py",
         "tests/test_cast_snapshot_retention.py",
@@ -685,6 +690,8 @@ TEST_LANES: dict[str, tuple[str, ...]] = {
             "tests/test_source_cleaning_workspace_access.py",
             "tests/test_source_cleaning_workspace_http.py",
             "tests/test_source_processing_children.py",
+    ),
+    "web-21-serial": (
             "tests/test_source_processing_children_http.py",
             "tests/test_agent_run_workspace_access.py",
             "tests/test_agent_run_workspace_http.py",
@@ -739,6 +746,8 @@ TEST_LANES: dict[str, tuple[str, ...]] = {
         "tests/test_project_bundle_workspace_http.py",
         "tests/test_project_operation_speech_preparation.py",
         "tests/test_protected_workflow_routes.py",
+    ),
+    "web-22-serial": (
         "tests/test_workspace_routes.py",
         "tests/test_mcp_workspaces.py",
         "tests/test_workspace_content_policy.py",
@@ -782,6 +791,8 @@ TEST_LANES: dict[str, tuple[str, ...]] = {
         "tests/test_workspace_project_creation.py",
         "tests/test_sound_workspace_projects.py",
         "tests/test_project_sound_workspace_access.py",
+    ),
+    "web-23-serial": (
         "tests/test_voice_workspace_ownership.py",
         "tests/test_voice_workspace_library.py",
         "tests/test_voice_workspace_execution.py",
