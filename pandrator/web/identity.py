@@ -6,9 +6,9 @@ import os
 import uuid
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-from pandrator.version import PANDRATOR_VERSION
+from pandrator.version import PANDRATOR_PUBLIC_VERSION, PANDRATOR_VERSION
 
 from .database import Database
 from .models import AppSetting
@@ -59,7 +59,10 @@ class ApplicationIdentityDocument(BaseModel):
     schema_version: str = IDENTITY_SCHEMA_VERSION
     service: str = "pandrator"
     instance_id: str
-    application_version: str = PANDRATOR_VERSION
+    application_version: str = Field(
+        default=PANDRATOR_VERSION,
+        json_schema_extra={"default": PANDRATOR_PUBLIC_VERSION},
+    )
     api_version: str = API_VERSION
     protocol_version: str = API_VERSION
     canonical_origin: str

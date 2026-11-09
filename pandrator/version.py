@@ -36,4 +36,11 @@ def resolve_application_version() -> str:
         return "0+unknown"
 
 
+def public_version(version: str) -> str:
+    """Drop the PEP 440 local segment, so a local build keeps the public API contract."""
+
+    return version.partition("+")[0]
+
+
 PANDRATOR_VERSION = resolve_application_version()
+PANDRATOR_PUBLIC_VERSION = public_version(PANDRATOR_VERSION)

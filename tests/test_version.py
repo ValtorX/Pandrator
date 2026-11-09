@@ -1,10 +1,17 @@
+import json
 import tomllib
 import unittest
 from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 from unittest.mock import patch
 
-from pandrator.version import PANDRATOR_VERSION, resolve_application_version
+from pandrator.version import (
+    PANDRATOR_PUBLIC_VERSION,
+    PANDRATOR_VERSION,
+    public_version,
+    resolve_application_version,
+)
+from pandrator.web.identity import ApplicationIdentityDocument
 
 
 class ApplicationVersionTests(unittest.TestCase):
@@ -33,6 +40,35 @@ class ApplicationVersionTests(unittest.TestCase):
         self, _source, _distribution
     ):
         self.assertEqual("0+unknown", resolve_application_version())
+
+    def test_public_version_drops_only_the_local_segment(self):
+        self.assertEqual("0.14.2", public_version("0.14.2+fork.1"))
+        self.assertEqual("0.14.2", public_version("0.14.2"))
+        self.assertEqual("1.0rc1", public_version("1.0rc1+fork.2"))
+
+    def test_identity_reports_the_full_version(self):
+        document = ApplicationIdentityDocument(
+            instance_id="instance",
+            canonical_origin="http://localhost",
+            managed=False,
+        )
+
+        self.assertEqual(PANDRATOR_VERSION, document.application_version)
+
+    def test_api_contract_carries_only_the_public_version(self):
+        schema = ApplicationIdentityDocument.model_json_schema()
+        self.assertEqual(
+            PANDRATOR_PUBLIC_VERSION,
+            schema["properties"]["application_version"]["default"],
+        )
+
+        root = Path(__file__).resolve().parents[1]
+        contract = json.loads((root / "openapi.json").read_text(encoding="utf-8"))
+        identity = contract["components"]["schemas"]["ApplicationIdentityDocument"]
+        self.assertEqual(
+            PANDRATOR_PUBLIC_VERSION,
+            identity["properties"]["application_version"]["default"],
+        )
 
 
 if __name__ == "__main__":
