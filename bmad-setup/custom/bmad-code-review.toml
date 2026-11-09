@@ -1,0 +1,7 @@
+# Owner rules for this fork (2026-11-09). Sparse override: only these facts.
+[workflow]
+
+persistent_facts = [
+  "Owner rule: never write to deferred-work.md. Handle every finding and split-off goal inside the current story by default. Only when a planned story already owns the work, name that story in the plan's triage log instead (for example: 'stays with story 10, which owns G3'). When no story owns it, raise it to the owner as a decision; in a non-interactive run, report it in the final status as needing the owner's decision. This replaces every 'defer' route in this workflow.",
+  "Owner rule on subagent models: subagents other than review lenses may use Sonnet 5.5 or Haiku 5.5 with a reasoning effort that fits the task. Those are implementation handoffs, codebase exploration, test or check runs, and mechanical fixes. Review subagents stay at the session's model capability, as this workflow's steps require.",
+]
