@@ -55,3 +55,30 @@ Quick review: 5 findings, all real and all patched in the `AGENTS.md` pitfall, w
 - `git ls-files --eol web pandrator/web/static pandrator_manager/recovery_ui/static/model-groups.js | grep -c w/crlf` -- expected: 0
 - `<uv env> python -m pytest -q tests/test_frontend_architecture.py -k lf` -- expected: the LF guard passes
 - `cmp AGENTS.md _bmad-output/backup/repo-instructions.backup.txt` -- expected: identical
+
+## Code Review
+
+### 2026-11-09
+
+**Code review complete.** 0 `decision-needed`, 2 `patch`, 0 `defer`, 6 rejected. Range: `93c0e68e..7e96cf5b`, which is `3b4484ce`. Lenses: blind hunter, edge case hunter, verification gap and intent alignment; none failed.
+
+- [x] [Review][Patch] The LF guard matches rule text, not the attributes Git resolves. An override, a nested `.gitattributes` or a moved file passes it, and a cosmetic edit fails it. [tests/test_frontend_architecture.py:42]
+- [x] [Review][Patch] Nothing reports a checkout that still holds CRLF copies. `check:assets` advises "rebuild and commit" on one and passes after a CRLF rebuild. [web/scripts/check-static-assets.mjs:10]
+
+Rejected:
+- false: the diff lacks the story's own work. This story verifies that diff; its outputs are the run records here and the AGENTS.md pitfall.
+- false: `language_registry.json` sits outside the rules. It isn't a hash input, Vite re-emits the parsed JSON, and its CRLF copy built byte-identically.
+- low: `_app/immutable/**` is now normalised as text. No tracked bundle contains a CR, and nothing reads the hash in the file names byte for byte. A fix needs a new rule and a guard for it.
+- false: binaries rely on the `text=auto` heuristic. png, webp, woff2, jpg and ico all carry NUL bytes in their headers, and all 8 tracked binaries resolve as binary.
+- low: rule coverage isn't tied to the hash input list. All inputs are under `web/` today, and tying them needs an edit to `svelte.config.js`, itself a hash input, which forces a full rebuild.
+- false: the recovery UI siblings are CRLF. Nothing compares them byte for byte; `launcher.py:155-160` only checks that they exist.
+
+Patches applied 2026-11-09, uncommitted on `epic-fork-releases`:
+- `tests/test_frontend_architecture.py`: the guard reads each tracked file's resolved attributes from `git ls-files --eol` under the three paths. It fails when a file has neither `eol=lf` nor `-text`, or when a path matches no tracked file. A later `*.svelte eol=crlf` fails it; a nested `*.png binary` passes, because `-text` keeps the LF index bytes.
+- `web/scripts/check-static-assets.mjs`: it fails first when any tracked file under the three paths is `w/crlf`, and prints the refresh steps instead of "rebuild and commit". It skips this when git or a work tree is missing. `web/scripts/` is not a version-hash input, so the assets need no rebuild.
+- `AGENTS.md` (pitfall, and the `check:assets` note under Generated files) and its backup, changed to match.
+
+Verified on Windows with Node 24.22.2 and the uv environment:
+- The guard passes as is and fails with the override, and all 11 tests in the file pass.
+- `check:assets` passes on this checkout and fails on a CRLF copy of `web/src/app.html`; that file was restored afterwards. It passes with `GIT_DIR` pointing nowhere.
+- `quality` and ruff pass.
