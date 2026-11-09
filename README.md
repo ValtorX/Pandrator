@@ -34,6 +34,10 @@ cp -r _bmad-output/bmad-setup/custom/. _bmad/custom/
 `bmad-setup/` holds copies of `skills-lock.json`, `_bmad/config.toml` and `_bmad/custom/`. The
 installed skills and scripts are not kept here because the install recreates them.
 
+`_bmad/custom/config.user.toml` records the active initiative. BMad ignores `*.user.toml` by
+default, so this fork empties `_bmad/custom/.gitignore` to keep that file here. Refresh the copy
+when the active initiative changes.
+
 The install takes the current BMad, not necessarily the one recorded here. Compare the new
 `skills-lock.json` with `bmad-setup/skills-lock.json` to see which skills differ; the lock file
 detects a difference but cannot restore an older version. Last recorded version: `6.13.0-next`.
