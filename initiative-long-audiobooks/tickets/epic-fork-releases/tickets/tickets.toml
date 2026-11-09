@@ -21,10 +21,33 @@ covers = ["R2", "R3"]
 after = [1]
 hitl = true # the owner stops the app and runs the activation and the real book
 risk = "high"
-notes = ["The Manager's Update or Repair re-clones upstream, so the owner must not use them on the app; the script's output should say so.", "Keep the patched slot until the real run passes, and back up current.json before activating."]
+notes = ["The Manager's Update or Repair re-clones upstream, so the owner must not use them on the app; the script's output should say so.", "Keep the patched slot until the real run passes, and back up current.json before activating.", "Before the real run, read the install's saved defaults.tts, changing nothing. If it holds preview routing keys, the job can fail with \"Retained speech binding disagrees with selected settings\", so build backlog bug-saved-preview-settings-fail-generation first."]
 
 [[entry]]
 id = 3
+type = "story"
+title = "One leaking test and missing fixtures stop hiding CI's real result"
+description = "Stops the test in test_web_security.py leaving an execution actor behind, which fails about 150 later tests in web-17, adds a check that fails any test leaving an actor set, and gives the 35 tests listed in the findings the existing host_execution_actor fixture. Delivers the part of R8 that clears the false failures, so the failures left are real ones. A good first upstream PR."
+verify = "On Windows, the 35 listed tests pass, web-17-serial fails only the 6 tests assigned elsewhere (test_audio_cpp_preset_catalogue_wiring, test_sound_composition, 3 in test_sound_export_integration and the test_sound_mix symlink test), and a test written to leak an actor fails the new check."
+covers = ["R8"]
+after = []
+hitl = false
+risk = "low"
+notes = ["Don't use an autouse actor: two test_web_workflow_handlers tests fail under one, by design of the product."]
+
+[[entry]]
+id = 4
+type = "story"
+title = "Every test lane finishes on CI"
+description = "Splits web-07-serial, which hits its job time limit about a quarter of the way through, into lanes that finish on both operating systems, so the lease fix's tests get a CI result. Records in the findings each failure this reveals, and assigns it to a story, or to a new one if it is more than a session's work. Delivers the part of R8 that shows the true total. Provides the CI results stories 9 and 10 check against, and is worth offering upstream."
+verify = "On a fork CI run, every lane finishes within its time limit on Ubuntu and Windows, the lease fix's tests report a result, and python scripts/test_lanes.py check passes."
+covers = ["R8"]
+after = []
+hitl = true # a CI run needs a push to main or a codex/webui branch, which the owner approves
+risk = "medium"
+
+[[entry]]
+id = 5
 type = "story"
 title = "Browser checks and builds match CI from a Windows checkout"
 description = "Verifies and lands the LF rules from commit 3b4484ce on keep-browser-build-lf, then has the owner's checkout pick them up on Node 24, so web quality passes and the build leaves the tree clean."
@@ -35,57 +58,82 @@ hitl = true # the owner installs Node 24 and refreshes their checkout's line end
 risk = "medium"
 
 [[entry]]
-id = 4
-type = "story"
-title = "Test lanes run on Windows without hand settings"
-description = "Stops default pytest temp paths exceeding the Windows path limit, so the lanes run as written, with no effect on other platforms."
-verify = "python scripts/test_lanes.py run fast-xdist from the owner's checkout, with no PYTEST_ADDOPTS, reports no path-length errors."
-covers = ["R6"]
-after = []
-hitl = false
-risk = "low"
-
-[[entry]]
-id = 5
-type = "story"
-title = "Windows-only test failures pass or skip with a reason"
-description = "Resolves the 12 tests listed in the findings: symlink and POSIX tests skip only where the behaviour can't exist, the sleep tests use a portable process, and the two Windows code-path tests get fixed, or filed as bugs if they show a product fault."
-verify = "The fast lane on Windows shows none of the 12 failing, each skip states its reason, and the same tests still run on Linux in CI."
-covers = ["R7"]
-after = [4]
-hitl = false
-risk = "medium"
-
-[[entry]]
 id = 6
 type = "story"
-title = "Tests failing on every platform are fixed or filed"
-description = "Works through the 10 tests listed in the findings: corrects each that is out of date, and files a backlog bug for each that shows the product is wrong, leaving it visibly marked."
-verify = "Those 10 tests pass, or each is marked with a linked backlog bug, and the findings' reasoning is recorded per test."
-covers = ["R8"]
+title = "Test lanes run on Windows without hand settings"
+description = "Stops default pytest temp paths exceeding the Windows path limit, so the lanes run as written, with no effect on other platforms. Waits on story 4 because both change how lanes are set up, and this check covers the lanes it creates."
+verify = "Every lane in python scripts/test_lanes.py, run from the owner's checkout with no PYTEST_ADDOPTS, reports no path-length errors."
+covers = ["R6"]
 after = [4]
 hitl = false
-risk = "medium"
-notes = ["Treat the generation and preview failures as possible real bugs until shown otherwise: they touch speech binding and cast routing."]
+risk = "low"
+notes = ["The chosen temp root has to be short: the triage measured soundtrack export failing below a 74-character data root and takes below a 102-character one, and a long temp root caused 10 false failures in test_generation_cast_runtime and test_project_speech_plan_copy."]
 
 [[entry]]
 id = 7
+type = "story"
+title = "Windows-only test failures pass or skip with a reason"
+description = "Resolves the 12 tests in findings-windows-and-install and the Windows failures in findings-ci-failures: the symlink tests in test_session_output_storage and test_sound_mix, test_security_event_log, test_web_media_edit, the sqlite URL group, and test_release_upgrade_preservation. Symlink and POSIX tests skip only where the behaviour can't exist, the sleep tests use a portable process, and fixtures get fixed where the fault is theirs. The dubbing prefetch test turned out not to be Windows-only and is fixed here with its missing mark."
+verify = "On Windows, none of these tests fail in any lane, each skip states its reason, and the same tests still run on Linux in CI."
+covers = ["R7"]
+after = [6]
+hitl = false
+risk = "medium"
+notes = ["test_security_event_log can skip on Windows only with its reason naming backlog bug-security-log-drops-events-on-windows, because the product gap stays open.", "Under SQLAlchemy 2.1.8 only, str(URL.create(...)) reaches configparser in test_project_speech_reference_store, test_voice_provider_job_effects, test_workspace_invitation_migration and test_installed_wheel_upgrade; run them on both version sets.", "The test_release_upgrade_preservation hash mismatch is read as a line-ending change to a fixture file. That is inferred; confirm it before fixing."]
+
+[[entry]]
+id = 8
+type = "story"
+title = "Tests that predate workspace ownership build valid data"
+description = "Corrects the 37 tests in clusters A1, A2 and E1 of the failure classification: fixtures with no workspace or project, tests building cross-session rows the database now forbids, and SQL budgets that predate the workspace access reads. Delivers this part of R8. Keeps the read-side check the cross-session tests give, by disabling the trigger inside the test, unless the defence they cover no longer exists."
+verify = "All 37 tests pass on Windows and on fork CI, each changed SQL budget's reason is recorded, and the 60-segment bounds in test_session_view_performance still pass."
+covers = ["R8"]
+after = [6]
+hitl = false
+risk = "medium"
+notes = ["Prove a raised SQL budget is fixed cost by measuring it at two segment counts before changing the number."]
+
+[[entry]]
+id = 9
+type = "story"
+title = "Project copy tests match current copy behaviour"
+description = "Corrects the 30 tests in clusters B1 to B9 of the failure classification, where the fixtures, literals and budgets lag the copy state version, destination model choices and the permissions now in force. Delivers this part of R8. B4 and B6 were only read in the triage, so each is run before it is changed."
+verify = "All 30 tests pass on Windows and on fork CI, including test_project_copy_flow, which holds the contract these tests lagged."
+covers = ["R8"]
+after = [4, 6]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 10
+type = "story"
+title = "The remaining out-of-date tests match the product"
+description = "Corrects the rest of the failures on every platform: clusters D1, D2, G1 to G5, H1, I1, K1, M1, N1 and O1 of the failure classification, plus test_web_api_shutdown, test_epub_narration and test_xtts_training_process. Delivers the last part of R8. Clusters marked as read in the triage get proved first, and any that shows a product fault becomes a backlog bug instead of a test edit."
+verify = "All these tests pass on Windows and on fork CI, or skip with a stated reason on Windows where only Linux can run them, and each read-only verdict's outcome is recorded."
+covers = ["R8"]
+after = [3, 4, 6, 7] # shares test files with stories 3 and 7, and checks against the CI results from story 4
+hitl = false
+risk = "medium"
+notes = ["test_web_api_shutdown and test_xtts_training_process can't run on Windows, so only CI can settle them.", "test_epub_narration stops at its own check that the fixture's navigation holds a page-list, before reaching the product. Find out whether the fixture or the EPUB library changed."]
+
+[[entry]]
+id = 11
 type = "story"
 title = "Upstream merges and fork releases have a rehearsed procedure"
 description = "Writes how upstream changes reach fork main, including rebuilding generated files, how a fork version and tag are cut, and how PR branches stay clean, then rehearses it on a scratch branch."
 verify = "Following the procedure on a scratch branch merges current upstream main with regenerated files passing their checks, and a scratch PR branch's diff against upstream main shows no fork-only change."
 covers = ["R4"]
-after = [2, 3] # the procedure writes down the tag and install steps, and rebuilds assets under the LF rules
+after = [2, 5] # the procedure writes down the tag and install steps, and rebuilds assets under the LF rules
 hitl = false
 risk = "medium"
 
 [[entry]]
-id = 8
+id = 12
 type = "story"
 title = "A fresh Windows clone follows a written setup to passing checks"
 description = "Writes the Windows setup, including Node 24, pixi or uv, and Playwright browsers, into AGENTS.md and its backup, retires pitfalls the earlier stories removed, records each remaining failure with its reason, and, with the owner's go-ahead, offers upstream as focused PRs the fixes useful there."
-verify = "A fresh clone in a new folder, following only the written setup, passes lint, types, the fast lane, web quality and the browser build, or shows only the failures listed as explained; a list shows each fix's upstream PR or why it wasn't offered."
+verify = "A fresh clone in a new folder, following only the written setup, passes lint, types, every test lane, web quality and the browser build, or shows only the failures listed as explained; a list shows each fix's upstream PR or why it wasn't offered."
 covers = ["R9"]
-after = [3, 4, 5, 6, 7]
+after = [3, 4, 5, 6, 7, 8, 9, 10, 11]
 hitl = true # the owner approves any tool installs, and test:e2e needs Playwright browsers
 risk = "low"

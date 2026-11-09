@@ -6,6 +6,8 @@ covers: [R20, R21]
 sources: []
 companions:
   - _bmad-output/initiative-long-audiobooks/tickets/epic-fork-releases/findings-windows-and-install.md
+  - _bmad-output/initiative-long-audiobooks/tickets/epic-fork-releases/findings-ci-failures.md
+  - _bmad-output/initiative-long-audiobooks/tickets/epic-fork-releases/findings-ci-failure-classification.md
 after: []
 refined: true
 risk: high
@@ -39,7 +41,7 @@ The owner runs a released build of the fork on the real book, on the stock 30-se
 - Changes to the owner's machine and install (Node, pixi, Playwright browsers, activating a build) are the owner's to run or authorize. No registry or system setting is changed by an agent.
 - Merging, committing, tagging and pushing need the owner's direct go-ahead, per `AGENTS.md`.
 - Fork-only files stay on `fork-files`. A change to `/AGENTS.md` also updates `_bmad-output/backup/repo-instructions.backup.txt`.
-- A `pandrator/web/static` build is committed only from an LF checkout until story 3 lands.
+- A `pandrator/web/static` build is committed only from an LF checkout until story 5 lands.
 - `web/package.json` keeps upstream's version, because `web/svelte.config.js:44` puts it in the build's name and changing it would force an asset rebuild.
 - Local paths and the book's title stay out of PRs and this public branch.
 
@@ -54,7 +56,7 @@ The owner runs a released build of the fork on the real book, on the stock 30-se
 
 ## Boundaries
 
-- Belongs to siblings: every product fix other than the lease fix.
+- Belongs to siblings or the backlog: every product fix other than the lease fix.
 - Out: a fork Manager, an installer or any distribution to other people. Those would need a fork release key and a signing pipeline, and get their own epic if wanted.
 - Out: publishing to PyPI, signing with upstream's release keys, and enabling Windows long paths system-wide.
 - Must not change: test protection on Linux; a skip applies only where the behaviour can't exist.
@@ -63,12 +65,19 @@ The owner runs a released build of the fork on the real book, on the stock 30-se
 
 - parent — `_bmad-output/initiative-long-audiobooks/initiative-long-audiobooks.md`, section Requirements
 - findings — `_bmad-output/initiative-long-audiobooks/tickets/epic-fork-releases/findings-windows-and-install.md`
+- findings — `_bmad-output/initiative-long-audiobooks/tickets/epic-fork-releases/findings-ci-failures.md`
+- findings — `_bmad-output/initiative-long-audiobooks/tickets/epic-fork-releases/findings-ci-failure-classification.md`
 
 ## Notes
 
 - Decision (2026-11-08): Stories 1 and 2 together are the tracer bullet, split because one session couldn't hold both: they take the lease fix through a tagged version, a hand activation and a real run. That is the riskiest path and the owner's first real gain. Story 1 changes no browser assets, so neither waits on the Windows work.
-- Decision (2026-11-08): Story 3 stands alone because story 1 leaves the browser assets untouched. Stories 5 and 6 wait on story 4 so they run under its temp path fix. Story 7 waits on stories 2 and 3 because it writes down their asset rebuild and install steps. Story 8 goes last because it documents the result.
+- Decision (2026-11-08): Story 5 stands alone because story 1 leaves the browser assets untouched. Stories 7 to 10 wait on story 6 so they run under its temp path fix. Story 11 waits on stories 2 and 5 because it writes down their asset rebuild and install steps. Story 12 goes last because it documents the result.
 - Decision (2026-11-08): Releases are for the owner's own install. The build is a tag on fork `main`, activated by a fork-only script on `fork-files` into a new version slot.
 - Decision (2026-11-08): Fork `main` is the release line, because it is the default branch and the CI triggers already cover it.
 - Decision (2026-11-08): No refactor sweep, because this epic changes setup, tests and procedures rather than product code.
+- Decision (2026-11-09): Re-sliced after the CI triage, which found about 300 failures where stories 7 and 10 had planned for 22. What R7 and R8 require is unchanged; only how they are delivered changed. Story 10 became three batches sized for one session each (stories 8, 9 and 10), and stories 3 and 4 come before the other test work, because they clear the false failures and let every lane finish.
+- Decision (2026-11-09): Story 4 waits on story 10 because both change how lanes are set up. Story 10 waits on stories 3 and 7 because it shares test files with them. Stories 9 and 10 wait on story 4 because their tests sit in `web-07` or need its CI results.
+- Decision (2026-11-09): Product faults the triage found are standalone bugs in `backlog/`, not in a sibling epic, because story 2 may need one fixed and the siblings wait on this epic. The Boundaries line changed to match. Each test showing such a fault stays failing or marked until its bug is fixed, and story 12 lists it as explained.
+- Decision (2026-11-09): Story 12's check covers every test lane rather than the fast lane, to match Done when.
+- Decision (2026-11-09): The owner renumbered stories from 2 up so ids match build order, before any of them started. This file uses the new numbers.
 - Assumption: The Manager accepts a hand-activated slot. Its code reads only the pointer file and slot markers, with `revision` optional, but this hasn't been run; story 2 finds out.
