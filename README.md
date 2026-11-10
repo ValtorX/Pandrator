@@ -48,3 +48,30 @@ Run Git from this folder or use `git -C _bmad-output`. Commits land on `fork-fil
 code branch checked out in the parent folder.
 
 `backup/repo-instructions.backup.txt` is a copy of the latest `AGENTS.md`.
+
+## Running a fork build
+
+`scripts/fork_slot.py` puts a fork tag into a new version slot of the owner's install and
+switches the install's pointer (`app/current.json`) to it. It uses only the standard library.
+`<workspace>` is the folder that contains `Pandrator/`; pass it with `--workspace` or set
+`PANDRATOR_WORKSPACE`. Close both the app and the Manager before `activate` or `back`: the script refuses to
+switch (and to rerun pixi in an existing slot) while any process runs from the install root,
+and the Manager does too.
+
+```bash
+S="uv run --no-project python _bmad-output/scripts/fork_slot.py --workspace <workspace>"
+$S install v.0.14.2+fork.1   # clone the tag, prepare its pixi environment; pointer unchanged
+$S activate v.0.14.2+fork.1  # back up pointer and database, then switch
+$S status                    # active and previous slot, versions, whether the app runs
+$S back                      # swap with current.previous.json; run again to go forward
+```
+
+Every switch copies `app/current.json` to a timestamped `.bak` and the database to
+`data/backups/` first. Slots are named by full commit and are never deleted; their
+checked-out files are never changed (only `install` reruns pixi in a slot's environment).
+
+Do not use the Manager's Update or Repair on the app: they re-clone upstream and re-point
+`app/current.json`, discarding the fork build. Start the app from the Manager launcher as usual
+and check `/api/v1/health` for `0.14.2+fork.1`.
+
+Tests: `uv run --no-project --with pytest python -m pytest -q _bmad-output/scripts/test_fork_slot.py`.
