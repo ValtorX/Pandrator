@@ -216,6 +216,20 @@ class WindowsOnlyTests(unittest.TestCase):
         self.assertIn(os.environ["USERNAME"].lower(), entries[0].lower())
         self.assertIn("(OI)(CI)(F)", entries[0])
 
+    def test_restrict_removes_explicit_entries_too(self):
+        # GitHub's Windows runners give new folders explicit entries, which
+        # /inheritance:r alone leaves in place. Make them explicit here too.
+        root = self.folder / "pt"
+        root.mkdir()
+        subprocess.run(["icacls", str(root), "/inheritance:d"], capture_output=True, check=True)
+        wtr.restrict_to_current_user(root)
+        listing = subprocess.run(
+            ["icacls", str(root)], capture_output=True, text=True, check=True
+        ).stdout
+        entries = [line for line in listing.splitlines() if ":(" in line]
+        self.assertEqual(len(entries), 1, listing)
+        self.assertIn(os.environ["USERNAME"].lower(), entries[0].lower())
+
 
 @pytest.mark.skipif(sys.platform != "win32", reason="the short root applies only on Windows")
 def test_session_basetemp_is_under_the_short_root(request, tmp_path_factory):

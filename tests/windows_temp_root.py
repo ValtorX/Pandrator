@@ -59,20 +59,27 @@ def short_root_path(temp_dir: str | Path) -> Path:
 
 
 def restrict_to_current_user(root: Path) -> None:
-    """Replace the root's inherited access with full control for the current user only."""
+    """Replace the root's access with full control for the current user only."""
     user = os.environ.get("USERNAME")
     if not user:
         raise ShortRootUnavailable(f"cannot restrict {root}: USERNAME is not set")
     domain = os.environ.get("USERDOMAIN")
     account = f"{domain}\\{user}" if domain else user
-    command = ["icacls", str(root), "/inheritance:r", "/grant:r", f"{account}:(OI)(CI)F"]
-    try:
-        result = subprocess.run(command, capture_output=True, text=True, check=False)
-    except OSError as error:
-        raise ShortRootUnavailable(f"cannot restrict {root}: {error}") from error
-    if result.returncode != 0:
-        detail = (result.stdout + result.stderr).strip()
-        raise ShortRootUnavailable(f"cannot restrict {root} to {account}: {detail}")
+    # /inheritance:r drops only inherited entries. A folder can also hold explicit
+    # ones (GitHub's Windows runners create them), so /reset first turns every
+    # entry back into an inherited one that the second call then removes.
+    commands = (
+        ["icacls", str(root), "/reset"],
+        ["icacls", str(root), "/inheritance:r", "/grant:r", f"{account}:(OI)(CI)F"],
+    )
+    for command in commands:
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, check=False)
+        except OSError as error:
+            raise ShortRootUnavailable(f"cannot restrict {root}: {error}") from error
+        if result.returncode != 0:
+            detail = (result.stdout + result.stderr).strip()
+            raise ShortRootUnavailable(f"cannot restrict {root} to {account}: {detail}")
 
 
 def _read_marker(marker: Path) -> str | None:
