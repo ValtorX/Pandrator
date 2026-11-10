@@ -31,7 +31,11 @@ from pandrator.web.projects import copy_snapshot as capture_module
 from pandrator.web.projects.copy_contracts import ProjectCopyError
 from pandrator.web.projects.copy_snapshot import capture_current_project
 from pandrator.web.sound_project_models import ProjectSoundPlan
-from tests.project_copy_test_support import capture_with_connections, seed_copy_model
+from tests.project_copy_test_support import (
+    capture_with_connections,
+    seed_copy_model,
+    snapshot_destination_connections,
+)
 from tests.test_project_export_bundles import bundle_case as _bundle_case
 from tests.test_project_operation_access import _person, _remove
 from tests.test_project_operation_access import team_case as _team_case
@@ -689,7 +693,7 @@ def test_unsupported_dependencies_and_lifecycle_never_look_ready(copy_case, kind
         elif kind == "trashed_language_versions":
             session.get(m.SessionRecord, case.branches[1]["session_id"]).trashed_at = m.utcnow()
         else:
-            session.get(m.SessionRecord, case.branches[1]["session_id"]).workflow_kind = "voiceover"
+            session.get(m.SessionRecord, case.branches[1]["session_id"]).workflow_kind = "audiobook"
     snapshot = _capture(case)
     assert ("unsupported_state", kind) in snapshot.blockers
     assert not snapshot.ready
@@ -766,6 +770,8 @@ def test_artifact_scope_and_in_predicates_are_chunked_at_500(copy_case):
             )
             for index in range(520)
         )
+    # Bind the destination models first, so the counted read is one capture.
+    choices = snapshot_destination_connections(_capture(case))
     statements = []
 
     def record(_conn, _cursor, statement, _params, _context, _many):
@@ -778,7 +784,7 @@ def test_artifact_scope_and_in_predicates_are_chunked_at_500(copy_case):
             "visible_artifact_ids_statement",
             wraps=capture_module.visible_artifact_ids_statement,
         ) as scoped:
-            snapshot = _capture(case)
+            snapshot = _capture(case, destination_connections=choices)
             assert scoped.call_count <= 3
     finally:
         event.remove(case.database.engine, "before_cursor_execute", record)

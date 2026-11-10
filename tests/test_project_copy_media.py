@@ -41,6 +41,11 @@ def _media_service(case):
     )
 
 
+def _stored_cues(cues):
+    """Drop the read-only timing diagnostics the media-edit read adds to each cue."""
+    return [{key: value for key, value in cue.items() if key != "timing_flags"} for cue in cues]
+
+
 def _register_edit_inputs(case):
     media_path = case.services.paths.root / f"{new_id()}.mp4"
     media_bytes = b"copy media-edit fixture bytes"
@@ -236,7 +241,7 @@ def test_active_edit_copies_independently_and_omits_unpinned_history(publication
     ]
     assert copied_source_revision["instructions"] == "Keep the reviewed excerpt."
     assert copied_source_revision["reviewed"] is True
-    assert copied_source_revision["cues_json"] == edited["plan"]["cues"]
+    assert copied_source_revision["cues_json"] == _stored_cues(edited["plan"]["cues"])
     assert copied_source_revision["content_hash"] == original_rows["revision"][4]
     assert rows["media_edit_plans"] and any(
         row["active_revision_id"] is None for row in rows["media_edit_plans"]
@@ -267,7 +272,7 @@ def test_active_edit_copies_independently_and_omits_unpinned_history(publication
     assert copied_state["plan"]["revision"] == 2
     assert copied_state["plan"]["parent_revision_id"] is None
     assert copied_state["plan"]["keep_ranges"] == copied_source_revision["keep_ranges_json"]
-    assert copied_state["plan"]["cues"] == copied_source_revision["cues_json"]
+    assert _stored_cues(copied_state["plan"]["cues"]) == copied_source_revision["cues_json"]
     assert copied_state["plan"]["instructions"] == copied_source_revision["instructions"]
     assert copied_state["plan"]["reviewed"] is True
     assert copied_state["plan"]["content_hash"] != copied_source_revision["content_hash"]

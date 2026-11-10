@@ -172,8 +172,8 @@ def test_capture_saves_current_ledgers_for_every_language_without_creating_rows(
     ledgers = state["rows"]["knowledge_ledgers"]
 
     assert snapshot.ready, snapshot.blockers
-    assert state["schema_version"] == COPY_STATE_VERSION == 10
-    assert len(state["rows"]) == 27
+    assert state["schema_version"] == COPY_STATE_VERSION == 15
+    assert len(state["rows"]) == 31
     assert {row["id"] for row in ledgers} == set(ids)
     assert {row["session_id"] for row in ledgers} == set(session_ids)
     assert {row["kind"] for row in ledgers} == {"research", "glossary"}
@@ -677,7 +677,7 @@ def test_schema3_frozen_copy_ignores_later_media_edit_plan(publication_case):
 
 def test_durable_codec_rejects_unsupported_or_boolean_state_versions(publication_case):
     case = publication_case
-    for version in (True, 5):
+    for version in (True, COPY_STATE_VERSION + 1):
         state = json.loads(case.snapshot.state_json)
         state["schema_version"] = version
         invalid = _set_snapshot_state(case.snapshot, state)

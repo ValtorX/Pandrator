@@ -97,10 +97,15 @@ def _copy(f, record, client, csrf, destination, key):
     return completed["result"], preview
 
 
-def _purge(f, client, csrf, session_id):
+def _trash(client, csrf, session_id):
     current = body(client.get(f"/api/v1/sessions/{session_id}"))
     body(client.delete(f"/api/v1/sessions/{session_id}",
         headers={**csrf, "If-Match": str(current["revision"])}))
+
+
+def _purge(f, client, csrf, session_id, *, trash=True):
+    if trash:
+        _trash(client, csrf, session_id)
     impact = body(client.get(f"/api/v1/sessions/{session_id}/purge-preview"))
     assert impact["can_purge"], impact["blockers"]
     body(client.post(f"/api/v1/sessions/{session_id}/purge", headers=csrf,
@@ -179,7 +184,15 @@ def test_registered_copy_member_edit_play_mix_and_workspace_audio_lifetime(libra
     _purge(f, u.alice, u.ah, record["id"])
     assert audio_path.read_bytes() == expected
     assert u.bob.get(f"/api/v1/artifacts/{audio_id}/content").data == expected
-    _purge(f, u.bob, u.bh, target)
+    # Bob, a Member, may trash the copy, but purge is a Manager action: his
+    # preview and his purge with the owner's valid impact token are refused.
+    _trash(u.bob, u.bh, target)
+    assert u.bob.get(f"/api/v1/sessions/{target}/purge-preview").status_code == 403
+    impact = body(u.owner.get(f"/api/v1/sessions/{target}/purge-preview"))
+    refused = u.bob.post(f"/api/v1/sessions/{target}/purge", headers=u.bh,
+        json={"expected_revision": impact["revision"], "impact_token": impact["impact_token"]})
+    assert refused.status_code == 403, refused.get_json()
+    _purge(f, u.owner, u.oh, target, trash=False)
     assert audio_path.read_bytes() == expected
     remaining = body(u.bob.get(f"/api/v1/sounds/candidates/{copied['variant_id']}",
         query_string={"workspace_id": u.workspace_id}))

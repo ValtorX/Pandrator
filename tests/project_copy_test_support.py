@@ -162,6 +162,7 @@ def prepare_legacy_copy_state(state: dict[str, Any]) -> None:
     for family in (
         "generation_plans", "generation_plan_revisions", "generation_segments", "speech_plan_reviews",
         "audio_takes", "project_sound_plans", "project_sound_cues", "sound_variants",
+        "performance_plans",
     ):
         state["rows"].pop(family, None)
     bindings = state.pop("destination_connections", [])
