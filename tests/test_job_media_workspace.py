@@ -14,9 +14,11 @@ from alembic import command
 from alembic.config import Config
 from flask import Flask
 from flask.testing import FlaskClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from pandrator.runtime import DataPaths
+from pandrator.web.accounts.identity import initial_personal_workspace
+from pandrator.web.accounts.models import User, WorkspaceMembership
 from pandrator.web.api import create_app
 from pandrator.web.artifacts import ArtifactService
 from pandrator.web.auth import BootstrapTokenStore
@@ -79,6 +81,15 @@ def media_jobs(tmp_path: Path) -> Iterator[MediaJobs]:
             session.add(workspace)
             session.flush()
             workspaces[name] = workspace.id
+        # Team workspaces are visible only to members; enrol the bootstrap user.
+        user_ids = list(session.scalars(select(User.id)))
+        assert len(user_ids) == 1, user_ids
+        for workspace_id in workspaces.values():
+            session.add(
+                WorkspaceMembership(workspace_id=workspace_id, user_id=user_ids[0], role="owner")
+            )
+        # Local tools (RVC) run only in the owner's personal workspace.
+        workspaces["personal"] = initial_personal_workspace(session).id
     sessions = {
         name: SessionService(database).create(name, workspace_id=owner)
         for name, owner in workspaces.items()
@@ -138,7 +149,9 @@ def test_media_admission_and_generated_artifact_keep_input_owner(
         "audio.waveform": "waveform",
         "video.preview": "video-preview",
     }[kind]
-    admitted = harness.client.get(f"/api/v1/artifacts/{source.id}/{endpoint}")
+    admitted = harness.client.post(
+        f"/api/v1/artifacts/{source.id}/{endpoint}", headers=harness.headers
+    )
     assert admitted.status_code == 202, admitted.get_json()
     job_id = admitted.get_json()["job_id"]
     assert job_id != foreign.id
@@ -197,8 +210,22 @@ def test_bundle_import_admission_and_new_project_use_input_workspace(media_jobs:
 
 def test_rvc_admission_keeps_private_workspace_and_selected_project(media_jobs: MediaJobs) -> None:
     harness = media_jobs
-    weights = harness.source("weights.pth", bound=True)
-    index = harness.source("weights.index")
+    # Local tools resolve only to the owner's personal workspace, so team inputs are refused
+    # before any job exists, even though the caller owns the team.
+    team_weights = harness.source("team.pth", bound=True)
+    team_index = harness.source("team.index")
+    with harness.database.session() as session:
+        jobs_before = session.scalar(select(func.count()).select_from(Job))
+    refused = harness.client.post(
+        "/api/v1/rvc/models",
+        json={"pth_artifact_id": team_weights.id, "index_artifact_id": team_index.id},
+        headers=harness.headers,
+    )
+    assert refused.status_code == 404, refused.get_json()
+    with harness.database.session() as session:
+        assert session.scalar(select(func.count()).select_from(Job)) == jobs_before
+    weights = harness.source("weights.pth", bound=True, workspace="personal")
+    index = harness.source("weights.index", workspace="personal")
     response = harness.client.post(
         "/api/v1/rvc/models",
         json={"pth_artifact_id": weights.id, "index_artifact_id": index.id},
@@ -211,7 +238,7 @@ def test_rvc_admission_keeps_private_workspace_and_selected_project(media_jobs: 
             job is not None and job.workspace_id == weights.workspace_id and job.project_id is None
         )
     other = SessionService(harness.database).create(
-        "Selected conversion project", workspace_id=harness.workspaces["alpha"]
+        "Selected conversion project", workspace_id=harness.workspaces["personal"]
     )
     response = harness.client.post(
         "/api/v1/rvc/convert",

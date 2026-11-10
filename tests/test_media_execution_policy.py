@@ -36,8 +36,8 @@ from pandrator.web.models import (
     AutomationClient,
     Job,
     JobActorRecord,
+    WorkspaceMembership,
 )
-from pandrator.web.projects.models import ProjectMembership
 from tests.test_job_access_routes import SCOPES
 from tests.test_job_access_routes import (
     case as media_case,  # noqa: F401 - pytest fixture registration
@@ -196,7 +196,7 @@ def _client_credential(case: Any) -> tuple[Any, str]:
                 target_instance_id="synthetic",
                 canonical_origin="http://localhost",
                 created_by="media-policy-test",
-                user_id=case.users["editor"],
+                user_id=case.users["member"],
                 user_auth_revision=1,
             )
         )
@@ -209,7 +209,7 @@ def _client_credential(case: Any) -> tuple[Any, str]:
         )
     token, raw = case.auth.create_api_token(
         "Synthetic media policy client token",
-        user_id=case.users["editor"],
+        user_id=case.users["member"],
         auth_revision=1,
         scopes=SCOPES,
         client_id=client_id,
@@ -222,9 +222,9 @@ def _client_credential(case: Any) -> tuple[Any, str]:
     return SimpleNamespace(actor=actor, token=token), client_id
 
 
-def test_leased_project_editor_and_actual_workspace_owner_can_read(case: Any):
+def test_leased_team_member_and_actual_workspace_owner_can_read(case: Any):
     source_id = _artifact(case)
-    for name in ("editor", "owner"):
+    for name in ("member", "owner"):
         caller = media_credential(case, name)
         queued = _enqueue_job(
             case,
@@ -281,7 +281,7 @@ def test_noninitial_personal_workspace_owner_can_read_rootless_source(case: Any)
 
 def test_no_lease_user_invocation_uses_strict_current_read_and_run_scopes(case: Any):
     source_id = _artifact(case)
-    allowed = media_credential(case, "editor")
+    allowed = media_credential(case, "member")
     with execution_actor_scope(allowed.actor), _lease_scope(None):
         with case.database.snapshot_session() as session:
             assert (
@@ -293,7 +293,7 @@ def test_no_lease_user_invocation_uses_strict_current_read_and_run_scopes(case: 
                 == source_id
             )
 
-    missing_run = media_credential(case, "editor", scopes=frozenset({"app.read"}))
+    missing_run = media_credential(case, "member", scopes=frozenset({"app.read"}))
     with execution_actor_scope(missing_run.actor), _lease_scope(None):
         with case.database.snapshot_session() as session, pytest.raises(AccessDenied):
             require_media_execution_artifact(
@@ -310,7 +310,7 @@ def test_leased_user_rechecks_current_role_credential_and_account_state(case: An
     if revocation == "client-ceiling":
         caller, client_id = _client_credential(case)
     else:
-        caller = media_credential(case, "editor")
+        caller = media_credential(case, "member")
         client_id = None
     source_id = _artifact(case)
     queued = _enqueue_job(
@@ -327,9 +327,9 @@ def test_leased_user_rechecks_current_role_credential_and_account_state(case: An
     with case.database.immediate_session() as session:
         if revocation == "membership":
             session.execute(
-                delete(ProjectMembership).where(
-                    ProjectMembership.project_id == case.a.project_id,
-                    ProjectMembership.user_id == case.users["editor"],
+                delete(WorkspaceMembership).where(
+                    WorkspaceMembership.workspace_id == case.team,
+                    WorkspaceMembership.user_id == case.users["member"],
                 )
             )
         elif revocation == "client-ceiling":
@@ -346,12 +346,12 @@ def test_leased_user_rechecks_current_role_credential_and_account_state(case: An
             )
         elif revocation == "account":
             session.execute(
-                update(User).where(User.id == case.users["editor"]).values(is_active=False)
+                update(User).where(User.id == case.users["member"]).values(is_active=False)
             )
         elif revocation == "epoch":
             session.execute(
                 update(UserCredential)
-                .where(UserCredential.user_id == case.users["editor"])
+                .where(UserCredential.user_id == case.users["member"])
                 .values(auth_revision=2)
             )
         elif revocation == "token":
@@ -364,7 +364,7 @@ def test_leased_user_rechecks_current_role_credential_and_account_state(case: An
 
 
 def test_expired_api_token_remains_valid_only_under_its_active_job_lease(case: Any):
-    caller = media_credential(case, "editor")
+    caller = media_credential(case, "member")
     source_id = _artifact(case)
     queued = _enqueue_job(
         case,
@@ -394,7 +394,7 @@ def test_expired_api_token_remains_valid_only_under_its_active_job_lease(case: A
 
 
 def test_source_snapshot_compares_all_seven_identity_fields(case: Any):
-    caller = media_credential(case, "editor")
+    caller = media_credential(case, "member")
     source_id = _artifact(case)
     queued = _enqueue_job(
         case,
@@ -428,7 +428,7 @@ def test_source_snapshot_compares_all_seven_identity_fields(case: Any):
 
 
 def test_stale_artifact_identity_map_is_refreshed_before_snapshot_comparison(case: Any):
-    caller = media_credential(case, "editor")
+    caller = media_credential(case, "member")
     source_id = _artifact(case)
     queued = _enqueue_job(
         case,
@@ -472,7 +472,7 @@ def test_stale_artifact_identity_map_is_refreshed_before_snapshot_comparison(cas
 
 
 def test_source_id_and_control_values_must_match_stored_job_payload(case: Any):
-    caller = media_credential(case, "editor")
+    caller = media_credential(case, "member")
     source_id = _artifact(case)
     alternate_source_id = _artifact(case)
     queued = _enqueue_job(
@@ -497,7 +497,7 @@ def test_source_id_and_control_values_must_match_stored_job_payload(case: Any):
 
 
 def test_waveform_controls_are_checked_with_exact_types_and_values(case: Any):
-    caller = media_credential(case, "editor")
+    caller = media_credential(case, "member")
     source_id = _artifact(case)
     queued = _enqueue_job(
         case,
@@ -518,7 +518,7 @@ def test_waveform_controls_are_checked_with_exact_types_and_values(case: Any):
 
 
 def test_wrong_kind_job_id_and_job_roots_are_denied_before_payload_json(case: Any):
-    caller = media_credential(case, "editor")
+    caller = media_credential(case, "member")
     source_id = _artifact(case)
     queued = _enqueue_job(
         case,
@@ -557,7 +557,7 @@ def test_wrong_kind_job_id_and_job_roots_are_denied_before_payload_json(case: An
 
 
 def test_no_autoflush_and_caller_snapshot_are_preserved(case: Any):
-    caller = media_credential(case, "editor")
+    caller = media_credential(case, "member")
     source_id = _artifact(case)
     queued = _enqueue_job(
         case,
@@ -688,7 +688,7 @@ def test_unexpired_unauthored_worker_lease_is_legacy_compatible_but_attribution_
             )
     _complete(case, legacy_claim)
 
-    caller = media_credential(case, "editor")
+    caller = media_credential(case, "member")
     attributed_job = _enqueue_job(
         case,
         caller.actor,

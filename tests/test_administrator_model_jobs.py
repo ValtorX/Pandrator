@@ -273,7 +273,7 @@ def test_demoted_administrator_is_rechecked_before_worker_handler(
         assert failed_job.error_code
 
 
-def test_rvc_upload_command_denies_before_payload_or_input_resolution(
+def test_rvc_upload_command_reads_only_its_routing_keys_and_resolves_nothing_before_denial(
     administrator_runtime: tuple[Database, JobQueue, str, int],
 ) -> None:
     database, _queue, _user_id, _revision = administrator_runtime
@@ -283,19 +283,49 @@ def test_rvc_upload_command_denies_before_payload_or_input_resolution(
         resolved.append(artifact_id)
         raise AssertionError("input resolution must follow administrator authorization")
 
-    class UnreadablePayload(dict[str, Any]):
+    reads: list[str] = []
+
+    # Authorization needs the two artifact ids and the workspace hint to find the workspace;
+    # every other way of reading the payload fails the test.
+    class BoundedPayload(dict[str, Any]):
         def get(self, key: str, default: Any = None) -> Any:
+            reads.append(f"get:{key}")
+            if key not in {"pth_artifact_id", "index_artifact_id"}:
+                raise AssertionError(f"payload was read before authorization: {key}")
+            return default
+
+        def __contains__(self, key: object) -> bool:
+            reads.append(f"in:{key}")
+            return False
+
+        def __getitem__(self, key: str) -> Any:
             raise AssertionError(f"payload was read before authorization: {key}")
+
+        def __iter__(self) -> Any:
+            raise AssertionError("payload was iterated before authorization")
+
+        def keys(self) -> Any:
+            raise AssertionError("payload keys were read before authorization")
+
+        def values(self) -> Any:
+            raise AssertionError("payload values were read before authorization")
+
+        def items(self) -> Any:
+            raise AssertionError("payload items were read before authorization")
+
+        def copy(self) -> Any:
+            raise AssertionError("payload was copied before authorization")
 
     context = cast(Any, SimpleNamespace(database=database, _resolve_input=resolve_input))
     with execution_actor_scope(None):
         with pytest.raises(AdministratorRequired):
             upload_rvc_model(
                 context,
-                UnreadablePayload(),
+                BoundedPayload(),
                 lambda _value, _detail=None: None,
                 threading.Event(),
             )
+    assert reads == ["get:pth_artifact_id", "get:index_artifact_id", "in:workspace_id"]
     assert resolved == []
 
 
@@ -304,25 +334,27 @@ def test_rvc_upload_command_explicitly_allows_host_provenance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database, _queue, _user_id, _revision = administrator_runtime
-    import pandrator.web.accounts.administration as administration
+    import pandrator.web.access.local_tools_policy as local_tools_policy
 
-    calls: list[tuple[object, object, bool, ExecutionActor | None]] = []
+    calls: list[tuple[object, object, bool, bool, ExecutionActor | None]] = []
 
     class StopAfterAuthorization(Exception):
         pass
 
     def authorize(
-        received_database: Database,
+        session: object,
+        actor: object,
         *,
         required_scopes: object = (),
+        require_admin: bool = False,
         allow_host: bool = False,
     ) -> None:
         calls.append(
-            (received_database, required_scopes, allow_host, current_execution_actor.get())
+            (actor, required_scopes, require_admin, allow_host, current_execution_actor.get())
         )
         raise StopAfterAuthorization
 
-    monkeypatch.setattr(administration, "require_execution_administrator_actor", authorize)
+    monkeypatch.setattr(local_tools_policy, "require_execution_actor_in_session", authorize)
     context = cast(Any, SimpleNamespace(database=database))
     with execution_actor_scope(HOST_ACTOR):
         with pytest.raises(StopAfterAuthorization):
@@ -333,4 +365,6 @@ def test_rvc_upload_command_explicitly_allows_host_provenance(
                 threading.Event(),
             )
 
-    assert calls == [(database, {"app.write"}, True, HOST_ACTOR)]
+    assert calls == [
+        (HOST_ACTOR, ("app.admin", "app.read", "app.write"), True, True, HOST_ACTOR)
+    ]

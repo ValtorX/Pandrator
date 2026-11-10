@@ -37,7 +37,6 @@ from pandrator.web.models import (
     new_id,
     utcnow,
 )
-from pandrator.web.projects.models import ProjectMembership
 from pandrator.web.voice_provider_settings import capture_voice_provider_settings
 from tests.test_job_access_routes import case as case
 from tests.test_job_access_routes import credential
@@ -149,17 +148,17 @@ def test_actual_ordinary_user_namespace_replay_credentials_output_and_usage(case
         next(item for item in runtime["provider_configs"] if item["id"] == "openai")["api_key"]
         == "synthetic-editor-key"
     )
-    assert (
-        prepare.call_args.kwargs["workspace_id"]
-        == ensure.call_args.kwargs["workspace_id"]
-        == workspace
-    )
+    # Admission now captures speech input at submit time; a reference-free OpenAI preview
+    # carries speech_input=None, so the worker no longer prepares a voice reference.
+    prepare.assert_not_called()
+    assert ensure.call_args.kwargs["workspace_id"] == workspace
     with case.database.snapshot_session() as session:
         job = session.get(Job, identifier)
         actor = session.get(JobActorRecord, identifier)
         artifact = session.get(Artifact, completed.result_json["artifact_id"])
         usage = session.scalars(select(UsageEvent).where(UsageEvent.job_id == identifier)).one()
         assert actor.user_id == case.users["editor"]
+        assert "speech_input" in job.payload_json and job.payload_json["speech_input"] is None
         assert job.workspace_id == artifact.workspace_id == usage.workspace_id == workspace
         assert job.project_id is artifact.project_id is usage.project_id is None
         assert f"tts-previews/{workspace}/" in artifact.relative_path
@@ -429,7 +428,7 @@ def test_revocation_before_worker_prevents_credential_and_provider_work(case, mo
             session.get(User, case.users["editor"]).is_active = False
     before = counts(case)
     response = caller.client.post(PREVIEW, headers=headers, json=BODY)
-    assert response.status_code == (403 if loss == "grant" else 401), response.get_json()
+    assert response.status_code == (404 if loss == "grant" else 401), response.get_json()
     assert counts(case) == before
     import pandrator.web.workflow_handlers as module
 
@@ -446,7 +445,9 @@ def test_revocation_before_worker_prevents_credential_and_provider_work(case, mo
     assert counts(case)[2:] == (0, 0)
 
 
-@pytest.mark.parametrize("at", ["reference", "synthesis", "prepared_file"])
+@pytest.mark.parametrize(
+    "at", ["legacy_reference", "cloned_voice", "synthesis", "prepared_file"]
+)
 def test_revocation_fences_next_effect_and_unpublished_audio(case, monkeypatch, at):
     workspace = configure(case)
     caller, identifier, _, _ = submit(case)
@@ -467,16 +468,27 @@ def test_revocation_fences_next_effect_and_unpublished_audio(case, monkeypatch, 
             revoke()
         return AudioSegment.silent(25)
 
-    worker, _, ensure, synthesize_mock = synthetic_worker(case, monkeypatch, synthesis=synthesize)
-    if at == "reference":
+    worker, prepare, ensure, synthesize_mock = synthetic_worker(
+        case, monkeypatch, synthesis=synthesize
+    )
+    if at == "legacy_reference":
+        # A payload queued before admission captured speech input has no speech_input key,
+        # so the worker still prepares the library reference; revoke during that read.
+        with case.database.immediate_session() as session:
+            row = session.get(Job, identifier)
+            row.payload_json = {
+                key: value for key, value in row.payload_json.items() if key != "speech_input"
+            }
 
-        def prepare(settings, **_kwargs):
+        def prepare_then_revoke(settings, **_kwargs):
             revoke()
             return settings
 
-        monkeypatch.setattr(
-            case.services.workflow_handlers, "prepare_audio_cpp_voice_reference", prepare
-        )
+        prepare.side_effect = prepare_then_revoke
+    elif at == "cloned_voice":
+        # A reference-free preview carries speech_input=None and never prepares a reference;
+        # the first provider-side effect is now the cloned-voice step.
+        ensure.side_effect = lambda *_args, **_kwargs: revoke()
     elif at == "prepared_file":
         artifacts = case.services.workflow_handlers.artifacts
         original = artifacts.prepare_registration
@@ -490,16 +502,32 @@ def test_revocation_fences_next_effect_and_unpublished_audio(case, monkeypatch, 
     assert worker.run_once()
     assert revocations == [at]
     completed = case.services.jobs.get(identifier)
-    assert completed.status == "failed" and completed.error_code == "AccessDenied"
-    assert synthesize_mock.call_count == (0 if at == "reference" else 1)
-    if at == "reference":
+    assert completed.status == "failed"
+    # A denial caught by the handler's own before_io gate is re-raised as RuntimeError
+    # carrying the redacted AccessDenied message; later gates surface AccessDenied itself.
+    before_synthesis = at in {"legacy_reference", "cloned_voice"}
+    assert completed.error_code == ("RuntimeError" if before_synthesis else "AccessDenied")
+    assert completed.error_message == "The requested action is not permitted."
+    assert synthesize_mock.call_count == (0 if before_synthesis else 1)
+    if at == "legacy_reference":
+        prepare.assert_called_once()
         ensure.assert_not_called()
+    elif at == "cloned_voice":
+        ensure.assert_called_once()
     assert counts(case)[2:] == (0, 0)
     assert not list((case.services.paths.artifacts / "tts-previews" / workspace).glob("*.wav"))
 
 
 def warning(case, *, hidden=False):
-    source = case.b if hidden else case.a
+    # Hidden work lives in another user's personal workspace; team members can see every
+    # team project, so a second team project would not be hidden from them.
+    source = (
+        case.services.sessions.create(
+            "Foreign hidden project", workspace_id=case.personal[case.users["outsider"]]
+        )
+        if hidden
+        else case.a
+    )
     row = case.services.jobs.enqueue(
         "export.variant",
         {"session_id": source.id, "settings": {"video_tail_extension_policy": "ask"}},
@@ -512,12 +540,25 @@ def warning(case, *, hidden=False):
     return row.id
 
 
+def member_reaching_hidden(case):
+    # Widen the token's ceiling over the hidden workspace, so only membership hides it.
+    member = credential(case, "member")
+    with case.database.immediate_session() as session:
+        session.add(
+            ApiTokenWorkspaceGrant(
+                token_id=member.token.id, workspace_id=case.personal[case.users["outsider"]]
+            )
+        )
+    return member
+
+
 @pytest.mark.parametrize("action", ["stop", "extend"])
 def test_export_run_checks_roles_before_state_and_replay(case, action):
     identifier, hidden = warning(case), warning(case, hidden=True)
     viewer = credential(case, "viewer")
     outsider = credential(case, "outsider")
-    editor = credential(case, "editor")
+    member = member_reaching_hidden(case)
+    project_only = credential(case, "editor")
 
     def path(value):
         return f"/api/v1/jobs/{value}/video-tail-decision"
@@ -529,7 +570,15 @@ def test_export_run_checks_roles_before_state_and_replay(case, action):
         ).status_code
         == 403
     )
-    for caller, target in ((outsider, identifier), (editor, hidden)):
+    # The project-only editor's ProjectMembership is read-only: the project is visible,
+    # the decision is refused.
+    assert (
+        project_only.client.post(
+            path(identifier), headers=project_only.headers, json={"action": action}
+        ).status_code
+        == 403
+    )
+    for caller, target in ((outsider, identifier), (member, hidden)):
         assert (
             caller.client.post(
                 path(target), headers=caller.headers, json={"action": action}
@@ -537,9 +586,9 @@ def test_export_run_checks_roles_before_state_and_replay(case, action):
             == 404
         )
     assert counts(case) == before
-    first = editor.client.post(path(identifier), headers=editor.headers, json={"action": action})
+    first = member.client.post(path(identifier), headers=member.headers, json={"action": action})
     assert first.status_code == (200 if action == "stop" else 202), first.get_json()
-    replay = editor.client.post(path(identifier), headers=editor.headers, json={"action": action})
+    replay = member.client.post(path(identifier), headers=member.headers, json={"action": action})
     assert replay.status_code == first.status_code
     for key in ("id", "session_id", "kind", "payload_json", "result_json"):
         assert replay.get_json()[key] == first.get_json()[key]
@@ -547,16 +596,16 @@ def test_export_run_checks_roles_before_state_and_replay(case, action):
     if action == "extend":
         with case.database.snapshot_session() as session:
             actor = session.get(JobActorRecord, first.get_json()["id"])
-            assert actor.user_id == case.users["editor"]
+            assert actor.user_id == case.users["member"]
     with case.database.immediate_session() as session:
         session.execute(
-            delete(ProjectMembership).where(
-                ProjectMembership.project_id == case.a.project_id,
-                ProjectMembership.user_id == case.users["editor"],
+            delete(WorkspaceMembership).where(
+                WorkspaceMembership.workspace_id == case.team,
+                WorkspaceMembership.user_id == case.users["member"],
             )
         )
     before = counts(case)
-    denied = editor.client.post(path(identifier), headers=editor.headers, json={"action": action})
+    denied = member.client.post(path(identifier), headers=member.headers, json={"action": action})
     assert denied.status_code == 404
     assert counts(case) == before
 
@@ -566,11 +615,11 @@ def test_export_continuation_replay_reauthorizes_actual_child(case):
     with case.database.immediate_session() as session:
         row = session.get(Job, identifier)
         row.result_json = {"video_tail_decision": "extend", "continuation_job_id": hidden}
-    editor = credential(case, "editor")
+    member = member_reaching_hidden(case)
     before = counts(case)
-    response = editor.client.post(
+    response = member.client.post(
         f"/api/v1/jobs/{identifier}/video-tail-decision",
-        headers=editor.headers,
+        headers=member.headers,
         json={"action": "extend"},
     )
     assert response.status_code == 404, response.get_json()

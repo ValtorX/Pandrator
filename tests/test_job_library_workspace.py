@@ -10,21 +10,32 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from pandrator.logic import audio_cpp_sfx
 from pandrator.runtime import DataPaths
 from pandrator.web import google_voice_design_routes, voice_queries
 from pandrator.web import jobs as jobs_module
-from pandrator.web.accounts.models import Workspace
+from pandrator.web.accounts.execution_actor import HostActor, execution_actor_scope
+from pandrator.web.accounts.models import User, Workspace, WorkspaceMembership
 from pandrator.web.api import create_app
 from pandrator.web.auth import BootstrapTokenStore
 from pandrator.web.jobs import JobQueue
-from pandrator.web.models import Artifact, Job, SoundVariant, TrainingRun, Voice, VoiceSample
+from pandrator.web.models import (
+    Artifact,
+    Job,
+    SoundVariant,
+    TrainingRun,
+    Voice,
+    VoiceSample,
+    WorkspaceSetting,
+)
 from pandrator.web.projects.models import Project
 from pandrator.web.schemas import TrainingCreateRequest
 from pandrator.web.sound_service import SoundService
 from pandrator.web.training_lifecycle import TrainingService
-from tests.web_test_support import prepare_web_test_data_root
+from tests.web_test_support import prepare_web_test_data_root, suspended_triggers
 
 
 def _wav_bytes() -> bytes:
@@ -87,16 +98,38 @@ def library_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     selected_id = workspace_id
     monkeypatch.setattr(voice_queries, "voice_creation_workspace", selected_team_workspace)
-    monkeypatch.setattr(
-        google_voice_design_routes,
-        "voice_creation_workspace",
-        selected_team_workspace,
-    )
     monkeypatch.setattr(jobs_module, "ensure_app_job_allowed", lambda _path: None)
 
     client = app.test_client()
     bootstrap_response = client.post("/api/v1/auth/bootstrap", json={"token": token})
     assert bootstrap_response.status_code == 200
+    with database.session() as session:
+        user_ids = list(session.scalars(select(User.id)))
+    assert len(user_ids) == 1, user_ids
+    with database.immediate_session() as session:
+        for team_id in (workspace_id, other_workspace_id):
+            session.add(
+                WorkspaceMembership(workspace_id=team_id, user_id=user_ids[0], role="owner")
+            )
+            # Team workspaces see only providers they configured themselves.
+            session.add(
+                WorkspaceSetting(
+                    workspace_id=team_id,
+                    key="services.tts",
+                    value_json={
+                        "provider_configs": [
+                            {
+                                "id": "kobold_qwen",
+                                "adapter": "kobold_qwen",
+                                "connection_mode": "external",
+                                "api_base": "http://kobold.invalid:5001",
+                                "supports_voice_cloning": True,
+                            }
+                        ]
+                    },
+                    revision=1,
+                )
+            )
     case = LibraryCase(
         app=app,
         client=client,
@@ -170,7 +203,7 @@ def _assert_job_response(
     assert response.status_code == 202, response.get_json()
     body = response.get_json()
     assert body["kind"] == kind
-    assert "workspace_id" not in body
+    assert body["workspace_id"] == case.workspace_id
     with case.database.session() as session:
         job = session.get(Job, body["id"])
         assert job is not None
@@ -185,14 +218,15 @@ def test_training_admission_uses_training_run_workspace(library_case):
     case = library_case
     source = _register_audio(case, role="training_source")
     training = TrainingService(case.database, case.paths, JobQueue(case.database))
-    run, job = training.start(
-        TrainingCreateRequest(
-            model_name="job-library-fixture",
-            source_artifact_id=source.id,
-            settings={"epochs": 1},
-        ),
-        workspace_id=case.workspace_id,
-    )
+    with execution_actor_scope(HostActor("pandrator-cli")):
+        run, job = training.start(
+            TrainingCreateRequest(
+                model_name="job-library-fixture",
+                source_artifact_id=source.id,
+                settings={"epochs": 1},
+            ),
+            workspace_id=case.workspace_id,
+        )
 
     assert run.workspace_id == case.workspace_id
     with case.database.session() as session:
@@ -218,11 +252,11 @@ def test_google_design_job_uses_created_voice_workspace(library_case, monkeypatc
     monkeypatch.setattr(
         google_voice_design_routes,
         "google_voice_scope",
-        lambda *_args: {"fingerprint": "fixture-scope", "project": "fixture-project"},
+        lambda *_args, **_kwargs: {"fingerprint": "fixture-scope", "project": "fixture-project"},
     )
 
     response = library_case.client.post(
-        "/api/v1/voices/design/google",
+        f"/api/v1/voices/design/google?workspace_id={library_case.workspace_id}",
         json={
             "service_id": "gemini",
             "model": "gemini-3.8-flash-tts",
@@ -238,7 +272,7 @@ def test_google_design_job_uses_created_voice_workspace(library_case, monkeypatc
     )
     assert response.status_code == 202, response.get_json()
     body = response.get_json()
-    assert "workspace_id" not in body
+    assert body["workspace_id"] == library_case.workspace_id
     with library_case.database.session() as session:
         voice = session.get(Voice, body["voice_id"])
         job = session.get(Job, body["id"])
@@ -251,6 +285,8 @@ def test_google_design_job_uses_created_voice_workspace(library_case, monkeypatc
         assert body["payload_json"] == job.payload_json
 
 
+# "unscoped" asserts that NOT NULL (0075) refuses a NULL workspace even with the update triggers
+# suspended, so the sound cache can never see that state at head.
 @pytest.mark.parametrize("bad_scope", ["foreign", "unscoped", "project"])
 @pytest.mark.parametrize("candidate_state", ["queued", "ready"])
 def test_sound_cache_skips_job_with_wrong_workspace(
@@ -318,19 +354,41 @@ def test_sound_cache_skips_job_with_wrong_workspace(
     assert matching_cache["candidate_id"] == original["candidate_id"]
     assert matching_cache["job_id"] == original["job_id"]
 
+    if bad_scope == "unscoped":
+        with pytest.raises(IntegrityError, match="NOT NULL constraint failed: jobs.workspace_id"):
+            with case.database.immediate_session() as session:
+                old_job = session.get(Job, original["job_id"])
+                assert old_job is not None
+                with suspended_triggers(
+                    session,
+                    "pandrator_execution_scope_jobs_update",
+                    "pandrator_library_scope_jobs_update",
+                ):
+                    old_job.workspace_id = None
+                    session.flush()
+        return
+
     with case.database.immediate_session() as session:
         old_job = session.get(Job, original["job_id"])
         assert old_job is not None
-        if bad_scope == "project":
-            project = Project(
-                workspace_id=case.workspace_id,
-                name="A project-scoped sound job",
-            )
-            session.add(project)
+        # Product triggers now refuse these writes; seed the historical bad scope suspended.
+        with suspended_triggers(
+            session,
+            "pandrator_execution_scope_jobs_update",
+            "pandrator_library_scope_jobs_update",
+            "pandrator_project_graph_projects_update",
+        ):
+            if bad_scope == "project":
+                project = Project(
+                    workspace_id=case.workspace_id,
+                    name="A project-scoped sound job",
+                )
+                session.add(project)
+                session.flush()
+                old_job.project_id = project.id
+            else:
+                old_job.workspace_id = case.other_workspace_id
             session.flush()
-            old_job.project_id = project.id
-        else:
-            old_job.workspace_id = case.other_workspace_id if bad_scope == "foreign" else None
 
     with case.database.immediate_session() as session:
         replacement = sounds.generate_in_session(

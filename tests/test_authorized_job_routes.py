@@ -7,8 +7,9 @@ from concurrent.futures import Future
 from unittest.mock import Mock
 
 import pytest
-from sqlalchemy import delete, event, func, select, update
+from sqlalchemy import delete, event, func, select
 
+from pandrator.web.accounts.models import WorkspaceMembership
 from pandrator.web.accounts.resource_grant_models import ApiTokenWorkspaceGrant
 from pandrator.web.http_lifecycle import ApiGuards
 from pandrator.web.jobs import Worker
@@ -134,7 +135,7 @@ def test_instance_admin_is_not_authority_for_a_project_diagnostic(case):
     assert counts(case) == (0, 0, 0)
 
 
-def test_domain_bundle_accepts_ordinary_editor_and_rejects_viewer_and_outside_admin(case):
+def test_domain_bundle_accepts_ordinary_member_and_rejects_viewer_and_outside_admin(case):
     before = counts(case)
     for name, status in (("viewer", 403), ("outsider", 404)):
         caller = credential(
@@ -143,9 +144,13 @@ def test_domain_bundle_accepts_ordinary_editor_and_rejects_viewer_and_outside_ad
         denied = caller.client.post(bundle_path(case), headers=caller.headers, json={})
         assert denied.status_code == status, denied.get_json()
         assert counts(case) == before
-    editor = credential(case, "editor")
-    response = editor.client.post(
-        bundle_path(case), headers=editor.headers, json={"include_sources": False}
+    project_only = credential(case, "editor")
+    denied = project_only.client.post(bundle_path(case), headers=project_only.headers, json={})
+    assert denied.status_code == 403, denied.get_json()
+    assert counts(case) == before
+    member = credential(case, "member")
+    response = member.client.post(
+        bundle_path(case), headers=member.headers, json={"include_sources": False}
     )
     assert response.status_code == 202, response.get_json()
     with case.database.snapshot_session() as session:
@@ -160,7 +165,7 @@ def test_domain_bundle_accepts_ordinary_editor_and_rejects_viewer_and_outside_ad
             case.a.id,
         )
         assert record.payload_json == {"session_id": case.a.id, "include_sources": False}
-        assert actor.user_id == case.users["editor"]
+        assert actor.user_id == case.users["member"]
 
 
 def test_bundle_routes_share_canonical_retry_without_duplicate_work(case):
@@ -189,18 +194,24 @@ def test_bundle_routes_share_canonical_retry_without_duplicate_work(case):
 
 @pytest.mark.parametrize("loss,status", [("role", 403), ("membership", 404), ("grant", 404)])
 def test_bundle_replay_rechecks_current_authority_before_receipt(case, monkeypatch, loss, status):
-    caller = credential(case, "editor")
+    caller = credential(case, "member")
     headers = {**caller.headers, "Idempotency-Key": "revoked-bundle-command"}
     assert caller.client.post(bundle_path(case), headers=headers, json={}).status_code == 202
     with case.database.immediate_session() as session:
         predicate = (
-            ProjectMembership.project_id == case.a.project_id,
-            ProjectMembership.user_id == case.users["editor"],
+            WorkspaceMembership.workspace_id == case.team,
+            WorkspaceMembership.user_id == case.users["member"],
         )
         if loss == "role":
-            session.execute(update(ProjectMembership).where(*predicate).values(role="viewer"))
+            # Inherited editing is gone; only a read-only project grant remains.
+            session.execute(delete(WorkspaceMembership).where(*predicate))
+            session.add(
+                ProjectMembership(
+                    project_id=case.a.project_id, user_id=case.users["member"], role="viewer"
+                )
+            )
         elif loss == "membership":
-            session.execute(delete(ProjectMembership).where(*predicate))
+            session.execute(delete(WorkspaceMembership).where(*predicate))
         else:
             session.execute(
                 delete(ApiTokenWorkspaceGrant).where(
@@ -217,7 +228,7 @@ def test_bundle_replay_rechecks_current_authority_before_receipt(case, monkeypat
 
 
 def test_bundle_same_subject_different_user_cannot_probe_foreign_receipt(case):
-    first = credential(case, "editor", subject="shared-bundle-subject")
+    first = credential(case, "member", subject="shared-bundle-subject")
     headers = {**first.headers, "Idempotency-Key": "private-bundle-receipt"}
     assert first.client.post(bundle_path(case), headers=headers, json={}).status_code == 202
     outside = credential(case, "outsider", subject="shared-bundle-subject")
@@ -261,7 +272,7 @@ def test_bundle_root_mismatch_and_failed_enqueue_do_not_leave_receipts(case, mon
 
 
 def test_bundle_waiting_for_writer_rechecks_membership(case, monkeypatch):
-    caller = credential(case, "editor")
+    caller = credential(case, "member")
     ready, release, waiting = threading.Event(), threading.Event(), threading.Event()
     future = Future()
     thread_name = "bundle-writer-role-race"
@@ -301,9 +312,9 @@ def test_bundle_waiting_for_writer_rechecks_membership(case, monkeypatch):
         assert ready.wait(10)
         with case.database.immediate_session() as session:
             session.execute(
-                delete(ProjectMembership).where(
-                    ProjectMembership.project_id == case.a.project_id,
-                    ProjectMembership.user_id == case.users["editor"],
+                delete(WorkspaceMembership).where(
+                    WorkspaceMembership.workspace_id == case.team,
+                    WorkspaceMembership.user_id == case.users["member"],
                 )
             )
             release.set()

@@ -56,8 +56,8 @@ def _job_side_effect_counts_in_session(session) -> tuple[int, int, int]:
         )
 
 
-def _project_only_credential(case):
-    issued = credential(case, "editor", grant_team=False)
+def _project_only_credential(case, name="editor"):
+    issued = credential(case, name, grant_team=False)
     with case.database.immediate_session() as session:
         session.execute(
             delete(ApiTokenWorkspaceGrant).where(ApiTokenWorkspaceGrant.token_id == issued.token.id)
@@ -258,18 +258,29 @@ def test_project_diagnostics_and_bundle_exports_follow_current_run_roles(case):
         assert (editor_job.project_id, owner_job.project_id) == (case.a.project_id,) * 2
 
 
-def test_project_only_token_grant_admits_its_session_but_not_private_work(case):
-    caller = _project_only_credential(case)
+@pytest.mark.parametrize("name", ["member", "editor"])
+def test_project_only_token_grant_bounds_work_to_its_project_and_revocation_hides_it(case, name):
+    caller = _project_only_credential(case, name)
 
     with case.database.immediate_session() as session:
         before = _job_side_effect_counts_in_session(session)
-        queued = _diagnostic(case, session, caller.actor, case.a.id)
-        assert (queued.workspace_id, queued.project_id, queued.session_id) == (
-            case.team,
-            case.a.project_id,
-            case.a.id,
-        )
-        before = _job_side_effect_counts_in_session(session)
+        if name == "member":
+            # A team member's project-only token runs work in its project, and nowhere else.
+            queued = _diagnostic(case, session, caller.actor, case.a.id)
+            assert (queued.workspace_id, queued.project_id, queued.session_id) == (
+                case.team,
+                case.a.project_id,
+                case.a.id,
+            )
+            before = _job_side_effect_counts_in_session(session)
+            with pytest.raises(SessionNotFound):
+                _diagnostic(case, session, caller.actor, case.b.id)
+        else:
+            # The editor's ProjectMembership is a read-only viewing exception: the project
+            # is visible (AccessDenied, not SessionNotFound) but not runnable.
+            with pytest.raises(AccessDenied):
+                _diagnostic(case, session, caller.actor, case.a.id)
+        # The token's project grant never becomes workspace authority for private work.
         with pytest.raises(AccessDenied):
             _diagnostic(case, session, caller.actor)
         assert _job_side_effect_counts_in_session(session) == before
@@ -310,7 +321,8 @@ def test_outside_instance_admin_without_membership_cannot_override_content_polic
     assert _job_side_effect_counts(case.database) == before
 
 
-def test_client_project_grant_is_current_and_does_not_become_workspace_authority(case):
+@pytest.mark.parametrize("name", ["member", "editor"])
+def test_client_project_grant_is_current_and_does_not_become_workspace_authority(case, name):
     client_id = new_id()
     with case.database.immediate_session() as session:
         session.add(
@@ -323,7 +335,7 @@ def test_client_project_grant_is_current_and_does_not_become_workspace_authority
                 target_instance_id="synthetic",
                 canonical_origin="http://localhost",
                 created_by="test",
-                user_id=case.users["editor"],
+                user_id=case.users[name],
                 user_auth_revision=1,
             )
         )
@@ -332,11 +344,11 @@ def test_client_project_grant_is_current_and_does_not_become_workspace_authority
 
     token, raw = case.auth.create_api_token(
         "Synthetic project-only client token",
-        user_id=case.users["editor"],
+        user_id=case.users[name],
         auth_revision=1,
         client_id=client_id,
         scopes={"app.read", "app.run"},
-        resource_grants=CredentialResources(workspace_ids=frozenset({case.team})),
+        resource_grants=CredentialResources(project_ids=frozenset({case.a.project_id})),
     )
     principal = case.auth.resolve_api_token(
         raw,
@@ -353,14 +365,19 @@ def test_client_project_grant_is_current_and_does_not_become_workspace_authority
             )
         )
         session.add(AutomationClientProjectGrant(client_id=client_id, project_id=case.a.project_id))
-        session.execute(
-            delete(ApiTokenWorkspaceGrant).where(ApiTokenWorkspaceGrant.token_id == token.id)
-        )
-        session.add(ApiTokenProjectGrant(token_id=token.id, project_id=case.a.project_id))
         session.flush()
-        queued = _diagnostic(case, session, actor, case.a.id)
-        assert queued.project_id == case.a.project_id
         before = _job_side_effect_counts_in_session(session)
+        if name == "member":
+            # A team member's client project grant runs work in that project.
+            queued = _diagnostic(case, session, actor, case.a.id)
+            assert queued.project_id == case.a.project_id
+            before = _job_side_effect_counts_in_session(session)
+        else:
+            # The editor's ProjectMembership is a read-only viewing exception: the project
+            # is visible (AccessDenied, not SessionNotFound) but not runnable.
+            with pytest.raises(AccessDenied):
+                _diagnostic(case, session, actor, case.a.id)
+        # The client's project grant never becomes workspace authority for private work.
         with pytest.raises(AccessDenied):
             _diagnostic(case, session, actor)
         assert _job_side_effect_counts_in_session(session) == before

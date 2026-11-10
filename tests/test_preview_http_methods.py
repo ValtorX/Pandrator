@@ -24,9 +24,10 @@ PREVIEWS = (
     {"name": "waveform", "path": "waveform", "kind": "audio", "suffix": ".wav"},
 )
 READERS = (
-    ("editor", None, True),
+    ("member", None, True),
+    ("editor", None, False),
     ("viewer", None, False),
-    ("editor", frozenset({"app.read"}), False),
+    ("member", frozenset({"app.read"}), False),
 )
 
 
@@ -182,7 +183,7 @@ def test_hidden_missing_and_deleted_source_reads_stay_404_before_effects(
 def test_post_with_read_only_scope_is_denied_before_media_or_job_effects(
     case, monkeypatch, media_mocks, preview
 ):
-    reader = credential(case, "editor", scopes=frozenset({"app.read"}))
+    reader = credential(case, "member", scopes=frozenset({"app.read"}))
     source = _source(case, preview)
     paths = _block_paths(case, monkeypatch)
     enqueue = _block_enqueue(case, monkeypatch)
@@ -220,12 +221,12 @@ def test_viewer_cannot_post_even_when_a_current_cache_exists(
 
 
 @pytest.mark.parametrize("preview", PREVIEWS, ids=lambda row: row["name"])
-def test_editor_can_post_and_observe_a_cached_preview(case, media_mocks, preview):
-    editor = credential(case, "editor")
+def test_member_can_post_and_observe_a_cached_preview(case, media_mocks, preview):
+    member = credential(case, "member")
     source = _source(case, preview)
     cached = _cached_child(case, preview, source)
 
-    response = editor.client.post(_url(preview, source.id), headers=editor.headers)
+    response = member.client.post(_url(preview, source.id), headers=member.headers)
 
     assert response.status_code == 200, response.get_json()
     if preview["name"] == "waveform":
