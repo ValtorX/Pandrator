@@ -9,10 +9,24 @@ from pandrator.web import models as m
 from pandrator.web.assembly_silences import render_part_silences
 from pandrator.web.generation_review import PROJECTABLE_SEGMENT_FIELDS
 from pandrator.web.global_settings import GlobalSettingsService
+from pandrator.web.projects.artifact_identity import resolve_artifact_ownership
 from pandrator_mcp.schemas.generation_fields import GenerationSegmentField
 from pandrator_mcp.tools.generation import _segment_projection
 
 pytest_plugins = ("tests.test_performance_plans",)
+
+
+def _generation_take_artifact(session, case, metadata: dict) -> m.Artifact:
+    ownership = resolve_artifact_ownership(session, session_id=case["session_id"])
+    return m.Artifact(
+        workspace_id=ownership.workspace_id,
+        project_id=ownership.project_id,
+        session_id=case["session_id"],
+        kind="audio",
+        role="generation_take",
+        relative_path=f"test/{uuid.uuid4().hex}.wav",
+        metadata_json=metadata,
+    )
 
 
 def _add_run(case, snapshot: dict, *, sequence_number: int) -> str:
@@ -235,13 +249,7 @@ def test_page_terminal_pause_uses_next_voice_floor_and_is_not_suppressed(case):
         ]
     }
     with case["services"]["database"].session() as session:
-        artifact = m.Artifact(
-            session_id=case["session_id"],
-            kind="audio",
-            role="generation_take",
-            relative_path=f"test/{uuid.uuid4().hex}.wav",
-            metadata_json=metadata,
-        )
+        artifact = _generation_take_artifact(session, case, metadata)
         session.add(artifact)
         session.flush()
         session.add(
@@ -323,13 +331,7 @@ def test_marked_take_silences_are_safe_and_legacy_parts_add_no_silence(case):
 
     for index, parts in enumerate((marked_parts, legacy_parts)):
         with case["services"]["database"].session() as session:
-            artifact = m.Artifact(
-                session_id=case["session_id"],
-                kind="audio",
-                role="generation_take",
-                relative_path=f"test/{uuid.uuid4().hex}.wav",
-                metadata_json={"render_parts": parts},
-            )
+            artifact = _generation_take_artifact(session, case, {"render_parts": parts})
             session.add(artifact)
             session.flush()
             take = m.AudioTake(

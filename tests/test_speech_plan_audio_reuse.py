@@ -18,9 +18,11 @@ from pandrator.web import models as m
 from pandrator.web.api import create_app
 from pandrator.web.auth import BootstrapTokenStore
 from pandrator.web.generation_audio_identity import IDENTITY_KEY, AudioIdentityContext
+from pandrator.web.projects.artifact_identity import resolve_artifact_ownership
 from pandrator.web.speech_plan_audio_reuse import inherit_rebuilt_plan_audio
 from pandrator.web.speech_plan_preparation import run_speech_preparation
 from pandrator.web.tts_optimization import OptimizationUsage
+from tests.web_test_support import suspended_triggers
 
 SRT = (
     "1\n00:00:01,000 --> 00:00:03,000\nFirst cue.\n\n"
@@ -208,6 +210,7 @@ class SpeechPlanAudioReuseTests(unittest.TestCase):
                 session, session_id
             )
             audio_context = AudioIdentityContext(session, snapshot)
+            artifact_ownership = resolve_artifact_ownership(session, session_id=session_id)
             source_takes = []
             for index, source_segment in enumerate(source_segments):
                 identity = audio_context.for_segment(source_segment)
@@ -216,6 +219,8 @@ class SpeechPlanAudioReuseTests(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(b"fixture audio bytes")
                 artifact = m.Artifact(
+                    workspace_id=artifact_ownership.workspace_id,
+                    project_id=artifact_ownership.project_id,
                     session_id=session_id,
                     kind="audio",
                     role="tts",
@@ -569,7 +574,11 @@ class SpeechPlanAudioReuseTests(unittest.TestCase):
             self.assertEqual({"audio_unavailable": 1}, receipt["reason_counts"])
 
             artifact.relative_path = case["paths"][0].relative_to(self.root).as_posix()
+            # The database now refuses an artifact whose session is outside its project, so
+            # suspend that update trigger for this one corrupt-history write.
             artifact.session_id = other_session_id
+            with suspended_triggers(session, "pandrator_media_scope_artifacts_update"):
+                session.flush()
             receipt = inherit_rebuilt_plan_audio(
                 session,
                 case["source_revision_id"],
@@ -708,6 +717,7 @@ class SpeechPlanAudioReuseTests(unittest.TestCase):
             )
             snapshot = self._snapshot(session, session_id)
             context = AudioIdentityContext(session, snapshot)
+            artifact_ownership = resolve_artifact_ownership(session, session_id=session_id)
             for index, source_segment in enumerate(source_segments):
                 identity = context.for_segment(source_segment)
                 relative_path = f"artifacts/integration-{uuid.uuid4().hex}.wav"
@@ -715,6 +725,8 @@ class SpeechPlanAudioReuseTests(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(b"integration fixture audio")
                 artifact = m.Artifact(
+                    workspace_id=artifact_ownership.workspace_id,
+                    project_id=artifact_ownership.project_id,
                     session_id=session_id,
                     kind="audio",
                     role="tts",

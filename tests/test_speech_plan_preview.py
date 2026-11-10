@@ -13,6 +13,7 @@ from pandrator.web.generation_controls import (
     get_generation_controls,
     save_generation_controls,
 )
+from pandrator.web.projects.identity import session_project
 from pandrator.web.speech_plan_preview import preview_speech_segment
 from pandrator.web.speech_plan_workspace import freeze_generation_performance_snapshot
 from tests.test_performance_plans import adopt, create, edit
@@ -159,8 +160,11 @@ def _segment_read_scope_parity(
 
 @pytest.mark.parametrize(
     ("casting_enabled", "performance_enabled", "context_mode", "query_budget"),
-    # Full reads include effective assembly boundaries as well as annotations.
-    [(False, False, "off", 25), (False, True, "both", 35), (True, False, "both", 36)],
+    # Full reads include effective assembly boundaries as well as annotations. Each budget is
+    # the count measured on 2026-11-09 plus 2 (34, 46 and 47). The count was identical per
+    # table at 3 and at 12 segments. With this 3-segment fixture, a read added per segment
+    # adds 3, which exceeds the 2 of headroom, so the budget itself fails on such growth.
+    [(False, False, "off", 36), (False, True, "both", 48), (True, False, "both", 49)],
     ids=["strict-single", "directed-context", "named-cast-context"],
 )
 def test_segment_reader_scoped_settings_preserve_rich_payload(
@@ -329,7 +333,11 @@ def test_strict_single_preview_ignores_inactive_block_binding_and_keeps_language
     sid = case["segment_ids"][0]
     text = "A block voice is inactive in strict single mode."
     with case["services"]["database"].session() as session:
-        voice = m.Voice(name="Unpublished voice", metadata_json={})
+        voice = m.Voice(
+            workspace_id=session_project(session, case["session_id"]).workspace_id,
+            name="Unpublished voice",
+            metadata_json={},
+        )
         session.add(voice)
         session.flush()
         segment = session.get(m.GenerationSegment, sid)

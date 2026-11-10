@@ -6,17 +6,21 @@ from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
-from sqlalchemy import event, insert, select
+from sqlalchemy import event, insert, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from pandrator.web import models as m
 from pandrator.web.api import create_app
 from pandrator.web.auth import BootstrapTokenStore
 from pandrator.web.generation_summary import get_generation_summary
+from pandrator.web.job_identity import job_creation_ownership
 from pandrator.web.openapi import build_openapi_document
+from pandrator.web.projects.artifact_identity import resolve_artifact_ownership
 from pandrator.web.projects.identity import create_session_project
 from pandrator.web.usage import usage_summary
-from tests.web_test_support import prepare_web_test_data_root
+from pandrator.web.usage_identity import usage_creation_ownership
+from tests.web_test_support import prepare_web_test_data_root, suspended_triggers
 
 
 @pytest.fixture
@@ -62,8 +66,11 @@ def add_plan(case, *, session_id=None):
 def add_source_artifact(case, session_id, *, role, artifact_id=None):
     services, _, _ = case
     with services.database.session() as db:
+        ownership = resolve_artifact_ownership(db, session_id=session_id)
         artifact = m.Artifact(
             id=artifact_id,
+            workspace_id=ownership.workspace_id,
+            project_id=ownership.project_id,
             session_id=session_id,
             kind="text",
             role=role,
@@ -87,7 +94,9 @@ def add_run(case, revision_id, *, status="running", sequence=1, session_id=None)
     services, _, own_session_id = case
     session_id = session_id or own_session_id
     with services.database.session() as db:
+        ownership = job_creation_ownership(db, session_id=session_id)
         job = m.Job(
+            workspace_id=ownership.workspace_id, project_id=ownership.project_id,
             session_id=session_id, kind="generation.run", status=status,
             progress=0.4, progress_detail="Generating block 2",
         )
@@ -123,10 +132,22 @@ def add_usage_event(
     output_tokens,
     commercial,
     estimated,
+    refused_by_scope_trigger=False,
 ):
+    """Seed a receipt owned by `session_id`'s project.
+
+    A receipt whose run belongs to another session is refused by the scope trigger, so
+    `refused_by_scope_trigger` suspends it for this insert to emulate corrupt history.
+    """
     services, _, _ = case
     with services.database.session() as db:
+        ownership = usage_creation_ownership(
+            db, session_id=session_id,
+            generation_run_id=None if refused_by_scope_trigger else generation_run_id,
+        )
         event = m.UsageEvent(
+            workspace_id=ownership.workspace_id,
+            project_id=ownership.project_id,
             session_id=session_id,
             generation_run_id=generation_run_id,
             stage=stage,
@@ -139,7 +160,11 @@ def add_usage_event(
             raw_usage_json={"commercial": commercial, "estimated": estimated},
         )
         db.add(event)
-        db.flush()
+        if refused_by_scope_trigger:
+            with suspended_triggers(db, "pandrator_execution_scope_usage_events_insert"):
+                db.flush()
+        else:
+            db.flush()
         return event.id
 
 
@@ -419,6 +444,7 @@ def test_active_run_usage_matches_usage_summary_and_refreshes(summary_case):
         output_tokens=1000,
         commercial=True,
         estimated=True,
+        refused_by_scope_trigger=True,
     )
     add_usage_event(
         summary_case,
@@ -432,6 +458,7 @@ def test_active_run_usage_matches_usage_summary_and_refreshes(summary_case):
         output_tokens=2000,
         commercial=True,
         estimated=True,
+        refused_by_scope_trigger=True,
     )
 
     result = read(summary_case)["active_run"]
@@ -582,15 +609,20 @@ def test_latest_assembly_and_cross_session_isolation(summary_case):
         foreign = m.SessionRecord(name="Foreign")
         create_session_project(db, foreign)
         foreign_id = foreign.id
+        foreign_ownership = job_creation_ownership(db, session_id=foreign_id)
         foreign_job = m.Job(
+            workspace_id=foreign_ownership.workspace_id, project_id=foreign_ownership.project_id,
             session_id=foreign_id, kind="generation.assemble", status="running",
             progress=0.9, progress_detail="Private progress",
         )
         db.add(foreign_job)
         db.flush()
         foreign_job_id = foreign_job.id
-        # Even a corrupted cross-session job reference cannot leak progress.
+        # Even a corrupted cross-session job reference cannot leak progress. The database
+        # now refuses that link, so suspend its trigger for this one update only.
         db.get(m.GenerationRun, run_id).job_id = foreign_job_id
+        with suspended_triggers(db, "pandrator_execution_scope_generation_runs_update"):
+            db.flush()
         now = m.utcnow()
         older = m.OutputAssembly(session_id=session_id, status="completed", created_at=now)
         newest = m.OutputAssembly(
@@ -614,7 +646,9 @@ def test_latest_assembly_and_cross_session_isolation(summary_case):
         "job_id": None, "usage": None,
     }
     with services.database.session() as db:
+        ownership = job_creation_ownership(db, session_id=session_id)
         job = m.Job(
+            workspace_id=ownership.workspace_id, project_id=ownership.project_id,
             session_id=session_id, kind="generation.assemble", progress=0.65,
             progress_detail="Writing output",
         )
@@ -718,3 +752,32 @@ def test_openapi_declares_compact_response():
     assert set(document["components"]["schemas"]["GenerationSummary"]["required"]) == {
         "session_id", "plan_revision_id", "total", "included_total", "active_run", "assembly"
     }
+
+
+SUSPENDED_TRIGGER = "pandrator_execution_scope_usage_events_insert"
+
+
+def _trigger_count(services):
+    with services.database.session() as db:
+        return db.scalar(
+            text("SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND name = :name"),
+            {"name": SUSPENDED_TRIGGER},
+        )
+
+
+def test_suspended_trigger_is_restored_after_the_block_and_after_a_failed_seed(summary_case):
+    services, _, _ = summary_case
+    with services.database.session() as db:
+        with suspended_triggers(db, SUSPENDED_TRIGGER):
+            assert db.scalar(
+                text("SELECT count(*) FROM sqlite_master WHERE name = :name"),
+                {"name": SUSPENDED_TRIGGER},
+            ) == 0
+    assert _trigger_count(services) == 1
+
+    with pytest.raises(IntegrityError), services.database.session() as db:
+        # The trigger is the first statement, so only an explicit transaction undoes it.
+        with suspended_triggers(db, SUSPENDED_TRIGGER):
+            db.add(m.Voice(name="No workspace", metadata_json={}))
+            db.flush()
+    assert _trigger_count(services) == 1

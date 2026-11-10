@@ -26,7 +26,7 @@ from pandrator.web.projects.artifact_identity import resolve_artifact_ownership
 from pandrator.web.sessions import SessionService
 from pandrator.web.workflows import WorkflowService
 from scripts.phase0_baseline import QueryCounter
-from tests.web_test_support import prepare_web_test_data_root
+from tests.web_test_support import prepare_web_test_data_root, suspended_triggers
 
 BASE = datetime(2026, 10, 1, tzinfo=UTC)
 CURRENT = BASE + timedelta(days=2)
@@ -164,6 +164,11 @@ def _add_run(
     run_id: str | None = None,
 ) -> str:
     identifier = run_id or new_id()
+    foreign_job_link = (
+        session_id is not None
+        and session_id != case.session_id
+        and (job_id is None or job_id == case.job_id)
+    )
     with case.database.session() as session:
         session.add(
             AgentRun(
@@ -177,6 +182,11 @@ def _add_run(
                 updated_at=updated_at,
             )
         )
+        if foreign_job_link:
+            # A run in another session that links this session's job is corrupt history the
+            # database now refuses, so suspend that insert trigger for this one flush.
+            with suspended_triggers(session, "pandrator_execution_scope_agent_runs_insert"):
+                session.flush()
     return identifier
 
 
