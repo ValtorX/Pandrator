@@ -96,6 +96,45 @@ Seen only on Windows CI, from run `42638129618`, and read from its logs rather t
 
 W1, W2 and W4 don't appear on CI. The likely reasons are that its temp path is shorter, its runner can create symlinks and it uses no virtual environment, all inferred from their absence.
 
+## Resolved by story 8
+
+Tests only; no product, migration or schema change. Windows 11, Python 3.11, SQLAlchemy 2.0.52 through the `<uv env>` from `AGENTS.md`. The 7 files now give 89 passed (37 failed and 51 passed before, plus the new helper test). Fork CI is not yet confirmed.
+
+### A1 (28)
+
+Every seed takes its ownership from the product's resolvers: `job_creation_ownership` for `m.Job`, `resolve_artifact_ownership` for `m.Artifact`, `usage_creation_ownership` for `m.UsageEvent` and `session_project(...).workspace_id` for `m.Voice`. One helper per file where several seeds share it (`test_playlist_pause_projection.py::_generation_take_artifact`; `add_source_artifact`, `add_run` and `add_usage_event` in `test_generation_summary.py`).
+
+### A2 (5)
+
+Each keeps its case. `suspended_triggers` in `tests/web_test_support.py` reads the trigger's SQL from `sqlite_master`, drops it, and re-executes that SQL after the flush. The test then reads through the product as before. The helper opens a transaction before the drop when none is open, because in the driver's legacy mode the drop would otherwise autocommit; a rollback after a failed seed therefore restores the trigger. `test_suspended_trigger_is_restored_after_the_block_and_after_a_failed_seed` in `test_generation_summary.py` covers both paths.
+
+| Test | Trigger suspended | Seed |
+|---|---|---|
+| `test_generation_summary::test_active_run_usage_matches_usage_summary_and_refreshes` | `pandrator_execution_scope_usage_events_insert` | the two foreign receipts, one with a foreign session and this run, one with this session and a foreign run |
+| `test_generation_summary::test_latest_assembly_and_cross_session_isolation` | `pandrator_execution_scope_generation_runs_update` | this run's `job_id` set to the foreign job |
+| `test_speech_plan_audio_reuse::test_artifact_path_escape_and_cross_session_artifact_are_rejected` | `pandrator_media_scope_artifacts_update` | the artifact's `session_id` set to a foreign session |
+| `test_generation_operations::test_cross_session_child_and_missing_child_are_never_exposed` | `pandrator_execution_scope_generation_runs_update` | the run moved into this session while its job stays foreign |
+| `test_web_workflow_agent_projection::test_agent_snapshot_combines_kind_and_same_session[foreign-session]` | `pandrator_execution_scope_agent_runs_insert` | a foreign `AgentRun` that links this session's job |
+
+A second trigger showed up in `test_generation_operations`: the old seed created the run in this session with a foreign job, which `pandrator_execution_scope_generation_runs_insert` refuses. The run is now created validly in the foreign session and then moved, so only the update trigger is suspended.
+
+With the matching product defence removed, each test fails (checked by editing it out and restoring it): `generation_summary.py` usage filter on `session_id` and on `generation_run_id` (separately), `generation_summary.py` job join on the session, `speech_plan_audio_reuse.py:394`, `generation_operations.py:142-155` and `workflow_snapshot.py:132` (the `foreign-session` case fails, `wrong-kind` still passes).
+
+`test_execution_scope_consistency` and `test_media_scope_consistency` give the same 21 failed, 2 passed and 67 errors before and after (Q1); neither file imports the helper.
+
+### E1 (4)
+
+Scoped SELECTs, counted by table, are identical at 3 and at 12 segments in all four cases, so the access reads are fixed cost:
+
+| Test | At 3 segments | At 12 segments | Old budget | New budget |
+|---|---|---|---|---|
+| `test_speech_plan_preview` strict-single | 34 | 34 | 25 | 36 |
+| `test_speech_plan_preview` directed-context | 46 | 46 | 35 | 48 |
+| `test_speech_plan_preview` named-cast-context | 47 | 47 | 36 | 49 |
+| `test_speech_selection_context` | 40 | 40 | 30 | 42 |
+
+Each new budget is the measurement plus 2 (the owner's choice, 2026-11-09), with the reason in a comment beside it. The fixed reads are 3 `workspaces`, 2 to 3 `projects`, 2 to 3 `translation_projects`, 3 `workspace_settings` and 2 `session_settings` (the selection context also has 8 `sessions` and 4 `generation_plans`). `test_session_view_performance` does not call these readers, so it is not their guard. The guard is the budgets themselves: with the 3-segment fixture, a read added per segment adds 3, which exceeds the 2 of headroom. The 60-segment bounds in that file (which cover `list_segments` with casting and performance off) still pass; its one failure, `test_catalogue_builds_are_request_scoped_and_bounded`, is D2 and was failing before.
+
 ## Real bugs
 
 ### R1: Alternate take with a different model fails on audio.cpp (in the 135)
