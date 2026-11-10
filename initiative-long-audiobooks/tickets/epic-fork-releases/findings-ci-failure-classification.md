@@ -202,7 +202,7 @@ Windows path length. The fixed suffix below the data root is about 175 character
 
 ## Resolved by story 10
 
-Tests only; no product, migration, lane, CI or dependency change, and no product fault was found, so no backlog bug is filed. Windows 11, Python 3.11, through the `<uv env>` from `AGENTS.md`; the 31 changed files give 547 passed and 17 skipped under SQLAlchemy 2.0.52, and 547 passed and 17 skipped under 2.1.8. `test_sound_composition.py` passed three serial runs and one with `-n 2`. The skips are the existing Windows-only ones: symlink privilege, POSIX SIGTERM and POSIX process-group fixtures. Lane runs and the fork CI result are recorded separately; neither is confirmed here.
+Tests only; no product, migration, lane, CI or dependency change, and no product fault was found, so no backlog bug is filed. Windows 11, Python 3.11, through the `<uv env>` from `AGENTS.md`; the 34 changed files (the 31 planned, plus 3 holding the vacuous subtitle absence checks fixed in review) give 614 passed and 17 skipped under SQLAlchemy 2.0.52, and the same under 2.1.8. `test_sound_composition.py` passed three serial runs and one with `-n 2`. The skips are the existing Windows-only ones: symlink privilege, POSIX SIGTERM and POSIX process-group fixtures. Lane runs and the fork CI result are recorded separately; neither is confirmed here.
 
 | Cluster | Verdict as proved | Edit |
 |---|---|---|

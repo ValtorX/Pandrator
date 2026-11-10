@@ -122,3 +122,35 @@ Pass 1, quick lens: 0 high, 1 medium, 5 low, 1 false, 0 maybe-false. Nothing def
 
 **Manual checks:**
 - On fork CI, `test_web_api_shutdown` and `test_xtts_training_process` pass on Ubuntu. The owner approves the push.
+
+## Code Review
+
+### 2026-11-10
+
+**Code review complete.** 0 `decision-needed`, 6 `patch`, 0 `defer`, 15 rejected. Full diff `e52b79cc..3b85faf0` (34 files), lenses: blind hunter, edge case hunter, verification gap (no gaps), intent alignment.
+
+- [x] [Review][Patch] Kitten preset check keys on a date-in-name heuristic instead of the catalogue's curated list, and a subset check misses reordering [tests/test_audio_cpp_preset_catalogue_wiring.py:19]
+- [x] [Review][Patch] Revision-drift refusal shows no absence of provider side effects (no upload, no link write) [tests/test_voice_reference_setup.py:211]
+- [x] [Review][Patch] Discovery counts are checked only at the end, so discovery inside `configure_tts` would go unnoticed [tests/test_catalogue_discovery_and_run_views.py:96]
+- [x] [Review][Patch] Session creation status is not asserted, so a setup failure surfaces as a KeyError [tests/test_catalogue_discovery_and_run_views.py:318]
+- [x] [Review][Patch] Comment claims every lifecycle write declares its own workspace root and refuses a session root, but only Promote is checked [tests/test_mcp_voice_catalog_workspace.py:362]
+- [x] [Review][Patch] Findings record cites the pre-review run (31 files, 547 passed) instead of the final 34 files, 614 passed [findings-ci-failure-classification.md:205]
+
+Rejected:
+
+- Absence-only `reviewed_*_rN_*.srt` globs could pass vacuously (blind, edge): false. One write site (`subtitle_review.py:1731`), whose format is pinned positively by `test_subtitle_review_preparation.py:422` and `test_web_automation_security`, and the cleanup tests assert the denied unlink hit the real file.
+- Evidence files written to `tmp_path` are never read: low. No behaviour lost, and the fix would add assertions beyond the story.
+- Lease-loss branch checks only the status: false. The same test asserts cleanup and no publication, and reclaim is covered by `test_job_terminal_lease_fencing`.
+- `settings_snapshot=ANY` and stubs that ignore `workspace_id`/`view`: low. ANY is the plan's stated boundary, and the stubs sit in tests about other subjects.
+- `SCHEMA_HEAD >= TARGET` compares strings and does not prove ancestry (blind, edge): low. Ids are zero-padded `NNNN`, and `command.upgrade(..., TARGET)` already fails if TARGET is off the chain.
+- MCP count 230 hard-coded in three files: false. Literal counts are the repo's deliberate tripwire, and the allowlist test covers the mutation split.
+- No 80-character accepted case for Promote's `workspace_id`: low. Same gap as the parametrized sibling, not this change.
+- `test_web_api_shutdown` builds the expected body with `public_project_settings`: low. Its subject is replay identity with the first response.
+- `test_mcp_voice_integration` marks the voice ready by a direct database write: low. A setup shortcut; the fix would need a full provider publish path.
+- 450 and 350 literals not tied to their source tables: false. Tripwire literals are the plan's approach.
+- Read-only clusters proved only by passing test-only edits: false. That is the triage's own V standard, and each verdict cites its commit or sibling test.
+- Findings record does not mark R against V per cluster: low. The table records one verdict per cluster, as Verify asks.
+- No fork CI run shown: false. It needs an owner-approved push and is recorded as pending.
+- `test_catalogue_discovery_and_run_views` no longer covers configure-time discovery: false. `configure_tts` no longer refreshes; catalogue reads became passive by design.
+
+All six patches applied. The four changed test files give 49 passed under SQLAlchemy 2.0.52 and again under 2.1.8 (Windows, `<uv env>`), and `uvx ruff@0.17.3 check tests` passes. Nothing is staged or committed.
