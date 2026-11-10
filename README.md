@@ -49,6 +49,13 @@ code branch checked out in the parent folder.
 
 `backup/repo-instructions.backup.txt` is a copy of the latest `AGENTS.md`.
 
+## Merging upstream and cutting releases
+
+`fork-maintenance.md` is the procedure for merging upstream into fork `main`, cutting a
+`+fork.N` version and keeping upstream PR branches free of fork-only changes.
+`scripts/check_pr_branch.py` reports fork-only changes on a PR branch; its tests are
+`scripts/test_check_pr_branch.py`.
+
 ## Running a fork build
 
 `scripts/fork_slot.py` puts a fork tag into a new version slot of the owner's install and
