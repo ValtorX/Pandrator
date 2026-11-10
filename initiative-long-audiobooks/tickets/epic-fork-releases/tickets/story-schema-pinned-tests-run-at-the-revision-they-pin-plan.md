@@ -3,7 +3,7 @@ title: 'Schema-pinned tests run at the revision they pin'
 type: chore
 ticket: '11'
 created: '2026-11-10'
-status: built
+status: done
 baseline_revision: '84645183cf3b4508ba63353054d7f09c7faab4fc'
 route: full
 route_source: auto
@@ -151,3 +151,7 @@ A seed at an old revision is the test's own data, so it bypasses the ORM: `inser
 - false (intent): The Q3 tests never pinned a revision. The intent describes Q3 as rows that triggers refuse.
 
 All 4 patches applied on 2026-11-10. `uvx ruff@0.17.3 check tests` is clean. The 11 files give 217 passed and 8 failed under SQLAlchemy 2.0.52 and again under 2.1.8. The 8 are Q5's, which story 12 owns, the same result as the build.
+
+### Fork CI
+
+Fork CI, 2026-11-10, at `74312c86` (owner-approved `workflow_dispatch` on `epic-fork-releases`): Python quality run `42908352327` succeeded. Web migration preview run `42908347707` failed in 9 of 65 jobs, against 14 at story 10's run `42851994115`. By test name, pytest failures fell from 205 distinct tests to 5, and none is new. The 5 are `test_generation_ignores_saved_preview_routing_metadata` (backlog `bug-saved-preview-settings-fail-generation`), `test_assembly_select_count_does_not_scale_with_segments` (`bug-assembly-checks-access-for-every-segment`), two `test_web_generation_regeneration` checkpoint tests (`bug-alternate-take-model-refused-on-audio-cpp`) and `test_windows_temp_root::test_restrict_leaves_only_the_current_user`, which failed at story 10's run too and has no owning story or bug. E2E: one failing test per job in both runs, a different one each time (now `epub-content-settings.spec.ts:49` on Ubuntu Firefox and `project-ux.spec.ts:174` on Windows Chromium). Nothing outside `tests/` changed between the two commits, so these are unrelated to this story. None of this story's tests fails on CI, so the story is marked done.

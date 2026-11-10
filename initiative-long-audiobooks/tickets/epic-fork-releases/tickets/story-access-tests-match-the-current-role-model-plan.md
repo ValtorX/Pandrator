@@ -3,7 +3,7 @@ title: 'Access tests match the current role model'
 type: chore
 ticket: '12'
 created: '2026-11-10'
-status: built
+status: done
 baseline_revision: '7bf50f216c2d0f3e603b500d1248d2f773e98153'
 route: full
 route_source: auto
@@ -135,3 +135,7 @@ Rejected:
 - low: the duplicated bootstrap enrolment in two fixtures. A shared helper adds surface for two uses.
 - false: "proof first shown only by green tests". The findings record code citations, the mutation check and each verdict.
 - false: "the 70 exist only as renamed successors". The renames are plan tasks.
+
+### Fork CI
+
+Fork CI, 2026-11-10, at `74312c86` (owner-approved `workflow_dispatch` on `epic-fork-releases`): Python quality run `42908352327` succeeded. Web migration preview run `42908347707` failed in 9 of 65 jobs, against 14 at story 10's run `42851994115`. By test name, pytest failures fell from 205 distinct tests to 5, and none is new. The 5 are `test_generation_ignores_saved_preview_routing_metadata` (backlog `bug-saved-preview-settings-fail-generation`), `test_assembly_select_count_does_not_scale_with_segments` (`bug-assembly-checks-access-for-every-segment`), two `test_web_generation_regeneration` checkpoint tests (`bug-alternate-take-model-refused-on-audio-cpp`) and `test_windows_temp_root::test_restrict_leaves_only_the_current_user`, which failed at story 10's run too and has no owning story or bug. E2E: one failing test per job in both runs, a different one each time (now `epub-content-settings.spec.ts:49` on Ubuntu Firefox and `project-ux.spec.ts:174` on Windows Chromium). Nothing outside `tests/` changed between the two commits, so these are unrelated to this story. None of this story's tests fails on CI, so the story is marked done.
