@@ -317,22 +317,23 @@ def test_registered_copy_to_team_consumes_both_destination_pins_after_creator_le
     source_settings = body(users.alice.get(settings_path))
     source_files = {item.relative_path: hashlib.sha256((f.services.paths.root / item.relative_path).read_bytes()).hexdigest() for item in snapshot.files}
 
-    # Orphans remain opaque and block. A non-current segment slot belongs to
-    # excluded revision history, so it is omitted without blocking. Missing rows
-    # omit the whole ledger; a saved null pin retains its explicit selection.
+    # Cast orphans remain opaque and block. Every segment slot outside the
+    # current plan, here one naming no segment at all, is omitted without
+    # blocking, as excluded revision history is. Missing rows omit the whole
+    # ledger; a saved null pin retains its explicit selection.
     marker = "private body must stay omitted"
     for slot in ('cast:["characters","orphan"]', "segment:00000000-0000-0000-0000-000000000000"):
         with f.case.database.immediate_session() as session:
             session.add(m.ProjectSpeechReference(**{**deepcopy(source_refs[0]), "slot_key": slot, "selector_json": {"private": marker}}))
         with f.case.database.snapshot_session() as session:
-            blocked = capture_with_connections(f.case, session, context, source["project_id"], users.workspace_id, settings_service=f.services.workspace_settings)
-        assert marker not in blocked.state_json
-        unsupported = json.loads(blocked.state_json)["unsupported_counts"].get("project_speech_references", 0)
+            captured = capture_with_connections(f.case, session, context, source["project_id"], users.workspace_id, settings_service=f.services.workspace_settings)
+        assert marker not in captured.state_json
+        unsupported = json.loads(captured.state_json)["unsupported_counts"].get("project_speech_references", 0)
         if slot.startswith("segment:"):
-            assert blocked.ready, blocked.blockers
+            assert captured.ready, captured.blockers
             assert unsupported == 0
         else:
-            assert not blocked.ready and unsupported == 1
+            assert not captured.ready and unsupported == 1
         with f.case.database.immediate_session() as session:
             session.delete(session.get_one(m.ProjectSpeechReference, (source["id"], slot)))
     for missing in (False, True):

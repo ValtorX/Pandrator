@@ -158,7 +158,11 @@ def preview_with_connections(
 
 
 def prepare_legacy_copy_state(state: dict[str, Any]) -> None:
-    """Remove v6 bindings and restore their canonical pre-binding defaults in test state."""
+    """Give test state a pre-v6 shape.
+
+    Drops the row families later versions added, removes the v6 bindings and
+    restores their canonical pre-binding defaults.
+    """
     for family in (
         "generation_plans", "generation_plan_revisions", "generation_segments", "speech_plan_reviews",
         "audio_takes", "project_sound_plans", "project_sound_cues", "sound_variants",

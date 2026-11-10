@@ -771,7 +771,9 @@ def test_artifact_scope_and_in_predicates_are_chunked_at_500(copy_case):
             for index in range(520)
         )
     # Bind the destination models first, so the counted read is one capture.
-    choices = snapshot_destination_connections(_capture(case))
+    bound = _capture(case)
+    assert bound.ready, bound.blockers
+    choices = snapshot_destination_connections(bound)
     statements = []
 
     def record(_conn, _cursor, statement, _params, _context, _many):
