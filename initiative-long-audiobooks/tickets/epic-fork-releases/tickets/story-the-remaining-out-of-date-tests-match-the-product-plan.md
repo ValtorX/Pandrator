@@ -3,7 +3,7 @@ title: 'The remaining out-of-date tests match the product'
 type: chore
 ticket: '10'
 created: '2026-11-10'
-status: built
+status: done
 baseline_revision: 'e52b79cc966127c52febf1f8a97a38eb0f64a424'
 route: full
 route_source: auto
@@ -93,6 +93,7 @@ Proved diffs from planning sit in the session scratchpad, at `C:\Users\Valtor\Ap
 - `test_lanes.py check` and `ruff check tests` pass.
 - No product fault was found, so no backlog bug was filed.
 - Nothing is staged or committed. The findings edits sit uncommitted on `fork-files`.
+- **The ticket's Verify is met on fork run `42851994115`, at `b6de4a351b1352e6d7a11ebd690c921a8b883f3c`.** None of the 34 files fails on Ubuntu or Windows, so the 97 failures they showed in run `42812800328` are gone, and no new test fails. On Ubuntu, `test_web_api_shutdown` (`web-02`, 294 passed) and `test_xtts_training_process` (`web-06`, 467 passed) ran with no skips and passed. The run's conclusion is `failure`, from other stories' known clusters in 11 Python lanes and 3 E2E jobs, none touching this story's files. Python quality run `42852005465` passed.
 
 ## Plan Change Log
 
