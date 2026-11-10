@@ -160,10 +160,12 @@ def _segment_read_scope_parity(
 
 @pytest.mark.parametrize(
     ("casting_enabled", "performance_enabled", "context_mode", "query_budget"),
-    # Full reads include effective assembly boundaries as well as annotations. Each budget is
-    # the count measured on 2026-11-09 plus 2 (34, 46 and 47). The count was identical per
-    # table at 3 and at 12 segments. With this 3-segment fixture, a read added per segment
-    # adds 3, which exceeds the 2 of headroom, so the budget itself fails on such growth.
+    # Full reads include effective assembly boundaries as well as annotations, and fixed
+    # workspace access reads (workspace, project, translation root and settings). Each
+    # budget is the count measured on 2026-11-09 plus 2 (34, 46 and 47). The count was
+    # identical per table at 3 and at 12 segments. With this 3-segment fixture, a read added
+    # per segment adds 3, which exceeds the 2 of headroom, so the budget itself fails on such
+    # growth.
     [(False, False, "off", 36), (False, True, "both", 48), (True, False, "both", 49)],
     ids=["strict-single", "directed-context", "named-cast-context"],
 )

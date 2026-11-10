@@ -11,7 +11,6 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from sqlalchemy import text
-from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session
 
 from pandrator.runtime import DataPaths
@@ -38,7 +37,7 @@ def prepare_web_test_data_root(value: str | Path) -> DataPaths:
 
 
 @contextmanager
-def suspended_triggers(target: Session | Connection, *names: str) -> Iterator[None]:
+def suspended_triggers(session: Session, *names: str) -> Iterator[None]:
     """Drop the named triggers for one block, then restore each from its stored SQL.
 
     Emulates corrupt historical rows that a scope trigger would now refuse. Flush the
@@ -52,18 +51,19 @@ def suspended_triggers(target: Session | Connection, *names: str) -> Iterator[No
     lookup = text("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = :name")
     definitions: list[tuple[str, str]] = []
     for name in names:
-        sql = target.scalar(lookup, {"name": name})
+        sql = session.scalar(lookup, {"name": name})
         assert sql is not None, f"trigger {name!r} does not exist"
         definitions.append((name, sql))
-    connection = target.connection() if isinstance(target, Session) else target
+    connection = session.connection()
     if not connection.connection.dbapi_connection.in_transaction:
         connection.exec_driver_sql("BEGIN")
-    for name, _ in definitions:
-        target.execute(text(f'DROP TRIGGER "{name}"'))
     try:
+        for name, _ in definitions:
+            session.execute(text(f'DROP TRIGGER IF EXISTS "{name}"'))
         yield
     finally:
-        if getattr(target, "is_active", True):
+        # A failed flush leaves the session inactive; its rollback restores the triggers.
+        if session.is_active:
             for name, sql in definitions:
-                if target.scalar(lookup, {"name": name}) is None:
-                    target.execute(text(sql))
+                if session.scalar(lookup, {"name": name}) is None:
+                    session.execute(text(sql))

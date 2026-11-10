@@ -162,13 +162,10 @@ def _add_run(
     kind: str = "translation",
     session_id: str | None = None,
     run_id: str | None = None,
+    corrupt_foreign_job_link: bool = False,
 ) -> str:
+    """Seed an agent run; `corrupt_foreign_job_link` permits a foreign run on this job."""
     identifier = run_id or new_id()
-    foreign_job_link = (
-        session_id is not None
-        and session_id != case.session_id
-        and (job_id is None or job_id == case.job_id)
-    )
     with case.database.session() as session:
         session.add(
             AgentRun(
@@ -182,7 +179,7 @@ def _add_run(
                 updated_at=updated_at,
             )
         )
-        if foreign_job_link:
+        if corrupt_foreign_job_link:
             # A run in another session that links this session's job is corrupt history the
             # database now refuses, so suspend that insert trigger for this one flush.
             with suspended_triggers(session, "pandrator_execution_scope_agent_runs_insert"):
@@ -392,6 +389,7 @@ def test_agent_snapshot_combines_kind_and_same_session(
         updated_at=CURRENT + timedelta(hours=1),
         kind="correction" if excluded == "wrong-kind" else "translation",
         session_id=other_session.id if excluded == "foreign-session" else case.session_id,
+        corrupt_foreign_job_link=excluded == "foreign-session",
     )
     _assert_stage(_measure(case), case, run_id=expected_id, status="failed", resumable=True)
 

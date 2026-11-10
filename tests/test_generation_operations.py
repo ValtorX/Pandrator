@@ -334,8 +334,8 @@ def test_cross_session_child_and_missing_child_are_never_exposed(rig):
         run = session.get(GenerationRun, run_id)
         run.session_id = rig.session_id
         run.plan_revision_id = rig.revision_id
-        # The run moves to this session while its job stays foreign. The database now
-        # refuses that corrupt history, so suspend the update trigger for this one flush.
+        # The run moves to this session while its job stays foreign. The database now refuses
+        # any change of a run's session, so suspend the update trigger for this one flush.
         with suspended_triggers(session, "pandrator_execution_scope_generation_runs_update"):
             session.flush()
         session.get(Job, child_id).payload_json = {"generation_run_id": run_id}

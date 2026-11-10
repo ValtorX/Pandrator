@@ -776,7 +776,7 @@ def test_suspended_trigger_is_restored_after_the_block_and_after_a_failed_seed(s
     assert _trigger_count(services) == 1
 
     with pytest.raises(IntegrityError), services.database.session() as db:
-        # The trigger is the first statement, so only an explicit transaction undoes it.
+        # The drop is the first write, so only an explicit transaction undoes it.
         with suspended_triggers(db, SUSPENDED_TRIGGER):
             db.add(m.Voice(name="No workspace", metadata_json={}))
             db.flush()
