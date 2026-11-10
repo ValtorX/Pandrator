@@ -47,23 +47,26 @@ def suspended_triggers(session: Session, *names: str) -> Iterator[None]:
     any write would otherwise commit on its own, and a failed seed would lose the
     trigger for the rest of the database's life. So a rollback, after a failed flush or
     a later failure, restores the triggers, and a normal exit re-creates them.
+
+    Every statement runs on the session's connection, not the session: SQLAlchemy 2.1
+    autoflushes before text statements too, which would flush the seed before the drop.
     """
     lookup = text("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = :name")
+    connection = session.connection()
     definitions: list[tuple[str, str]] = []
     for name in names:
-        sql = session.scalar(lookup, {"name": name})
+        sql = connection.scalar(lookup, {"name": name})
         assert sql is not None, f"trigger {name!r} does not exist"
         definitions.append((name, sql))
-    connection = session.connection()
     if not connection.connection.dbapi_connection.in_transaction:
         connection.exec_driver_sql("BEGIN")
     try:
         for name, _ in definitions:
-            session.execute(text(f'DROP TRIGGER IF EXISTS "{name}"'))
+            connection.execute(text(f'DROP TRIGGER IF EXISTS "{name}"'))
         yield
     finally:
         # A failed flush leaves the session inactive; its rollback restores the triggers.
         if session.is_active:
             for name, sql in definitions:
-                if session.scalar(lookup, {"name": name}) is None:
-                    session.execute(text(sql))
+                if connection.scalar(lookup, {"name": name}) is None:
+                    connection.execute(text(sql))
