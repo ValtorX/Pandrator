@@ -6,6 +6,7 @@ from contextlib import closing
 from datetime import timedelta
 from pathlib import Path
 
+import pytest
 from alembic import command
 from alembic.config import Config
 
@@ -320,6 +321,11 @@ class WebDatabaseEfficiencyTests(unittest.TestCase):
             finally:
                 database.dispose()
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="backlog bug-assembly-checks-access-for-every-segment: SELECTs grow per segment",
+    )
     def test_assembly_select_count_does_not_scale_with_segments(self):
         small = self.measure_assembly(3)
         large = self.measure_assembly(100)

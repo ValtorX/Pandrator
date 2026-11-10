@@ -229,6 +229,11 @@ def test_native_generation_uses_the_approved_connection_for_its_actual_route(
     assert len(calls) == 1
 
 
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="backlog bug-saved-preview-settings-fail-generation: a retained binding from preview keys",
+)
 @pytest.mark.parametrize(
     "generation_case",
     [

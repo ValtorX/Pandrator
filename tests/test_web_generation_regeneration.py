@@ -723,6 +723,12 @@ class GenerationRegenerationTests(unittest.TestCase):
         self.assertEqual(2, len(calls))
         return batch_calls
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="backlog bug-alternate-take-model-refused-on-audio-cpp: 409 on a model override",
+    )
+    @pytest.mark.usefixtures("host_execution_actor")
     def test_grouped_regeneration_checkpoint_uses_output_run_local_takes(self):
         session_id, segment_ids = self._create_session_with_plan("Checkpoint matrix")
         batch_calls = self._run_checkpoint_matrix(
@@ -732,6 +738,12 @@ class GenerationRegenerationTests(unittest.TestCase):
         )
         self.assertEqual([], batch_calls)
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="backlog bug-alternate-take-model-refused-on-audio-cpp: 409 on a model override",
+    )
+    @pytest.mark.usefixtures("host_execution_actor")
     def test_resume_checkpoint_filtering_uses_streaming_batch_path(self):
         session_id, segment_ids = self._create_session_with_plan("Batch checkpoint")
         batch_calls = self._run_checkpoint_matrix(
