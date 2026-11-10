@@ -137,6 +137,22 @@ Scoped SELECTs, counted by table, are identical at 3 and at 12 segments in all f
 
 Each new budget is the measurement plus 2 (the owner's choice, 2026-11-09), with the reason in a comment beside it. The fixed reads are 3 `workspaces`, 2 to 3 `projects`, 2 to 3 `translation_projects`, 3 `workspace_settings` and 2 `session_settings` (the selection context also has 8 `sessions` and 4 `generation_plans`). `test_session_view_performance` does not call these readers, so it is not their guard. The guard is the budgets themselves: with the 3-segment fixture, a read added per segment adds 3, which exceeds the 2 of headroom. That file's segment-scaling budget for `list_segments` (casting and performance off, at 1, 10 and 50 segments) still passes. Its only 60-segment test, `test_catalogue_builds_are_request_scoped_and_bounded`, is its one failure: D2, failing before and after this story, owned by story 10. So the ticket's "60-segment bounds still pass" clause, read literally, cannot be met until story 10 lands.
 
+## Resolved by story 9
+
+Tests only; no product, migration or schema change. Windows 11, Python 3.11, through the `<uv env>` from `AGENTS.md`. Before the change, the 9 files gave 30 failed, exactly B1 to B9. After it, those files plus `test_project_copy_flow` and `test_project_copy_publication` give 283 passed under SQLAlchemy 2.0.52 and again under 2.1.8. Fork CI is not yet confirmed.
+
+B4 and B6, read only in the triage, were run first at `0a36fe8f`: B4 failed with `copy_graph_invalid` for version 5, and B6 with `assert 4 <= 3`. Both matched the reading.
+
+- **B1:** `_capture_for` goes through `capture_with_connections`. The SQL-counted capture reuses `snapshot_destination_connections` from the previous ready capture, so it is one capture and `len(evidence_sql) == 1` keeps its meaning. The loose match (`test_fingerprinted_snapshot_with_unprojected_evidence_fails_before_insert`) passes with this change alone.
+- **B2:** `prepare_legacy_copy_state` also pops `performance_plans`.
+- **B3:** the tripwires pin 15, and the binding test covers versions 1 to 15, with 6 and up carrying `destination_connections`. The knowledge row count is 31, measured: 27, plus the 3 sound families and `performance_plans`.
+- **B4:** the unsupported version is `COPY_STATE_VERSION + 1`, so it can't fall into the supported set again.
+- **B5:** `audiobook` is the unsupported workflow kind.
+- **B6:** the counted capture is bound beforehand, so the budget stays `<= 3` for 2 chunks.
+- **B7:** in the cast test the orphan cast slot still blocks; a non-current `segment:` slot is now asserted to leave the capture ready, with no unsupported count and the body omitted. The plan test deletes the reference row rather than nulling its pin.
+- **B8:** Bob still trashes the copy. His purge preview, and his purge POST with the owner's valid impact token, are asserted to return 403. Then the workspace owner purges it.
+- **B9:** both cue comparisons drop the read-only `timing_flags` from the media-edit read.
+
 ## Real bugs
 
 ### R1: Alternate take with a different model fails on audio.cpp (in the 135)

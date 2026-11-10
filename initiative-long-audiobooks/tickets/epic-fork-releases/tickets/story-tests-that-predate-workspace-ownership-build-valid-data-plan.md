@@ -3,7 +3,7 @@ title: 'Tests that predate workspace ownership build valid data'
 type: chore
 ticket: '8'
 created: '2026-11-09'
-status: built
+status: done
 baseline_revision: '509c1938e4afa068ca6e44186262f46f67dd9af4'
 route: full
 route_source: auto
