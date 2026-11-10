@@ -127,7 +127,11 @@ def test_scope_roots_do_not_spread_to_the_shared_revision_write_base():
     # carries neither root, and no lifecycle write accepts a session root.
     assert "workspace_id" not in _RevisionWriteInput.model_fields
     assert "session_id" not in _RevisionWriteInput.model_fields
-    assert "session_id" not in PromoteVoiceDesignInput.model_fields
+    lifecycle_writes = _RevisionWriteInput.__subclasses__()
+    assert PromoteVoiceDesignInput in lifecycle_writes
+    for write in lifecycle_writes:
+        assert "workspace_id" in write.model_fields, write.__name__
+        assert "session_id" not in write.model_fields, write.__name__
     base = {
         "voice_id": "voice-1",
         "artifact_id": "artifact-1",

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import re
 import unittest
 from typing import Any, cast
 from unittest.mock import patch
@@ -101,17 +100,18 @@ class AudioCppPresetCatalogueWiringTests(unittest.TestCase):
                 else ["us_male", "us_female", "uk_male", "uk_female"]
             )
             self.assertEqual(expected, AUDIO_CPP_MODEL_PRESETS[model])
+        catalogue_by_id = {item["id"]: item for item in AUDIO_CPP_MODEL_CATALOG}
         for family in ("kitten_tts2", "kugelaudio"):
             for model in models_by_family[family]:
                 self.assertIn(model, AUDIO_CPP_MODEL_PRESETS)
                 family_voices = _voice_id_values(family)
-                if family == "kitten_tts2" and not re.search(r"_\d{8}_", model):
-                    # Older Kitten packages keep their curated 48 voices; only
-                    # the dated packages carry the family's full voice list.
-                    self.assertEqual(48, len(AUDIO_CPP_MODEL_PRESETS[model]))
-                    self.assertLessEqual(
-                        set(AUDIO_CPP_MODEL_PRESETS[model]), set(family_voices)
-                    )
+                curated = catalogue_by_id[model].get("preset_voices")
+                if family == "kitten_tts2" and isinstance(curated, list):
+                    # Older Kitten packages keep their curated 48 voices; packages
+                    # without a curated list carry the family's full voice list.
+                    self.assertEqual(curated, AUDIO_CPP_MODEL_PRESETS[model])
+                    self.assertEqual(48, len(curated))
+                    self.assertLessEqual(set(curated), set(family_voices))
                 else:
                     self.assertEqual(family_voices, AUDIO_CPP_MODEL_PRESETS[model])
         for model, family in model_families.items():

@@ -211,8 +211,17 @@ class VoiceReferenceSetupTests(unittest.TestCase):
         def change_revision(*_):
             with extension["database"].session() as session:
                 session.get(Voice, voice["id"]).revision += 1
-        with self.assertRaisesRegex(ValueError, "sample changed before provider upload"):
+        with extension["database"].session() as session:
+            providers_before = dict((session.get(Voice, voice["id"]).metadata_json or {}).get("providers") or {})
+        with mock.patch.object(handler.tts_providers, "upload_voice") as upload, self.assertRaisesRegex(
+            ValueError, "sample changed before provider upload"
+        ):
             handler.publish_voice(payload, change_revision, threading.Event())
+        upload.assert_not_called()
+        # The drift is refused before the provider is linked, so no registration is written.
+        with extension["database"].session() as session:
+            providers_after = dict((session.get(Voice, voice["id"]).metadata_json or {}).get("providers") or {})
+        self.assertEqual(providers_before, providers_after)
 
     def test_legacy_default_route_also_pins_normalized_sample(self):
         _, voice, _, _, _, prepared, _ = self._designed()

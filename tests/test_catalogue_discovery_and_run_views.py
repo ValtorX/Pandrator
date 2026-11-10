@@ -316,9 +316,11 @@ def test_scoped_mcp_configuration_reaches_backend_without_unrelated_discovery(ap
     client, headers, services = app_case
     configure_old_native(services)
     catalogue = services["tts_catalogue"]
-    session_id = client.post(
+    created = client.post(
         "/api/v1/sessions", json={"name": "Scoped", "workflow_kind": "audiobook"}, headers=headers
-    ).get_json()["id"]
+    )
+    assert created.status_code == 201, created.get_json()
+    session_id = created.get_json()["id"]
     requests = []
 
     class Application(ApplicationVoiceMethods):
@@ -360,6 +362,7 @@ def test_scoped_mcp_configuration_reaches_backend_without_unrelated_discovery(ap
     # Catalogue reads are passive: discovery of the new model runs only through the
     # explicit, scoped refresh, which the configuration then reads back.
     refresh_tts_catalog(runtime, TtsCatalogRefreshInput(service_id="AUDIO-CPP"))
+    assert health_probe.call_count == discover.call_count == 1
     result = configure_tts(runtime, ConfigureTtsInput(
         session_id=session_id, service_id="AUDIO-CPP", model=BREEZE, voice="native",
         expected_revision=4, idempotency_key="scoped-configuration",
