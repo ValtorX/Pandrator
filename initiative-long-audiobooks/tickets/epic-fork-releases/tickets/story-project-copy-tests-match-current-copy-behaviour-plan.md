@@ -3,7 +3,7 @@ title: 'Project copy tests match current copy behaviour'
 type: chore
 ticket: '9'
 created: '2026-11-10'
-status: built
+status: done
 baseline_revision: '0a36fe8f0fa07887e1784d321162153d35ad4ef7'
 route: oneshot
 route_source: auto
@@ -86,3 +86,38 @@ Pass 1, quick lens: 0 high, 1 medium, 2 low, 1 false, 0 maybe-false. Nothing def
 
 **Manual checks:**
 - Fork CI needs a push the owner approves; the owner confirms the 30 pass there.
+
+## Code Review
+
+### 2026-11-10
+
+Full review of `0a36fe8f..20b9ee08` with four lenses (blind hunter, edge case hunter, verification gap, intent alignment); none failed, and the verification-gap lens found no gaps. **Code review complete.** 0 `decision-needed`, 3 `patch`, 0 `defer`, 16 rejected.
+
+- [x] [Review][Patch] The cast test's comment called a segment slot naming no segment "non-current revision history", and its `blocked` variable held a ready capture. `copy_snapshot.py:372-375` omits every `segment:%` slot. The comment now says so, and the variable is `captured`. [tests/test_project_cast_copy.py:320]
+- [x] [Review][Patch] The chunking test took binding choices from a capture it never checked was ready; it now asserts readiness first, as the evidence test does. [tests/test_project_copy_snapshot.py:774]
+- [x] [Review][Patch] The `prepare_legacy_copy_state` docstring named only the v6 bindings; it now also names the dropped row families. [tests/project_copy_test_support.py:161]
+
+After the patches, on Windows through the `<uv env>`: the 9 files plus `test_project_copy_flow` and `test_project_copy_publication` give 283 passed under SQLAlchemy 2.0.52. The three changed test files give 85 passed under 2.1.8. Ruff passes on the changed files.
+
+Rejected:
+
+- Derive the binding test's versions from `SUPPORTED_COPY_STATE_VERSIONS` (false): the literal list is the frozen-contract guard, and the `== 15` tripwire forces a revisit at the next bump. Replacing the count of 31 with a key set (low) would add bulk for a rarely seen message.
+- `state()` uses `>= 6` while the product uses a closed set (false): they agree for versions 1 to 15. The durable codec rejects other versions first.
+- B4 lost a supported-older-version case (false): the test always expected `copy_input_invalid`, and 5 failed with `copy_graph_invalid`.
+- Version-blind family stripping in `prepare_legacy_copy_state` (false): every caller targets version 1, 2 or 3.
+- Speech-plan test lost null-pin coverage (false): `test_project_cast_copy.py:340-354` asserts a null pin is retained.
+- Purge test gaps (false):
+  - Role coverage is in `test_purge_workspace_http.py:104-146`.
+  - The repository's purge tests assert the status code only, and Bob's requests can only be refused on permission.
+  - The owner's purge requires the trashed copy.
+  - `_purge` does use `f`.
+- `timing_flags` could vanish in a copy (false): they are computed on read (`media_edit.py:604-618`), never stored.
+- The speech-plan test might delete a non-cast slot (false): the test's own `generation_plans` blocker only occurs when a cast slot is removed.
+- `_stored_cues` raises on non-mapping cues (false): this fixture's cues are all mappings.
+- Intent lens (false, descriptive):
+  - The Verify outcome lives outside the diff; it is recorded here and in the findings file.
+  - Bound single-pass budgets are the frozen intent's decision.
+  - The 5 added version IDs are intended coverage.
+  - The B7 and B8 assertions follow the Approach.
+  - B4 must name an unsupported version, so it cannot be a literal.
+  - The R8 adjudication is in the classification.
