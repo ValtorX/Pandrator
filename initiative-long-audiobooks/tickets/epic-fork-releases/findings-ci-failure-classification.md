@@ -139,7 +139,7 @@ Each new budget is the measurement plus 2 (the owner's choice, 2026-11-09), with
 
 ## Resolved by story 9
 
-Tests only; no product, migration or schema change. Windows 11, Python 3.11, through the `<uv env>` from `AGENTS.md`. Before the change, the 9 files gave 30 failed, exactly B1 to B9. After it, those files plus `test_project_copy_flow` and `test_project_copy_publication` give 283 passed under SQLAlchemy 2.0.52 and again under 2.1.8. Fork CI is not yet confirmed.
+Tests only; no product, migration or schema change. Windows 11, Python 3.11, through the `<uv env>` from `AGENTS.md`. Before the change, the 9 files gave 30 failed, exactly B1 to B9. After it, those files plus `test_project_copy_flow` and `test_project_copy_publication` give 283 passed under SQLAlchemy 2.0.52 and again under 2.1.8. Fork run `42812800328` (2026-11-10, `20b9ee08`, SQLAlchemy 2.1.8 from ranges) gives `web-07-serial` 880 passed and none failed on both Ubuntu and Windows; the lane holds all 10 copy files. 880 is story 4's 875 plus the 5 added versions (11 to 15) in the binding test.
 
 B4 and B6, read only in the triage, were run first at `0a36fe8f`: B4 failed with `copy_graph_invalid` for version 5, and B6 with `assert 4 <= 3`. Both matched the reading.
 
