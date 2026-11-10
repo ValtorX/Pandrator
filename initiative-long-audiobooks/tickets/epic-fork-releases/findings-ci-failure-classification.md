@@ -108,6 +108,8 @@ Every seed takes its ownership from the product's resolvers: `job_creation_owner
 
 Each keeps its case. `suspended_triggers` in `tests/web_test_support.py` reads the trigger's SQL from `sqlite_master`, drops it, and re-executes that SQL after the flush. The test then reads through the product as before. The helper opens a transaction before the drop when none is open, because in the driver's legacy mode the drop would otherwise autocommit; a rollback after a failed seed therefore restores the trigger. `test_suspended_trigger_is_restored_after_the_block_and_after_a_failed_seed` in `test_generation_summary.py` covers both paths.
 
+Fork run `42736246543` (2026-11-10, SQLAlchemy 2.1.8 from ranges) failed all 5: under 2.1, `Session.scalar(text(...))` autoflushes, so the helper's trigger lookup flushed the corrupt seed before the drop. The other 32 passed on Ubuntu and Windows. The helper now runs every statement on the session's connection, which never autoflushes; the 7 files give 89 passed locally under both 2.0.52 and 2.1.8.
+
 | Test | Trigger suspended | Seed |
 |---|---|---|
 | `test_generation_summary::test_active_run_usage_matches_usage_summary_and_refreshes` | `pandrator_execution_scope_usage_events_insert` | the two foreign receipts, one with a foreign session and this run, one with this session and a foreign run |
