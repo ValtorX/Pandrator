@@ -103,7 +103,7 @@ The seed must flush inside the block, since SQLite fires triggers at statement t
 ## Implementation Notes
 
 - A subagent implemented the plan; I checked its diff and reran the Verification commands. Environment: `<uv env>` with SQLAlchemy 2.0.52, Python 3.11, Windows, `PYTEST_ADDOPTS` unset; FFmpeg not checked.
-- Results: the 7 files give 89 passed (the 37, the 51 others, and one new helper test). `test_session_view_performance` gives 20 passed and 1 failed: `test_catalogue_builds_are_request_scoped_and_bounded`, cluster D2 (story 10). The 60-segment bounds pass. The scope files give 21 failed, 2 passed and 67 errors, the same as baseline (Q1, story 11). Lanes check and ruff pass.
+- Results: the 7 files give 89 passed (the 37, the 51 others, and one new helper test). `test_session_view_performance` gives 20 passed and 1 failed: `test_catalogue_builds_are_request_scoped_and_bounded`, cluster D2 (story 10). That failing test is the file's only 60-segment test, so the ticket's 60-segment clause waits on story 10; the `list_segments` scaling budget (1, 10 and 50 segments) passes. The scope files give 21 failed, 2 passed and 67 errors, the same as baseline (Q1, story 11). Lanes check and ruff pass.
 - A2 triggers suspended: `pandrator_execution_scope_usage_events_insert` and `pandrator_execution_scope_generation_runs_update` (`test_generation_summary`), `pandrator_media_scope_artifacts_update` (`test_speech_plan_audio_reuse`), `pandrator_execution_scope_generation_runs_update` (`test_generation_operations`), `pandrator_execution_scope_agent_runs_insert` (`test_web_workflow_agent_projection`). The operations seed also tripped `pandrator_execution_scope_generation_runs_insert`; the run is now created validly in the foreign session and then moved, so only the update trigger is suspended. The subagent removed each product defence in turn and saw its test fail, then restored it (`git diff pandrator` is empty).
 - E1: scoped SELECT counts by table were identical at 3 and 12 segments. Budgets 36, 48, 49 and 42 (measured 34, 46, 47 and 40, plus 2), with the reason beside each.
 - Fix after implementation: in the driver's legacy transaction mode, a `DROP TRIGGER` issued before any write commits on its own, so a seed whose flush failed lost the trigger for good (shown by a probe). `suspended_triggers` now opens a transaction first. `test_suspended_trigger_is_restored_after_the_block_and_after_a_failed_seed` in `tests/test_generation_summary.py` covers the matrix's restore-on-failure row; that file is now LF in the working tree, which matches the index.
@@ -123,3 +123,29 @@ Pass 1, quick lens: 0 high, 1 medium, 2 low, 2 false, 0 maybe-false. Nothing def
 | Fork CI half of the ticket's Verify is not met | false | reject | Not a defect in the change: the plan leaves it to the owner, because it needs a push they approve. |
 | `test_speech_plan_audio_reuse` resolves ownership inline in two seeds rather than through one helper | low | reject | Cosmetic; both use the product resolver as required, and a helper adds code for no behaviour change. |
 
+
+## Code Review
+
+### 2026-11-09
+
+Code review complete. 0 `decision-needed`, 6 `patch`, 0 `defer`, 10 rejected. Lenses: blind-hunter, edge-case-hunter, verification-gap (no gaps), intent-alignment; diff `509c1938..91089b2d`.
+
+- [x] [Review][Patch] The "60-segment bounds" Verify clause is recorded against the wrong test: the only 60-segment test is `test_catalogue_builds_are_request_scoped_and_bounded` (D2, failing, story 10); the passing `list_segments` budget runs at 1, 10 and 50. Correct the findings file and the Implementation Notes [tests/test_session_view_performance.py:967]
+- [x] [Review][Patch] `suspended_triggers` accepts a `Connection` it cannot guard (no `is_active`) and drops triggers before `try`, so a failed drop leaves earlier ones unrestored [tests/web_test_support.py:446]
+- [x] [Review][Patch] `_add_run` infers when to suspend the agent-run trigger; a foreign session with an artifact silently skips the artifact checks, and one with another job raises. Make it an explicit opt-in at the one call site [tests/test_web_workflow_agent_projection.py:167]
+- [x] [Review][Patch] E1 budget comments give the derivation but not the cause (the workspace access reads) [tests/test_speech_plan_preview.py:163]
+- [x] [Review][Patch] Operations seed comment says the update trigger refuses the foreign job; it first refuses any session change ('generation session is immutable') [tests/test_generation_operations.py:331]
+- [x] [Review][Patch] Helper test comment says the trigger is the first statement; the `sqlite_master` lookup runs first, the drop is the first write [tests/test_generation_summary.py:200]
+
+Rejected:
+- Inline trigger drops elsewhere not migrated to the helper (low): outside scope; the scope-consistency files belong to story 11 and `test_job_access_policy`'s drop predates this change.
+- Voice seed bypasses `voice_creation_workspace` (false): the plan names `session_project(...).workspace_id` for this seed.
+- `refused_by_scope_trigger` suspends the whole trigger and names the mechanism (low): whole-trigger suspension is the plan's design for every A2 seed; the rename is cosmetic.
+- Zero trigger names accepted (low): harmless no-op, never visible.
+- Helper test's two lookups filter differently (low): both agree for this name; cosmetic.
+- Headroom argument assumes the selection reader touches all 3 segments (false): any read added per fixture segment adds 3 whatever the reader touches today.
+- Defence-existence proof is outside the diff (false): the plan requires it in the findings file, where it is.
+- Title "valid data" vs A2 corrupt seeds (false): the ticket description authorises trigger suspension; fixing it would edit the intent.
+- Windows and fork CI evidence not in the diff (false): fork CI needs an owner-approved push and is recorded as pending.
+- E1 taken as stale on moderate confidence (false): the two-count measurement settles fixed cost, and the numbers are the owner's decision.
+- Also not taken, inside kept findings: helper-test placement (the plan forbids a new test file), extra helper-test paths, and a test enforcing the 3-versus-12 claim (added complexity for no defect).
