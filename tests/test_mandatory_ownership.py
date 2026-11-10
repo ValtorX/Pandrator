@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,7 @@ from pandrator.web.models import (
     WorkspaceSettingHistory,
 )
 from pandrator.web.projects.identity import session_project
+from tests.web_test_support import get_at_revision, insert_at_revision, present_columns
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS = ROOT / "pandrator" / "web" / "migrations"
@@ -235,8 +237,9 @@ def _populate_valid_graph(path: Path) -> dict[str, str]:
                 provider_key="fixture-provider",
                 label="Fixture provider",
             )
-            session.add_all([artifact, job, folder, source_asset, provider])
+            session.add_all([artifact, folder, source_asset, provider])
             session.flush()
+            insert_at_revision(session, job)
 
             voice = Voice(
                 id=ids["voice"],
@@ -259,6 +262,21 @@ def _populate_valid_graph(path: Path) -> dict[str, str]:
             session.add_all([voice, sound_item, collection])
             session.flush()
 
+            insert_at_revision(
+                session,
+                UploadSessionRecord(
+                    id=ids["upload"],
+                    workspace_id=workspace.id,
+                    project_id=project.id,
+                    session_id=project_session.id,
+                    filename="retained.wav",
+                    size_bytes=3,
+                    chunk_size=3,
+                    chunk_count=1,
+                    temporary_relative_path="uploads/retained.wav",
+                    expires_at=now + timedelta(hours=1),
+                ),
+            )
             session.add_all(
                 [
                     ProjectFolderMembership(
@@ -266,18 +284,6 @@ def _populate_valid_graph(path: Path) -> dict[str, str]:
                         project_session_id=project_session.id,
                         project_id=project.id,
                         position=0,
-                    ),
-                    UploadSessionRecord(
-                        id=ids["upload"],
-                        workspace_id=workspace.id,
-                        project_id=project.id,
-                        session_id=project_session.id,
-                        filename="retained.wav",
-                        size_bytes=3,
-                        chunk_size=3,
-                        chunk_count=1,
-                        temporary_relative_path="uploads/retained.wav",
-                        expires_at=now + timedelta(hours=1),
                     ),
                     ResearchCacheEntry(
                         cache_key="a" * 64,
@@ -823,3 +829,94 @@ def test_late_failure_rolls_back_replacements_and_retry_succeeds(
     _assert_root_shapes(path, nullable=False)
     assert _table_data_snapshot(path) == rows_before
     _assert_foreign_keys_clean(path)
+
+
+@pytest.fixture
+def database_at_0074(schema_at_0074: Path, tmp_path: Path) -> Iterator[tuple[Database, str]]:
+    """A database held at 0074, which lacks both `external_effect_json` and `attach_to_session`."""
+    path = tmp_path / "helpers-0074.sqlite"
+    _copy_sqlite(schema_at_0074, path)
+    database = Database(path)
+    try:
+        with database.session() as session:
+            workspace = Workspace(kind="team", name="Helper workspace")
+            session.add(workspace)
+            session.flush()
+            workspace_id = workspace.id
+        yield database, workspace_id
+    finally:
+        database.dispose()
+
+
+def test_insert_at_revision_seeds_defaults_and_makes_the_id_readable(
+    database_at_0074: tuple[Database, str],
+) -> None:
+    database, workspace_id = database_at_0074
+    job = Job(kind="helper.job", workspace_id=workspace_id, payload_json={"a": 1})
+    upload = UploadSessionRecord(
+        workspace_id=workspace_id,
+        filename="helper.wav",
+        size_bytes=1,
+        chunk_size=1,
+        chunk_count=1,
+        temporary_relative_path="uploads/helper.wav",
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    with database.session() as session:
+        assert not present_columns(session.connection(), "jobs") & {"external_effect_json", "attach_to_session"}
+        assert "attach_to_session" not in present_columns(session.connection(), "upload_sessions")
+        insert_at_revision(session, job, upload)
+        assert job.id and upload.id
+        job_id, upload_id = job.id, upload.id
+
+    with database.session() as session:
+        row = session.connection().exec_driver_sql(
+            "SELECT kind, status, payload_json, resource_keys_json, progress, attempts,"
+            " max_attempts, created_at FROM jobs WHERE id = ?",
+            (job_id,),
+        ).one()
+        assert row[:7] == ("helper.job", "queued", '{"a": 1}', "[]", 0.0, 0, 1)
+        assert row[7] is not None
+        state = session.connection().exec_driver_sql(
+            "SELECT state, received_json FROM upload_sessions WHERE id = ?", (upload_id,)
+        ).one()
+        assert tuple(state) == ("open", "{}")
+
+
+def test_insert_at_revision_stores_an_explicit_none_instead_of_the_default(
+    database_at_0074: tuple[Database, str],
+) -> None:
+    database, workspace_id = database_at_0074
+    job = Job(kind="helper.job", workspace_id=workspace_id, status=None)  # type: ignore[arg-type]
+    with database.session() as session:
+        with pytest.raises(sa.exc.IntegrityError, match="NOT NULL constraint failed: jobs.status"):
+            insert_at_revision(session, job)
+
+
+def test_insert_at_revision_rejects_an_attribute_the_revision_lacks(
+    database_at_0074: tuple[Database, str],
+) -> None:
+    database, workspace_id = database_at_0074
+    job = Job(kind="helper.job", workspace_id=workspace_id, external_effect_json={"x": 1})
+    with database.session() as session:
+        with pytest.raises(AssertionError, match=r"jobs\.external_effect_json"):
+            insert_at_revision(session, job)
+
+
+def test_get_at_revision_loads_the_row_and_raises_for_a_missing_attribute(
+    database_at_0074: tuple[Database, str],
+) -> None:
+    database, workspace_id = database_at_0074
+    job = Job(kind="helper.job", workspace_id=workspace_id)
+    with database.session() as session:
+        insert_at_revision(session, job)
+    with database.session() as session:
+        loaded = get_at_revision(session, Job, job.id)
+        assert loaded is not None
+        assert loaded.id == job.id
+        assert loaded.kind == "helper.job"
+        assert loaded.workspace_id == workspace_id
+        with pytest.raises(AttributeError, match="external_effect_json"):
+            loaded.external_effect_json  # noqa: B018
+        assert get_at_revision(session, Job, "missing") is None
+

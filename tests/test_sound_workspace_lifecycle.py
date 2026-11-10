@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 import threading
 import wave
 from collections.abc import Iterator
@@ -12,9 +11,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from alembic import command
-from alembic.config import Config
-from sqlalchemy import select
+from sqlalchemy import create_engine, select, update
+from sqlalchemy.orm import Session
 
 from pandrator.logic import audio_cpp_sfx
 from pandrator.runtime import DataPaths
@@ -33,15 +31,7 @@ from pandrator.web.sound_imports import (
     prepare_import,
 )
 from pandrator.web.sound_service import SoundService
-from tests.web_test_support import prepare_web_test_data_root
-
-
-def _use_pre_library_schema(database: Database) -> None:
-    """Exercise stored-corruption defenses before the library constraints."""
-    config = Config()
-    config.set_main_option("script_location", str(Path(__file__).parents[1] / "pandrator/web/migrations"))
-    config.set_main_option("sqlalchemy.url", sqlite_url(database.path))
-    command.downgrade(config, "0077_media_scope_consistency")
+from tests.web_test_support import prepare_web_test_data_root, suspended_triggers
 
 
 @dataclass
@@ -130,7 +120,9 @@ def _new_variant(
     state: str = "discarded",
     fingerprint: str | None = None,
     artifact_id: str | None = None,
+    corrupt: bool = False,
 ) -> str:
+    """Insert a variant; `corrupt` writes one the library scope trigger would refuse."""
     with database.immediate_session() as session:
         variant = SoundVariant(
             workspace_id=workspace_id,
@@ -141,7 +133,11 @@ def _new_variant(
             provenance_json={"operation": "test"},
         )
         session.add(variant)
-        session.flush()
+        if corrupt:
+            with suspended_triggers(session, "pandrator_library_scope_sound_variants_insert"):
+                session.flush()
+        else:
+            session.flush()
         variant_id = variant.id
     return variant_id
 
@@ -342,17 +338,19 @@ def test_foreign_preferred_variant_is_never_projected(domain):
     workspace_a = _workspace(domain.database, "Preferred workspace A")
     workspace_b = _workspace(domain.database, "Preferred workspace B")
     item_id = _new_item(domain.database, workspace_id=workspace_a, name="Owned sound")
-    _use_pre_library_schema(domain.database)
     foreign_variant = _new_variant(
         domain.database,
         workspace_id=workspace_b,
         item_id=item_id,
         state="ready",
+        corrupt=True,
     )
     with domain.database.immediate_session() as session:
         item = session.get(SoundItem, item_id)
         assert item is not None
-        item.preferred_variant_id = foreign_variant
+        with suspended_triggers(session, "pandrator_library_scope_sound_items_update"):
+            item.preferred_variant_id = foreign_variant
+            session.flush()
 
     with pytest.raises(ValueError, match="preferred variant"):
         domain.sounds.get_sound(item_id, workspace_id=workspace_a)
@@ -408,13 +406,13 @@ def test_cross_workspace_commands_reject_before_any_change_even_when_committed(d
 
     # Model a tampered preferred link: the row FK is valid, but its variant
     # carries a different owner. Validation must happen before item edits.
-    _use_pre_library_schema(domain.database)
     foreign_preferred = _new_variant(
         domain.database,
         workspace_id=workspace_b,
         item_id=item_a,
         state="ready",
         artifact_id=artifacts[workspace_b],
+        corrupt=True,
     )
     before = _command_snapshot(domain.database)
 
@@ -619,14 +617,20 @@ def test_missing_persisted_candidate_workspace_stops_worker_before_provider(doma
     receipt = _admit(domain, request, workspace_id=workspace_id)
     payload, worker_id = _claim(domain, receipt)
 
-    _use_pre_library_schema(domain.database)
+    # A session on a plain engine leaves foreign keys off, as the legacy row had them.
     domain.database.dispose()
-    with sqlite3.connect(domain.paths.database) as connection:
-        connection.execute("PRAGMA foreign_keys = OFF")
-        connection.execute(
-            "UPDATE sound_variants SET workspace_id = ? WHERE id = ?",
-            ("missing-sound-workspace", receipt["candidate_id"]),
-        )
+    engine = create_engine(sqlite_url(domain.paths.database))
+    try:
+        with Session(engine) as session:
+            with suspended_triggers(session, "pandrator_library_scope_sound_variants_update"):
+                session.execute(
+                    update(SoundVariant)
+                    .where(SoundVariant.id == receipt["candidate_id"])
+                    .values(workspace_id="missing-sound-workspace")
+                )
+            session.commit()
+    finally:
+        engine.dispose()
 
     with pytest.raises(ValueError, match="missing workspace"):
         _run(domain, payload, worker_id)
@@ -636,7 +640,6 @@ def test_missing_persisted_candidate_workspace_stops_worker_before_provider(doma
 
 
 def test_worker_rechecks_candidate_workspace_before_publication(domain, monkeypatch):
-    _use_pre_library_schema(domain.database)
     workspace_id = _workspace(domain.database, "Publication sound workspace")
     tampered_workspace_id = _workspace(domain.database, "Tampered sound workspace")
     request = {"prompt": "tamper during synthetic generation", "seed": 108}
@@ -654,7 +657,9 @@ def test_worker_rechecks_candidate_workspace_before_publication(domain, monkeypa
         with domain.database.immediate_session() as session:
             candidate = session.get(SoundVariant, receipt["candidate_id"])
             assert candidate is not None
-            candidate.workspace_id = tampered_workspace_id
+            with suspended_triggers(session, "pandrator_library_scope_sound_variants_update"):
+                candidate.workspace_id = tampered_workspace_id
+                session.flush()
         return properties
 
     monkeypatch.setattr(audio_cpp_sfx, "generate_sound", tampering_generator)
@@ -682,15 +687,13 @@ def test_ready_replay_rejects_artifact_from_another_workspace(domain, monkeypatc
     assert result["status"] == "ready"
     assert len(outputs) == 1
 
-    # Keep current-schema generation coverage, then exercise the legacy replay fence.
-    config = Config()
-    config.set_main_option("script_location", str(Path(__file__).parents[1] / "pandrator/web/migrations"))
-    config.set_main_option("sqlalchemy.url", sqlite_url(domain.database.path))
-    command.downgrade(config, "0076_project_graph_consistency")
+    # Exercise the legacy replay fence: change the owner with the media scope trigger suspended.
     with domain.database.immediate_session() as session:
         artifact = session.get(Artifact, result["artifact_id"])
         assert artifact is not None
-        artifact.workspace_id = foreign_workspace_id
+        with suspended_triggers(session, "pandrator_media_scope_artifacts_update"):
+            artifact.workspace_id = foreign_workspace_id
+            session.flush()
 
     with pytest.raises(ValueError, match="different workspace ownership"):
         _run(domain, payload, worker_id)

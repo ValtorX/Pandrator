@@ -35,7 +35,7 @@ from pandrator.web.training_lifecycle import TrainingNotFound, TrainingService
 from pandrator.web.training_publication import require_training_claim
 from pandrator.web.voice_recording_uploads import queue_voice_recording
 from pandrator.web.workflow_handlers import WorkflowHandlers
-from tests.web_test_support import prepare_web_test_data_root
+from tests.web_test_support import prepare_web_test_data_root, suspended_triggers
 
 
 def _wav_bytes() -> bytes:
@@ -257,13 +257,11 @@ def test_retry_and_cancel_validate_all_retained_training_links_before_refresh(
     run, _ = case.training.start(
         _training_request(source.id, voice_id=alpha_voice.id), workspace_id=alpha
     )
-    # The live admission remains current; retained corrupt links use their predecessor.
-    config = Config()
-    config.set_main_option("script_location", str(Path(__file__).parents[1] / "pandrator/web/migrations"))
-    config.set_main_option("sqlalchemy.url", sqlite_url(case.database.path))
-    command.downgrade(config, "0077_media_scope_consistency")
+    # The live admission stays current; the retained corrupt link is written under the trigger.
     with case.database.session() as session:
-        session.get(TrainingRun, run.id).voice_id = beta_voice.id
+        with suspended_triggers(session, "pandrator_library_scope_training_runs_update"):
+            session.get(TrainingRun, run.id).voice_id = beta_voice.id
+            session.flush()
     before = _rows(case, TrainingRun, Job)
 
     with pytest.raises(TrainingNotFound):

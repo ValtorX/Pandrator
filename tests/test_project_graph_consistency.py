@@ -34,6 +34,7 @@ from pandrator.web.project_folders import (
 )
 from pandrator.web.projects.identity import create_session_project
 from pandrator.web.projects.models import Project
+from tests.web_test_support import get_at_revision, insert_at_revision
 
 MIGRATIONS = Path(__file__).parents[1] / "pandrator" / "web" / "migrations"
 TARGET_REVISION = "0076_project_graph_consistency"
@@ -227,22 +228,25 @@ def _make_valid_predecessor(path: Path) -> dict[str, str]:
             )
             session.add(retained_root)
             session.flush()
+            insert_at_revision(
+                session,
+                Job(
+                    id=IDS["retained_job"],
+                    kind="fixture.retained",
+                    workspace_id=workspace.id,
+                    project_id=retained_root.id,
+                    session_id=None,
+                ),
+                Job(
+                    id=IDS["standalone_job"],
+                    kind="fixture.standalone",
+                    workspace_id=workspace.id,
+                    project_id=standalone_root.id,
+                    session_id=None,
+                ),
+            )
             session.add_all(
                 [
-                    Job(
-                        id=IDS["retained_job"],
-                        kind="fixture.retained",
-                        workspace_id=workspace.id,
-                        project_id=retained_root.id,
-                        session_id=None,
-                    ),
-                    Job(
-                        id=IDS["standalone_job"],
-                        kind="fixture.standalone",
-                        workspace_id=workspace.id,
-                        project_id=standalone_root.id,
-                        session_id=None,
-                    ),
                     UsageEvent(
                         id=IDS["retained_usage"],
                         workspace_id=workspace.id,
@@ -504,7 +508,7 @@ def test_populated_graph_upgrade_preserves_rows_and_normal_producers(
             standalone_root = session.get(Project, ids["standalone_root"])
             assert standalone_root is not None
             assert standalone_root.source_session_id is None
-            standalone_job = session.get(Job, IDS["standalone_job"])
+            standalone_job = get_at_revision(session, Job, IDS["standalone_job"])
             assert standalone_job is not None
             assert standalone_job.project_id == standalone_root.id
             usage = session.get(UsageEvent, IDS["standalone_usage"])
@@ -512,7 +516,7 @@ def test_populated_graph_upgrade_preserves_rows_and_normal_producers(
             assert usage.project_id == standalone_root.id
             retained_root = session.get(Project, ids["retained_root"])
             assert retained_root is not None and retained_root.source_session_id is None
-            retained_job = session.get(Job, IDS["retained_job"])
+            retained_job = get_at_revision(session, Job, IDS["retained_job"])
             assert retained_job is not None
             assert retained_job.project_id == retained_root.id
             retained_usage = session.get(UsageEvent, IDS["retained_usage"])

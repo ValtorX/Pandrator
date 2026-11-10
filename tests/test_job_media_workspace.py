@@ -28,7 +28,11 @@ from pandrator.web.models import Artifact, Job, Project, SessionRecord, Workspac
 from pandrator.web.projects.identity import delete_empty_project
 from pandrator.web.sessions import SessionService
 from pandrator.web.video_previews import VideoInfo
-from tests.web_test_support import prepare_web_test_data_root
+from tests.web_test_support import (
+    get_at_revision,
+    prepare_web_test_data_root,
+    suspended_triggers,
+)
 
 
 @dataclass
@@ -267,30 +271,49 @@ def test_retained_job_checks_reject_inconsistent_roots_without_repair(
     media_jobs: MediaJobs, corruption: str
 ) -> None:
     harness = media_jobs
-    if corruption in {"no_workspace", "source_missing_with_survivor"}:
-        # Current constraints reject these writes; keep the legacy reader fence.
-        predecessor = (
-            "0074_actor_attribution" if corruption == "no_workspace" else "0075_mandatory_ownership"
-        )
+    job = harness.queue.enqueue("test.retained", session_id=harness.sessions["alpha"].id)
+    if corruption == "no_workspace":
+        # NOT NULL from 0075 makes this state impossible at head, so it stays at 0074.
+        # `job_ownership` raises on the missing workspace before it runs any query, so
+        # the old schema is only read by the test, through `get_at_revision`.
         config = Config()
         config.set_main_option("script_location", str(Path(__file__).parents[1] / "pandrator/web/migrations"))
         config.set_main_option("sqlalchemy.url", sqlite_url(harness.database.path))
-        command.downgrade(config, predecessor)
-    job = harness.queue.enqueue("test.retained", session_id=harness.sessions["alpha"].id)
+        harness.database.dispose()
+        command.downgrade(config, "0074_actor_attribution")
+        with harness.database.immediate_session() as session:
+            session.connection().exec_driver_sql(
+                "UPDATE jobs SET workspace_id = NULL WHERE id = ?", (job.id,)
+            )
+        with harness.database.session() as session:
+            record = get_at_revision(session, Job, job.id)
+            assert record is not None
+            expected = (None, record.project_id, record.session_id)
+            with pytest.raises(ValueError, match="no stored workspace ownership"):
+                job_ownership(session, record, allow_archived=True)
+            assert (record.workspace_id, record.project_id, record.session_id) == expected
+        return
+
+    # Product code runs at head, whose triggers refuse these writes: write them suspended.
     with harness.database.immediate_session() as session:
         record = session.get(Job, job.id)
         assert record is not None
-        if corruption == "no_workspace":
-            record.workspace_id = None
-        elif corruption == "no_project":
-            record.project_id = None
-        elif corruption == "different_session":
-            record.session_id = harness.sessions["beta"].id
-        else:
-            record.session_id = None
-            project = session.get(Project, record.project_id)
-            assert project is not None
-            project.source_session_id = None
+        with suspended_triggers(
+            session,
+            "pandrator_execution_scope_jobs_update",
+            "pandrator_library_scope_jobs_update",
+            "pandrator_project_graph_projects_update",
+        ):
+            if corruption == "no_project":
+                record.project_id = None
+            elif corruption == "different_session":
+                record.session_id = harness.sessions["beta"].id
+            else:
+                record.session_id = None
+                project = session.get(Project, record.project_id)
+                assert project is not None
+                project.source_session_id = None
+            session.flush()
         expected = (record.workspace_id, record.project_id, record.session_id)
     with harness.database.session() as session:
         record = session.get(Job, job.id)

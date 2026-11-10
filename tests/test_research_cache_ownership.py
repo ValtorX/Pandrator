@@ -13,6 +13,7 @@ from sqlalchemy import event
 from sqlalchemy.engine import Connection, Engine
 
 from pandrator.web.database import create_database_engine, sqlite_url
+from tests.web_test_support import drop_project_link_tables
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS = ROOT / "pandrator" / "web" / "migrations"
@@ -351,6 +352,9 @@ def test_project_scope_fk_cascades_only_derived_cache_row(
                 project_id="cache-cascade-project",
             )
             assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
+            # Revision 0001 builds these from today's metadata, with a key to a table that
+            # only exists from 0073; they hold no rows here and would refuse the delete.
+            drop_project_link_tables(connection)
             connection.execute(sa.text("DELETE FROM projects WHERE id = 'cache-cascade-project'"))
             keys = (
                 connection.execute(

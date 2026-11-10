@@ -12,6 +12,7 @@ from alembic.config import Config
 from sqlalchemy.exc import SQLAlchemyError
 
 from pandrator.web.database import create_database_engine, sqlite_url
+from tests.web_test_support import drop_project_link_tables
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS = ROOT / "pandrator" / "web" / "migrations"
@@ -707,6 +708,9 @@ def test_project_foreign_key_cascades_when_project_is_deleted(
                 ),
                 {"workspace_id": workspace_id, "now": NOW},
             )
+            # Revision 0001 builds these from today's metadata, with a key to a table that
+            # only exists from 0073; they hold no rows here and would refuse the delete.
+            drop_project_link_tables(connection)
             connection.execute(sa.text("DELETE FROM projects WHERE id = 'project-retained'"))
             assert (
                 connection.execute(

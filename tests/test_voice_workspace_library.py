@@ -38,7 +38,7 @@ from pandrator.web.voice_queries import (
     voice_sample_in_workspace,
     voices_in_workspace,
 )
-from tests.web_test_support import prepare_web_test_data_root
+from tests.web_test_support import prepare_web_test_data_root, suspended_triggers
 
 
 @dataclass
@@ -133,7 +133,9 @@ def _new_sample(
     artifact_id: str,
     *,
     transcript: str = "Synthetic voice sample.",
+    corrupt: bool = False,
 ) -> str:
+    """Insert a sample; `corrupt` writes a row the library scope trigger would refuse."""
     with harness.database.session() as session:
         sample = VoiceSample(
             workspace_id=workspace_id,
@@ -144,7 +146,11 @@ def _new_sample(
             transcript_reviewed=True,
         )
         session.add(sample)
-        session.flush()
+        if corrupt:
+            with suspended_triggers(session, "pandrator_library_scope_voice_samples_insert"):
+                session.flush()
+        else:
+            session.flush()
         return sample.id
 
 
@@ -225,7 +231,9 @@ def test_malformed_voice_sample_backing_artifact_is_rejected(
     beta_workspace = harness.workspaces["beta"]
     voice_id = _new_voice(harness, alpha_workspace, "Alpha voice")
     foreign_artifact = _new_sample_artifact(harness, beta_workspace, "foreign-voice-sample")
-    malformed_sample_id = _new_sample(harness, alpha_workspace, voice_id, foreign_artifact.id)
+    malformed_sample_id = _new_sample(
+        harness, alpha_workspace, voice_id, foreign_artifact.id, corrupt=True
+    )
 
     with harness.database.session() as session:
         with pytest.raises(ValueError, match="workspace"):
@@ -300,6 +308,7 @@ def test_voice_projections_reject_mixed_scope_records_before_file_projection(
         alpha_id,
         beta_artifact.id,
         transcript="Cross-workspace sample for the alpha voice.",
+        corrupt=True,
     )
     with harness.database.session() as session:
         alpha_voice = session.get(Voice, alpha_id)
@@ -338,6 +347,7 @@ def test_voice_payloads_reject_a_malformed_cross_workspace_sample_before_file_ac
         alpha_id,
         foreign_artifact.id,
         transcript="Corrupt cross-workspace sample.",
+        corrupt=True,
     )
 
     def fail_file_status(*_args: object, **_kwargs: object) -> Any:

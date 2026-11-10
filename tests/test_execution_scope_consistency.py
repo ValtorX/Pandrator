@@ -26,6 +26,7 @@ from pandrator.web.models import (
     WorkflowRun,
 )
 from pandrator.web.projects.models import Project
+from tests.web_test_support import insert_at_revision
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS = ROOT / "pandrator" / "web" / "migrations"
@@ -180,8 +181,7 @@ def _make_case(path: Path) -> ExecutionCase:
                 workflow_run_id=workflow.id,
             ),
         }
-        session.add_all(jobs.values())
-        session.flush()
+        insert_at_revision(session, *jobs.values())
         ids.update({name: job.id for name, job in jobs.items()})
 
         artifacts = {
