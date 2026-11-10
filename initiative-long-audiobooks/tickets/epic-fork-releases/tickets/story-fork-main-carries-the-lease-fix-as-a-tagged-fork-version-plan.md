@@ -3,7 +3,7 @@ title: 'Fork main carries the lease fix as a tagged fork version'
 type: chore
 ticket: '1'
 created: '2026-11-08'
-status: built
+status: done
 baseline_revision: '415aaa8a7d691f3fbb03c22eb5ca0a57ed5ea8b9'
 route: oneshot
 route_source: auto
@@ -82,3 +82,32 @@ Quick review, one pass: 3 low, 1 false.
 - Low, patched: this plan's CI check was conditional and cited a removed question. Reworded.
 - Low, rejected: no `docs/release-notes-next.md` line for the fork version. The footer and health endpoint do show `0.14.2+fork.1`, but upstream rewrites that file each release, so a fork-only line would conflict at every merge. Reported to the owner instead.
 - False: release steps outstanding. The plan orders them after verification, which had not been reached.
+
+## Code Review
+
+### 2026-11-10
+
+**Code review complete.** 0 `decision-needed`, 2 `patch`, 0 `defer`, 15 rejected. Full diff `415aaa8a..ebe7194d` (the tag `v.0.14.2+fork.1`), lenses: blind hunter, edge case hunter, verification gap, intent alignment; none failed. Both patches are tests only, so they land on `epic-fork-releases` and the tag stays as released.
+
+- [x] [Review][Patch] The live identity route's full fork version is not pinned; only the model default is, so serving the public version would pass every test [tests/test_web_work_api.py:711]
+- [x] [Review][Patch] MCP compatibility negotiation is never fed a `+fork` version, so a stricter version parse would silently skip the 0.8.16 baseline check for fork builds [tests/test_mcp_doctor.py]
+
+Applied and verified, Windows, `<uv env>`: `test_web_work_api.py`, `test_mcp_doctor.py` and `test_version.py` give 27 passed under SQLAlchemy 2.0.52 and again under 2.1.8; `uvx ruff@0.17.3 check tests` passes. Each new check fails under the regression it guards: a full-match version regex fails both MCP tests, and an identity built with the public version fails the route test.
+
+**Lease-fix tests on CI.** The results above left them without a CI verdict, because `web-07` was cancelled at its time limit. Story 4 moved them to `web-23-serial`. Fork run `42851994115` at `b6de4a35`, whose product code is identical to the tag's, runs all six on Ubuntu and Windows and none fails. The file's only failure there is `test_generation_ignores_saved_preview_routing_metadata`, which also fails at `112501b2` and is `backlog/bug-saved-preview-settings-fail-generation`.
+
+Rejected:
+
+- The contract's schema default (`0.14.2`) differs from the served version (blind, intent): false. The owner's frozen decision chose this split to keep the contract and assets unchanged.
+- `public_version` turns `0+unknown` into `0` (blind, edge): false. The fallback needs no `pyproject.toml` and no installed metadata; the contract generator always runs from a checkout, and the runtime keeps the full value.
+- The browser build still reports `0.14.2`: false. The frozen intent keeps `web/package.json` at upstream's version.
+- No release note: low. Rejected in the first review and reported to the owner, since upstream rewrites that file each release.
+- A version bump invalidates in-flight plans and previews: low. Existing behaviour for any version change.
+- The fork-only assertion sits in a shared test file (blind, edge): false. It lands in `ebe7194d`, a fork-only commit, and catching a merge that drops `+fork.N` is its purpose.
+- `test_version.py` imports the web stack: low, speed only.
+- The contract test overlaps `check-web-contract`: low. That check is the regenerating gate in CI.
+- `openapi.json` missing outside a checkout: false. Tests run only from a checkout.
+- A client could fill a missing `application_version` from the schema default: false. The server always serializes the field, and no client reads the default.
+- The diff touches more than `pyproject.toml`: false. The owner's decision required the contract split.
+- The fork marker is absent from the contract and browser surfaces: false. Deliberate, per the frozen decisions.
+- The clean clone and CI on `main` are not in the diff: false. Both are recorded in the results above.

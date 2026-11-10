@@ -3,7 +3,7 @@ title: 'Windows-only test failures pass or skip with a reason'
 type: chore
 ticket: '7'
 created: '2026-11-09'
-status: built
+status: done
 baseline_revision: 'a5918f5b6673ce6c514158478875c025c72f82df'
 route: full
 route_source: auto
@@ -99,6 +99,7 @@ context:
   - `test_lanes.py check` and `ruff check tests scripts` pass.
   - Not run here: Linux, and any symlink test with the symlink privilege.
 - Uncommitted: the tests, `tests/platform_support.py`, `scripts/test_lanes.py`, `.gitattributes` on `epic-fork-releases`; this plan and the findings edit on `fork-files`.
+- **The ticket's Verify is met on fork run `42851994115`, at `b6de4a351b1352e6d7a11ebd690c921a8b883f3c`.** None of the story's 35 test files fails on Windows or Ubuntu; in run `42812800328` their only failures were story 10's G3 pins in `test_project_speech_reference_store`. Every Ubuntu web lane reports no skips, and `ubuntu-fast-xdist` (8) and `ubuntu-services` (9) skip the same number as in `42812800328`, so the same tests still run on Linux. Every Windows lane finishes. CI's pytest runs without `-rs`, so the skip reasons are checked in the source, not in the logs. The run's conclusion is `failure`, from other stories' known clusters; none is in this story's files.
 
 ## Plan Change Log
 
