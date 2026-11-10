@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from sqlalchemy import event
 
+from pandrator.version import PANDRATOR_VERSION
 from pandrator.web.api import create_app
 from pandrator.web.auth import BootstrapTokenStore
 from pandrator.web.credentials import SecretRedactor
@@ -709,6 +710,9 @@ class ApplicationIdentityTests(unittest.TestCase):
         self.assertEqual("https://pandrator.example", first["canonical_origin"])
         self.assertEqual("1", first["schema_version"])
         self.assertEqual("v1", first["api_version"])
+        # The served identity carries the full version, local segment included, even
+        # though the API contract's schema default holds only the public version.
+        self.assertEqual(PANDRATOR_VERSION, first["application_version"])
 
 
 if __name__ == "__main__":

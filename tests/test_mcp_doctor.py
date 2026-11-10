@@ -12,6 +12,7 @@ from pandrator_mcp.compatibility import (
     REQUIRED_MANAGER_OPERATION_IDS,
     REQUIRED_MEDIA_EDIT_DISPATCH_OPERATION_IDS,
     REQUIRED_READ_OPERATION_IDS,
+    negotiate_compatibility,
 )
 from pandrator_mcp.credentials import (
     CredentialReference,
@@ -170,6 +171,47 @@ class DoctorTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=5)
+
+
+class LocalVersionCompatibilityTests(unittest.TestCase):
+    """A fork build reports a PEP 440 local segment such as ``+fork.1``."""
+
+    @staticmethod
+    def _negotiate(application_version: str) -> dict[str, Any]:
+        operation_ids = {
+            *REQUIRED_READ_OPERATION_IDS,
+            *REQUIRED_DISPATCH_OPERATION_IDS,
+            *REQUIRED_MEDIA_EDIT_DISPATCH_OPERATION_IDS,
+        }
+        openapi = {
+            "openapi": "3.1.0",
+            "paths": {
+                f"/{operation_id}": {"get": {"operationId": operation_id}}
+                for operation_id in operation_ids
+            },
+        }
+        identity = {
+            "api_version": "v1",
+            "protocol_version": "v1",
+            "application_version": application_version,
+        }
+        return negotiate_compatibility(identity, openapi, manager_expected=False)
+
+    def test_local_segment_is_comparable_and_compatible(self):
+        report = self._negotiate("0.14.2+fork.1")
+
+        self.assertTrue(report["compatible"], report)
+        self.assertEqual([], report["warnings"])
+        self.assertEqual("0.14.2+fork.1", report["application_version"])
+
+    def test_local_segment_still_meets_the_baseline_check(self):
+        report = self._negotiate("0.8.15+fork.1")
+
+        self.assertFalse(report["compatible"])
+        self.assertIn(
+            "Pandrator 0.8.15+fork.1 is older than the supported 0.8.16 baseline.",
+            report["errors"],
+        )
 
 
 if __name__ == "__main__":
