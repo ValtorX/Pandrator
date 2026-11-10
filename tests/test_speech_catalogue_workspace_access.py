@@ -576,13 +576,8 @@ def test_member_capture_sql_is_fixed_without_private_builders(
         "nine_service_queries": len(many),
         "queries": [s for s, _p in many],
     }
+    # The evidence contains SQL only, never credential/input values.
     (tmp_path / "speech-member-sql.json").write_text(json.dumps(summary, indent=2))
-    # Durable evidence contains SQL only, never credential/input values.
-    from pathlib import Path
-
-    Path(
-        ".local-notes/multi-user-2026-10-23/continued-implementation/workspace-sharing-r3/speech-catalogue-workspace/member-sql.json"
-    ).write_text(json.dumps(summary, indent=2))
 
 
 def test_nonlegacy_personal_and_team_never_inspect_host_adc(case, catalogue, monkeypatch):
@@ -1019,10 +1014,8 @@ def test_passive_capabilities_member_selected_detail_uses_only_canonical_models(
 
 
 def test_summary_payload_get_is_safe_for_manager_and_member_and_bounded(
-    case, catalogue, monkeypatch
+    case, catalogue, monkeypatch, tmp_path
 ):
-    from pathlib import Path
-
     from pandrator.logic.tts_provider_profiles import AUDIO_CPP_MODEL_CATALOG
     from pandrator.web.speech_catalogue_projection import summary_tts_payload
 
@@ -1140,9 +1133,7 @@ def test_summary_payload_get_is_safe_for_manager_and_member_and_bounded(
     assert row["catalogue"] == {"source": "configured", "complete": False}
     assert row["model_catalog"] == [{"id": "m", "loaded": True}]
     measured["canonical_model_count"] = len(AUDIO_CPP_MODEL_CATALOG)
-    Path(
-        ".local-notes/multi-user-2026-10-23/continued-implementation/workspace-sharing-r3/speech-catalogue-workspace/summary-payload/bytes.json"
-    ).write_text(json.dumps(measured, indent=2))
+    (tmp_path / "summary-payload-bytes.json").write_text(json.dumps(measured, indent=2))
 
 
 def test_summary_payload_post_refreshes_only_selection_then_projects(case, catalogue, monkeypatch):

@@ -2,7 +2,7 @@
 
 import threading
 from copy import deepcopy
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 from pydub import AudioSegment
@@ -373,7 +373,17 @@ def test_preview_service_override_keeps_cast_and_reports_cached_readiness(case):
     assert result["readiness"]["model_available"] is False
     assert result["readiness"]["compilation_only"] is True
     assert result["generation_source"]["plan_revision_id"] == case["revision_id"]
-    refresh.assert_called_once_with(refresh=False)
+    with case["services"]["database"].session() as session:
+        workspace_id = session_project(session, case["session_id"]).workspace_id
+    refresh.assert_called_once_with(
+        refresh=False,
+        view="compact",
+        include_profiles=False,
+        workspace_id=workspace_id,
+        settings_snapshot=ANY,
+        approved_only=True,
+        allow_host_adc=False,
+    )
 
 
 @pytest.mark.parametrize("cancel_at", ["part", "verification"])
@@ -748,8 +758,8 @@ def test_distinct_cast_bindings_share_one_catalogue_build(case):
         snapshot = overrides(performance_enabled=False)
         with patch.object(
             tts_service_catalogue,
-            "_default_service_configs",
-            wraps=tts_service_catalogue._default_service_configs,
+            "_default_service_config_templates",
+            wraps=tts_service_catalogue._default_service_config_templates,
         ) as build:
             runtime.freeze_cast_snapshot(
                 session, case["revision_id"], snapshot, snapshot["tts"]

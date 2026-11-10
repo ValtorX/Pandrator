@@ -15,6 +15,7 @@ import psutil
 import pytest
 
 from pandrator.logic import xtts_trainer_handler as trainer
+from pandrator.logic.model_acquisition import host_model_acquisition_scope
 
 
 def running(pid: int) -> bool:
@@ -70,11 +71,14 @@ def test_silent_training_cancellation_reaps_parent_and_child_and_preserves_unrel
 
     def train():
         try:
-            results.append(
-                trainer.start_training(
-                    {"model_name": "narrator", "source_audio_path": str(audio)}, stop_event=cancel
+            # This thread has no model acquisition authority of its own.
+            with host_model_acquisition_scope():
+                results.append(
+                    trainer.start_training(
+                        {"model_name": "narrator", "source_audio_path": str(audio)},
+                        stop_event=cancel,
+                    )
                 )
-            )
         except BaseException as error:
             results.append(error)
 

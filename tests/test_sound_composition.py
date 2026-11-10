@@ -245,14 +245,22 @@ def test_mcp_and_cli_composition_register_sound_contracts(case, tmp_path, monkey
     ]
 
 
-def test_fresh_and_0054_to_head_migrations_pass_sqlite_foreign_key_check(case, tmp_path):
-    services = case["services"]
+def test_fresh_and_0054_to_head_migrations_pass_sqlite_foreign_key_check(tmp_path):
+    # Use a database of its own: the shared session-scoped case database holds actor
+    # attribution rows once other tests have made requests, and 0074 refuses to
+    # downgrade past retained attribution records.
+    services = create_app(
+        data_root=tmp_path / "fresh-data", testing=True, background_maintenance=False
+    ).extensions["pandrator"]
     database_path = tmp_path / "sound-migrations.sqlite"
-    with (
-        sqlite3.connect(services["paths"].database) as source,
-        sqlite3.connect(database_path) as target,
-    ):
-        source.backup(target)
+    try:
+        with (
+            sqlite3.connect(services["paths"].database) as source,
+            sqlite3.connect(database_path) as target,
+        ):
+            source.backup(target)
+    finally:
+        services["database"].dispose()
     config = Config()
     config.set_main_option(
         "script_location", str(Path(__file__).parents[1] / "pandrator" / "web" / "migrations")

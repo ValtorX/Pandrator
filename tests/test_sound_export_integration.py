@@ -29,6 +29,8 @@ def test_audiobook_video_export_passes_mix_to_book_caption_and_codec_stage(
         settings={"include_sounds": True, "export_mode": "video_book"},
         record=record,
         output_settings_snapshot={},
+        by_role={},
+        attached_sources=[],
     )
     context = SimpleNamespace(_session_dir=lambda _session_id: tmp_path)
     events = []
@@ -81,6 +83,8 @@ def test_timed_video_mixes_effects_after_the_voice_soundtrack_master(
     mixed_audio = SimpleNamespace(id="mixed-audio")
     voice_path = tmp_path / "voice.wav"
     mixed_path = tmp_path / "mixed.wav"
+    mixed_path.write_bytes(b"mixed")
+    (tmp_path / "source.mp4").write_bytes(b"source")
     events = []
     resolved = {
         voice_audio.id: (voice_audio, voice_path),
@@ -101,6 +105,8 @@ def test_timed_video_mixes_effects_after_the_voice_soundtrack_master(
         upload_media=upload_media,
         dubbing_audio=voice_audio,
         audio_mode="mixed",
+        subtitle_mode="none",
+        selected_subtitles=[],
     )
 
     def ensure_master(_context, **kwargs):
@@ -126,6 +132,8 @@ def test_timed_video_mixes_effects_after_the_voice_soundtrack_master(
         lambda _path: {"duration": 1.0, "video_duration": 1.0, "has_video": False},
     )
     monkeypatch.setattr(soundtrack_export, "ensure_soundtrack_master", ensure_master)
+    # Storage admission needs a real database; these tests only pin the mix order.
+    monkeypatch.setattr(export_video, "reserve_output_space", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(sound_workflow_outputs, "has_output_sounds", lambda *_args: True)
     monkeypatch.setattr(sound_workflow_outputs, "render_output_sounds", render_mix)
     monkeypatch.setattr(
@@ -168,6 +176,8 @@ def test_source_only_video_mixes_effects_over_the_source_master(
     master_audio = SimpleNamespace(id="source-master")
     mixed_audio = SimpleNamespace(id="mixed-audio")
     mixed_path = tmp_path / "mixed-source.wav"
+    mixed_path.write_bytes(b"mixed")
+    (tmp_path / "source.mp4").write_bytes(b"source")
     events = []
     context = SimpleNamespace(
         _resolve_input=lambda artifact_id: (mixed_audio, mixed_path)
@@ -184,6 +194,8 @@ def test_source_only_video_mixes_effects_over_the_source_master(
         upload_media=upload_media,
         dubbing_audio=None,
         audio_mode="source",
+        subtitle_mode="none",
+        selected_subtitles=[],
     )
 
     def ensure_master(_context, **kwargs):
@@ -204,6 +216,8 @@ def test_source_only_video_mixes_effects_over_the_source_master(
         return ["mux"]
 
     monkeypatch.setattr(soundtrack_export, "ensure_soundtrack_master", ensure_master)
+    # Storage admission needs a real database; these tests only pin the mix order.
+    monkeypatch.setattr(export_video, "reserve_output_space", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(sound_workflow_outputs, "has_output_sounds", lambda *_args: True)
     monkeypatch.setattr(sound_workflow_outputs, "render_output_sounds", render_mix)
     monkeypatch.setattr(

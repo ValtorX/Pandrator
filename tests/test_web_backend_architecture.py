@@ -117,9 +117,9 @@ class BackendArchitectureTests(unittest.TestCase):
 
     def test_route_contract_is_partitioned_without_losing_rules(self):
         rules = list(self.app.url_map.iter_rules())
-        self.assertEqual(355, len(rules))
+        self.assertEqual(413, len(rules))
         self.assertEqual(
-            348,
+            406,
             sum(rule.rule.startswith("/api/") for rule in rules),
         )
         self.assertTrue({
@@ -276,7 +276,11 @@ class BackendArchitectureTests(unittest.TestCase):
             "_repair_early_generation_blocks",
             "_regroup_generation_blocks",
         )
-        self.assertEqual(names, tuple(field.name for field in fields(GenerationExecutionContext)))
+        # secret_redactor comes from the job queue rather than a patched port.
+        self.assertEqual(
+            (*names, "secret_redactor"),
+            tuple(field.name for field in fields(GenerationExecutionContext)),
+        )
         global_names = {
             "_hydrate_tts_settings": "hydrate_tts_settings",
             "_apply_segment_tts_overrides": "_apply_segment_tts_overrides",
@@ -308,6 +312,7 @@ class BackendArchitectureTests(unittest.TestCase):
                     self.assertIs(original, sent)
                 for name, value in ports.items():
                     self.assertIs(value, getattr(context, name))
+                self.assertIs(handlers.jobs.secret_redactor, context.secret_redactor)
                 self.assertFalse(hasattr(context, "__dict__"))
                 with self.assertRaises(FrozenInstanceError):
                     context.database = object()
@@ -422,7 +427,7 @@ class BackendArchitectureTests(unittest.TestCase):
     def test_workflow_job_registry_has_domain_ownership_and_late_binding(self):
         handlers = self.app.extensions["pandrator"]["workflow_handlers"]
         registry = handlers.handler_registry
-        self.assertEqual(46, len(registry))
+        self.assertEqual(48, len(registry))
         self.assertIn("generation.admit", registry)
         self.assertIn("voice.google_design", registry)
         self.assertEqual(
@@ -433,6 +438,7 @@ class BackendArchitectureTests(unittest.TestCase):
                 "media_edit",
                 "source",
                 "sounds",
+                "system",
                 "text",
                 "transcription",
                 "voice",
@@ -972,7 +978,7 @@ class BackendArchitectureTests(unittest.TestCase):
             catalogue = registry.enrich_catalog(service)
 
         self.assertEqual(
-            1800,
+            350,
             catalogue["model_catalog"][0]["recommended_chunk_characters"],
         )
 
@@ -984,7 +990,7 @@ class BackendArchitectureTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(1800, catalogue[0]["recommended_chunk_characters"])
+        self.assertEqual(350, catalogue[0]["recommended_chunk_characters"])
 
 
 if __name__ == "__main__":

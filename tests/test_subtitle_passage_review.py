@@ -640,7 +640,7 @@ def test_registration_failure_rolls_back_passage_revision_and_published_file(rev
         ],
         **{"rollback": {"text": "Changed."}},
     )
-    destination = review_case.session_dir / "reviewed_correction_r2.srt"
+    published = "reviewed_correction_r2_*.srt"
     with patch.object(
         review_case.artifacts,
         "register_in_session",
@@ -648,7 +648,7 @@ def test_registration_failure_rolls_back_passage_revision_and_published_file(rev
     ):
         with pytest.raises(RuntimeError, match="register failed"):
             _save(review_case, source_id, source_hash, 1, values)
-    assert not destination.exists()
+    assert not list(review_case.session_dir.glob(published))
     with review_case.database.session() as session:
         artifact = session.get(Artifact, source_id)
         revisions = list(

@@ -418,7 +418,8 @@ def test_migration_matches_model_columns_indexes_checks_and_foreign_keys(
                 create_sql.lower().split()
             )
     assert Base.metadata.tables["project_speech_references"] is model
-    assert SCHEMA_HEAD == TARGET
+    # TARGET is at or below the current head; the schema is compared at TARGET.
+    assert SCHEMA_HEAD >= TARGET
 
 
 def test_unsafe_downgrade_retains_reference_and_empty_downgrade_works(
@@ -445,9 +446,10 @@ def test_unsafe_downgrade_retains_reference_and_empty_downgrade_works(
         command.downgrade(_migration_config(paths.database), PREVIOUS)
     assert _snapshot_existing_schema_and_rows(paths.database) == before
     with _sqlite(paths.database) as connection:
+        # The refused downgrade rolls back whole, so the database stays at its head.
         assert connection.execute(
             "SELECT version_num FROM alembic_version"
-        ).fetchone()[0] == TARGET
+        ).fetchone()[0] == SCHEMA_HEAD
 
     empty_path = tmp_path / "empty-downgrade.sqlite3"
     _new_database(empty_path)

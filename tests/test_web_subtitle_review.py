@@ -516,9 +516,7 @@ class SubtitleReviewTests(unittest.TestCase):
             )
         self.assertIsNone(document)
         self.assertIsNone(artifact)
-        self.assertFalse(
-            (self.session_dir / "reviewed_transcription_r1.srt").exists()
-        )
+        self.assertEqual(list(self.session_dir.glob("reviewed_transcription_r1_*.srt")), [])
 
     def test_comparison_groups_splits_and_saving_creates_reviewed_revision(self):
         source = self._artifact(

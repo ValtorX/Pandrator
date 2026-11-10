@@ -1012,7 +1012,7 @@ def test_conflicting_display_fragment_speakers_reject_save_atomically(review_cas
     ]
     values[0]["speaker"] = "NARRATOR"
     values[1]["speaker"] = "CHARACTER"
-    destination = review_case.session_dir / "reviewed_correction_r2.srt"
+    published = "reviewed_correction_r2_*.srt"
     with pytest.raises(ValueError, match="one-utterance.*align speakers or use a passage edit") as error:
         review_case.service.save_review(
             review_case.session.id,
@@ -1023,7 +1023,7 @@ def test_conflicting_display_fragment_speakers_reject_save_atomically(review_cas
             expected_source_hash=source_hash,
         )
     assert all(row_id in str(error.value) for row_id in source_rows)
-    assert not destination.exists()
+    assert not list(review_case.session_dir.glob(published))
     with review_case.database.session() as session:
         document = session.get(Document, document_id)
         revisions = list(
@@ -1335,7 +1335,7 @@ def test_display_fragment_forgery_or_omission_rejected(review_case):
 def test_registration_failure_rolls_back_revision_and_file(review_case):
     source_id, source_hash, first_id, second_id = _source(review_case)
     selected = review_case.service.review(review_case.session.id, [source_id])["columns"][0]
-    destination = review_case.session_dir / "reviewed_correction_r2.srt"
+    published = "reviewed_correction_r2_*.srt"
     with patch.object(
         review_case.artifacts, "register_in_session", side_effect=RuntimeError("register failed")
     ):
@@ -1351,7 +1351,7 @@ def test_registration_failure_rolls_back_revision_and_file(review_case):
                 source_artifact_id=source_id,
                 expected_source_hash=source_hash,
             )
-    assert not destination.exists()
+    assert not list(review_case.session_dir.glob(published))
     with review_case.database.session() as session:
         revisions = list(
             session.scalars(

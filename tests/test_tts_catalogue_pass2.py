@@ -156,7 +156,14 @@ class TtsCataloguePass2Tests(unittest.TestCase):
             profile_loader.assert_not_called()
             preview_loader.assert_called_once_with(workspace_id=workspace_id)
             snapshot_loader.assert_called_once_with(
-                refresh=False, include_profiles=False, workspace_id=workspace_id
+                refresh=False,
+                include_profiles=False,
+                workspace_id=workspace_id,
+                settings_snapshot=mock.ANY,
+                # The personal workspace still has legacy host access and
+                # installation mode is off, so host credentials stay allowed.
+                approved_only=False,
+                allow_host_adc=True,
             )
         alloy = next(item for item in payload["items"] if item["id"] == "alloy")
         self.assertEqual("provider-preview", alloy["preview_artifact_id"])

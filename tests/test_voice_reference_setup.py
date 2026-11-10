@@ -200,6 +200,7 @@ class VoiceReferenceSetupTests(unittest.TestCase):
             self.assertFalse(fifth["reused_registration"])
             upload.assert_not_called()
 
+    @pytest.mark.usefixtures("host_execution_actor")
     def test_worker_pins_prevent_provider_side_effects_on_hash_artifact_and_revision_drift(self):
         extension, voice, _, _, _, prepared, handler = self._designed()
         payload = self._pinned(voice, prepared)
@@ -210,7 +211,7 @@ class VoiceReferenceSetupTests(unittest.TestCase):
         def change_revision(*_):
             with extension["database"].session() as session:
                 session.get(Voice, voice["id"]).revision += 1
-        with self.assertRaisesRegex(ValueError, "changed before it could be linked"):
+        with self.assertRaisesRegex(ValueError, "sample changed before provider upload"):
             handler.publish_voice(payload, change_revision, threading.Event())
 
     def test_legacy_default_route_also_pins_normalized_sample(self):

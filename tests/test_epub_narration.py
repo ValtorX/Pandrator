@@ -379,12 +379,35 @@ def test_anchor_offsets_use_parts_not_repeated_digits(prefix):
     assert _anchor_position_in_block(block, anchor) is None
 
 
+def _ensure_nav_page_list(path: str, target: str) -> None:
+    """Give the nav document a page-list pointing at ``target``.
+
+    EbookLib 0.20 generated this block itself from the note anchors; 0.21 does not, so the
+    fixture states the page-list explicitly instead of depending on the writer version.
+    """
+    with zipfile.ZipFile(path) as archive:
+        entries = [(info, archive.read(info)) for info in archive.infolist()]
+    block = (
+        '<nav epub:type="page-list" id="pages" hidden="hidden"><h2>Pages</h2>'
+        f'<ol><li><a href="{target}">1. Real note.</a></li></ol></nav>'
+    )
+    with zipfile.ZipFile(path, "w") as archive:
+        for info, data in entries:
+            if info.filename.endswith("nav.xhtml"):
+                text = data.decode("utf-8")
+                if 'epub:type="page-list"' not in text:
+                    text = text.replace("</body>", block + "</body>")
+                data = text.encode("utf-8")
+            archive.writestr(info, data)
+
+
 def test_page_list_cannot_create_duplicate_consumed_note_chapter(tmp_path):
     path = write_epub(tmp_path / "page-list.epub", (
         '<table><tr><th>Claim</th></tr><tr><td>Source'
         '<a id="reference" href="notes.xhtml#note1" epub:type="noteref">1</a>'
         '</td></tr></table>'
     ), explicit_toc=False)
+    _ensure_nav_page_list(path, "notes.xhtml#note1")
     raw = unpack_epub_structure(path)
     assert any("page-list" in block["epub_types"] for block in raw["parsed_documents"]["nav.xhtml"]["blocks"])
     text = extract_clean_epub(path)

@@ -17,7 +17,7 @@ from werkzeug.serving import make_server
 from pandrator.web.api import create_app
 from pandrator.web.auth import BootstrapTokenStore
 from pandrator.web.jobs import Worker
-from pandrator.web.models import Artifact, SessionRecord
+from pandrator.web.models import Artifact, SessionRecord, Voice
 from pandrator_mcp.clients.application import ApplicationClient
 from pandrator_mcp.clients.manager_gateway import ManagerUnavailableGateway
 from pandrator_mcp.context import McpRuntime
@@ -259,6 +259,32 @@ def test_mcp_voice_and_session_lifecycle_reaches_native_http_routes():
                     },
                 )
                 session_id = session["id"]
+                # Saving a cast refuses a voice that is not published or linked to the
+                # session's provider (generation_cast_runtime), so register it as ready.
+                extension = app.extensions["pandrator"]
+                with extension["database"].immediate_session() as db_session:
+                    db_voice = db_session.get(Voice, voice["id"])
+                    assert db_voice is not None
+                    db_voice.metadata_json = {
+                        **(db_voice.metadata_json or {}),
+                        "providers": {
+                            "fixture_tts": {
+                                "status": "ready",
+                                "provider_voice_id": "scrooge-fixture",
+                            }
+                        },
+                    }
+                await _call(
+                    client,
+                    "pandrator_patch_session_settings",
+                    {
+                        "session_id": session_id,
+                        "section": "tts",
+                        "expected_revision": 0,
+                        "value": {"service": "fixture_tts", "model": "fixture-model"},
+                        "idempotency_key": "settings-tts-fixture",
+                    },
+                )
                 controls = await _call(
                     client,
                     "pandrator_get_generation_controls",
@@ -342,7 +368,6 @@ def test_mcp_voice_and_session_lifecycle_reaches_native_http_routes():
                 assert restored["id"] == session_id
                 assert restored["revision"] == trashed["revision"] + 1
 
-                extension = app.extensions["pandrator"]
                 with extension["database"].session() as db_session:
                     record = db_session.get(SessionRecord, session_id)
                     assert record is not None

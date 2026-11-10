@@ -362,7 +362,9 @@ def test_transcription_processing_loss_cleans_only_owned_attempt_without_publica
 
     f.hook["during"] = change
     run(f)
-    assert job(f, queued.id).status == "failed"
+    # A worker that lost its lease is fenced from failing the job (see
+    # test_job_terminal_lease_fencing); the job stays running until it is reclaimed.
+    assert job(f, queued.id).status == ("running" if loss == "lease" else "failed")
     assert (
         f.attempts
         and not f.attempts[0].exists()

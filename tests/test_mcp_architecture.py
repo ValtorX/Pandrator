@@ -420,6 +420,10 @@ class McpArchitectureTests(unittest.TestCase):
                 "pandrator_copy_current_project",
                 "pandrator_grant_project_view",
                 "pandrator_revoke_project_view",
+                "pandrator_configure_public_sharing",
+                "pandrator_create_project_link",
+                "pandrator_revoke_project_link",
+                "pandrator_review_link_submission",
                 "pandrator_create_user",
                 "pandrator_update_user",
                 "pandrator_issue_user_password_reset",
@@ -555,6 +559,10 @@ class McpArchitectureTests(unittest.TestCase):
                     "pandrator_recover_workspace_manager",
                     "pandrator_grant_project_view",
                     "pandrator_revoke_project_view",
+                    # Revision guards fence public-sharing configuration and link
+                    # revocation; neither accepts a replay key.
+                    "pandrator_configure_public_sharing",
+                    "pandrator_revoke_project_link",
                     # Issuing a reset intentionally rotates the one-use proof.
                     # It must not cache/replay the secret or be retried blindly.
                     "pandrator_issue_user_password_reset",

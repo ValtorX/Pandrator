@@ -14,7 +14,7 @@ class _McpCatalogueApplication:
     def __init__(self, payload):
         self.payload = payload
 
-    def tts_catalog(self, *, refresh, service_id=None):
+    def tts_catalog(self, *, refresh, service_id=None, view=None):
         del refresh
         if service_id is None:
             return self.payload

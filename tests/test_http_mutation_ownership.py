@@ -255,7 +255,7 @@ def test_canonical_http_failure_cleans_publication_and_retry_identity(route_case
     case = route_case
     models = (Artifact, DocumentRevision, ApiIdempotency)
     before = _counts(case, models)
-    destination = case.session_dir / "reviewed_correction_r2.srt"
+    published = "reviewed_correction_r2_*.srt"
     injected = []
 
     def commit_failure(connection):
@@ -284,7 +284,7 @@ def test_canonical_http_failure_cleans_publication_and_retry_identity(route_case
     assert failed.status_code == 409, failed.get_json()
     if phase == "commit":
         assert injected == ["commit"]
-    assert not destination.exists()
+    assert not list(case.session_dir.glob(published))
     assert _counts(case, models) == before
     saved = case.client.post(path, json=body, headers=headers)
     replay = case.client.post(path, json=body, headers=headers)
@@ -297,13 +297,13 @@ def test_canonical_http_failure_cleans_publication_and_retry_identity(route_case
 @pytest.mark.parametrize("keyed", [False, True])
 def test_subtitle_cleanup_failure_preserves_commit_error(route_case, canonical, keyed):
     case = route_case
-    destination = case.session_dir / "reviewed_correction_r2.srt"
+    published = "reviewed_correction_r2_*.srt"
     before = _counts(case, (Artifact, DocumentRevision, ApiIdempotency))
     original_unlink = Path.unlink
     injected = []
 
     def deny_owned_unlink(path, *args, **kwargs):
-        if path == destination:
+        if path.parent == case.session_dir and path.match(published):
             injected.append("unlink")
             raise OSError("cleanup denied")
         return original_unlink(path, *args, **kwargs)
@@ -388,13 +388,13 @@ def test_global_stt_migration_and_history_roll_back_with_replacement(route_case)
 @pytest.mark.parametrize("canonical", [False, True])
 def test_direct_subtitle_service_preserves_commit_error_when_cleanup_fails(route_case, canonical):
     case = route_case
-    destination = case.session_dir / "reviewed_correction_r2.srt"
+    published = "reviewed_correction_r2_*.srt"
     original_unlink = Path.unlink
     before = _counts(case, (Artifact, DocumentRevision))
     denied = []
 
     def deny_owned_unlink(path, *args, **kwargs):
-        if path == destination:
+        if path.parent == case.session_dir and path.match(published):
             denied.append(path)
             raise OSError("cleanup denied")
         return original_unlink(path, *args, **kwargs)
@@ -421,5 +421,5 @@ def test_direct_subtitle_service_preserves_commit_error_when_cleanup_fails(route
     ):
         with pytest.raises(RuntimeError, match="primary direct commit error"):
             command(case.session.id, "correction", revision, values, **body)
-    assert denied == [destination]
+    assert len(denied) == 1 and denied[0].match(published)
     assert _counts(case, (Artifact, DocumentRevision)) == before

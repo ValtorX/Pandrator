@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import socket
-from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select
@@ -343,7 +342,9 @@ def test_create_actual_writer_rejects_current_credential_loss_before_receipt_or_
         )
 
 
-def test_busy_delete_uses_scoped_job_headers_and_cleanup_only_after_commit(case, monkeypatch):
+def test_busy_delete_uses_scoped_job_headers_and_cleanup_only_after_commit(
+    case, monkeypatch, tmp_path
+):
     users = team(case, monkeypatch)
     voice = body(create(users.alice, users.ah, wid=users.workspace_id), 201)
     sid, aid, path = sample(case, voice)
@@ -400,9 +401,7 @@ def test_busy_delete_uses_scoped_job_headers_and_cleanup_only_after_commit(case,
     monkeypatch.setattr(routes, "remove_managed_files", cleanup)
     assert users.bob.delete(target, headers={**users.bh, "If-Match": '"1"'}).status_code == 204
     assert seen == [path.resolve()] and not path.exists()
-    Path(
-        ".local-notes/multi-user-2026-10-23/continued-implementation/workspace-sharing-r3/voice-crud-workspace/job-header-sql.txt"
-    ).write_text(queries[0])
+    (tmp_path / "job-header-sql.txt").write_text(queries[0])
 
 
 def test_bundle_protection_and_strict_scope_preserve_records_and_files(case, monkeypatch):
