@@ -199,3 +199,28 @@ This test sits in `web-07`, whose CI logs stop at about a quarter of the lane, w
 ## Latent product note (no failing test of its own)
 
 Windows path length. The fixed suffix below the data root is about 175 characters for a take and about 185 or more for a soundtrack temp. Measured: soundtrack export failed with a 74-character root and passed with 69; takes failed with 102 and passed with 74. The errors are a misleading `FileNotFoundError` or `WinError 3`, and `mkdir` succeeds first. So on Windows without long paths enabled, a data root over roughly 70 characters can break export, and over roughly 85 can break generation. Typical install paths fit. Severity low; worth a line in the docs or a startup check.
+
+## Resolved by story 10
+
+Tests only; no product, migration, lane, CI or dependency change, and no product fault was found, so no backlog bug is filed. Windows 11, Python 3.11, through the `<uv env>` from `AGENTS.md`; the 31 changed files give 547 passed and 17 skipped under SQLAlchemy 2.0.52, and 547 passed and 17 skipped under 2.1.8. `test_sound_composition.py` passed three serial runs and one with `-n 2`. The skips are the existing Windows-only ones: symlink privilege, POSIX SIGTERM and POSIX process-group fixtures. Lane runs and the fork CI result are recorded separately; neither is confirmed here.
+
+| Cluster | Verdict as proved | Edit |
+|---|---|---|
+| G1 | Literals lag `68c444a1`: 413 and 406 routes, 48 job registry entries plus the `system` domain, facade `secret_redactor` | Literals moved; identity assert for `secret_redactor` |
+| G5 | Qwen 350 and Breeze 450 chunk sizes are the documented policy; dated Kitten packages carry the 124-voice family, older ones keep 48 that are a subset | Literals and subset assertion |
+| G2 | Four public-link tools are fenced mutations; `workspace_id` was added to sound and Promote deliberately | Allowlist and `expected_revision` exemption, 187 to 230 tools in 3 files, `PUBLIC_LINK_OPERATIONS`, `workspace_id` parameter, shared base asserted to have no scope roots |
+| G3 | `SCHEMA_HEAD == TARGET` was only true while each migration was newest | `SCHEMA_HEAD >= TARGET`; fresh database upgrades explicitly to `TARGET`; refused downgrade leaves it at `SCHEMA_HEAD` |
+| D1 | Catalogue calls carry workspace, settings snapshot and approval scope | Call asserted in full; only `settings_snapshot` is `ANY` |
+| D2 | Hot path calls `_default_service_config_templates` | Patch retargeted (wrapped) |
+| H1 | Subtitle file names gained a UUID | Match `reviewed_{stage}_r{n}_*.srt`; the rollback absence check is now an empty glob, no longer vacuous |
+| G4 | Workflow plan needs `app.run` | Read-only key gets 403 `scope_denied`; `app.run` key gets 404 |
+| I1 | Stubs behind new signatures, passive catalogue reads, moved patch target | Stubs gain the new arguments; `refresh_tts_catalog` before `configure_tts`; `resolve_voice_sample_transcription_settings` patched on `voice_sample_transcription`, shown non-vacuous by temporarily calling it from the named GET path (the test failed), then reverted |
+| K1 | Evidence written to gitignored `.local-notes` | `tmp_path` |
+| M1 | Lease fencing is deliberate (`test_job_terminal_lease_fencing`) | The `[lease]` job stays `running`; cleanup assertions kept |
+| N1 | Unlinked voices are refused (`generation_cast_runtime.py:465`) | Session set to `fixture_tts`, voice marked ready before casting |
+| O1 | 0074 refuses to drop actor rows by design | Fresh app in `tmp_path` |
+| `test_xtts_training_process` | `train()` runs in a new thread with no model acquisition authority | Call wrapped in `host_model_acquisition_scope()`; Linux only |
+| `test_web_api_shutdown` | A replay returns `public_project_settings(...)` like the first response; the stored receipt stays full | Body compared with `public_project_settings(receipt)`; Linux only |
+| `test_epub_narration` | EbookLib 0.21, allowed by `>=0.18,<1`, no longer generates a `page-list` nav; 0.20 in `pixi.lock` did | Fixture builds its own page-list, so the test no longer depends on the library version |
+
+The two Linux-only tests (`test_xtts_training_process`, `test_web_api_shutdown`) skip on Windows and are settled only by fork CI.

@@ -56,7 +56,9 @@ No test requires these today.
 Found while writing the stories, by comparing CI's failure list with the classification. All three are on `ebe7194d`.
 
 - `test_epub_narration::test_page_list_cannot_create_duplicate_consumed_note_chapter`, both operating systems. Reproduced here. It stops at its own check that the fixture's navigation holds a `page-list`, before reaching the product. The cause isn't known yet: the fixture or the EPUB library may have changed. Assigned to story 10.
+  Resolved by story 10: EbookLib 0.21, which the `>=0.18,<1` range allows, no longer generates a `page-list` nav (0.20 in `pixi.lock` did). The fixture now builds its own page-list.
 - `test_xtts_training_process::test_silent_training_cancellation_reaps_parent_and_child_and_preserves_unrelated`, Ubuntu only: "Process fixture did not become ready". It is skipped on Windows, so it wasn't run here. Assigned to story 10.
+  Resolved by story 10: `train()` runs in a new thread with no model acquisition authority, so `require_model_acquisition()` refused before the launch. The call is now wrapped in `host_model_acquisition_scope()`. Linux only, so fork CI settles it.
 - `test_release_upgrade_preservation::test_published_release_tree_survives_normal_startup`, Windows only. Reproduced here as a hash mismatch on a fixture file. A line-ending change is the likely cause, which is inferred. Assigned to story 7.
   Resolved by story 7: confirmed as a line-ending change (the fixture's text files were `w/crlf` under `core.autocrlf=true` while the test hashes raw bytes). `.gitattributes` now marks `tests/fixtures/release-0.13.0-rich/**` as `-text`, and the working-tree copies were refreshed from the index.
 
@@ -89,7 +91,7 @@ The old lane held 304 files and 5,312 tests. Compared by test name with one whol
 | Where | Tests | Goes to |
 |---|---|---|
 | Known clusters B1 to B9 | 30 | Story 9 |
-| Known clusters G2, G3, I1, K1, M1 | 9 | Story 10 |
+| Known clusters G2, G3, I1, K1, M1 | 9 | Story 10 (resolved: tests fixed, see the classification file) |
 | Known bug R2 | 1 | `backlog/bug-saved-preview-settings-fail-generation.md` |
 | Path length (W1) | 25 | Story 6 |
 | Other Windows-only causes (W2 to W7) | 13 | Story 7 |
@@ -160,7 +162,7 @@ W1 and W2 don't appear on CI, but they still fail in a local checkout, so storie
 | One E2E job hitting its limit in its browser install | Story 4 reads it on its next CI run; if it recurs, it goes to the owner as a proposed story |
 | A1, A2, E1 | Story 8 |
 | B1 to B9 | Story 9 |
-| The other stale clusters, `test_web_api_shutdown`, `test_epub_narration`, `test_xtts_training_process` | Story 10 |
+| The other stale clusters, `test_web_api_shutdown`, `test_epub_narration`, `test_xtts_training_process` | Story 10 (resolved, tests only; fork CI not yet confirmed) |
 | Q1 to Q3 | Story 11 |
 | Q4 to Q8 | Story 12 |
 | Real bug 1 | `backlog/bug-alternate-take-model-refused-on-audio-cpp.md` |
