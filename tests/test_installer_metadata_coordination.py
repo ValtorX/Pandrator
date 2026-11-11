@@ -101,6 +101,8 @@ class InstallerMetadataCoordinationTests(unittest.TestCase):
             reader = threading.Thread(target=read_messages, daemon=True)
             reader.start()
 
+            publisher_pids: list[int] = []
+
             def receive(event: str) -> None:
                 deadline = time.monotonic() + 5
                 while True:
@@ -108,7 +110,14 @@ class InstallerMetadataCoordinationTests(unittest.TestCase):
                     self.assertIsNotNone(line, "Publisher exited before expected event")
                     assert line is not None
                     message = json.loads(line)
-                    self.assertEqual(message["pid"], child.pid)
+                    if not publisher_pids:
+                        # A virtualenv python.exe on Windows is a launcher: the process that
+                        # reports is its child, so accept the child or any descendant.
+                        reporter = psutil.Process(message["pid"])
+                        lineage = {reporter.pid, *(p.pid for p in reporter.parents())}
+                        self.assertIn(child.pid, lineage)
+                        publisher_pids.append(message["pid"])
+                    self.assertEqual(message["pid"], publisher_pids[0])
                     self.assertEqual(message["token"], token)
                     if message["event"] == event:
                         return
@@ -126,7 +135,7 @@ class InstallerMetadataCoordinationTests(unittest.TestCase):
                 receive("published")
                 self.assertEqual(child.wait(timeout=5), 0)
                 current = state.read_bytes()
-                self.assertEqual(json.loads(current)["supervisor_pid"], child.pid)
+                self.assertEqual(json.loads(current)["supervisor_pid"], publisher_pids[0])
                 assert old is not None
                 self.assertFalse(discard_runtime_metadata(old))
                 self.assertEqual(state.read_bytes(), current)
