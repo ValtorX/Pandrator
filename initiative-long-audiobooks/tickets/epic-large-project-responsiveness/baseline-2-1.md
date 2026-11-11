@@ -638,3 +638,66 @@ part are not met.
 - Non-active revision (64 s profiled), admission (152 s) and opening check
   (109 s): the same pattern for one pass, with `compile_performance` and its
   language lookup run 6,400 times per pass.
+
+## After story 3
+
+Story 3 remembers each segment-independent language-support result for the
+length of one identity pass or cast freeze, stops deep-copying the controls
+that the identity pass and the cast freeze only read, and (the next copies the
+timing task required, see the story's Implementation Notes) copies the flat
+inspection settings and capability records without a call per immutable
+value and remembers a pass's validated characters and cast by object
+identity. Measured on the story 3 working tree on top of `c5c0dcfb`
+(uncommitted), with `large_project_timing.py --skip-burst --timeout 900
+--job-timeout 3600` on a fresh copy of `real` under
+`%USERPROFILE%\pandrator-perf\work-2-3\final-timing` (uv environment,
+SQLAlchemy 2.0.52, one root running at a time, no other harness process).
+Medians over three runs; the Replan column is the section above.
+
+| Operation, large project | Replan (real) | After story 3 (real) |
+|---|---|---|
+| `segments_default` | 6.28 s | 3.12 s |
+| `segments_compact` | n/a | 2.72 s |
+| `segments_fields` | n/a | 2.71 s |
+| `segments_limit100` | 6.32 s | 3.02 s |
+| `segments_non_active` | n/a | 2.95 s |
+| `plan_status` | 46.50 s | 16.47 s |
+| `plan_status_summary` | n/a | 0.39 s |
+| `revisions` | 42.12 s | 16.23 s |
+| `revisions_summary` | n/a | 0.02 s |
+| `revision_non_active` | 15.87 s | 6.62 s |
+| Admission, 1 / 15 segments | 70.6 s / 83.9 s | 59.9 s / 60.0 s |
+| Opening check, 1 / 15 segments | 69.4 s / 65.8 s | 52.8 s / 53.2 s |
+
+The large non-active revision is at 6.62 s against the 7.95 s the story set
+(the slowest of the three runs was 6.67 s). Small-project reads are unchanged (all under
+1.1 s); `auth/status` stayed under 0.3 s during both admissions.
+
+**First measurement, before the extra copies were removed** (the three
+changes the plan named only, on a fresh copy of `real`, medians of three):
+`revision_non_active` 10.68 s, `plan_status` 26.09 s, `revisions` 26.14 s,
+`segments_limit100` 4.50 s, admission 73.3 s / 67.1 s, opening check 61.4 s /
+57.9 s. That missed 7.95 s, so the profile below was taken and the next
+repeating copies were removed.
+
+**Profile after the change** (`--profile --runs 1`, fresh copy of `real`):
+
+- Large non-active revision: 18.2 s under cProfile, against 64 s at the
+  Replan and 30.9 s after only the plan's three changes. `copy.deepcopy` calls
+  fell from 12.9 million to 3.5 million, of which 417,000 are `_deepcopy_dict`
+  nodes; `resolve_tts_language_support` no longer appears among the costs.
+- Page of 100: 8.6 s under cProfile against 25 s, with 2.2 million
+  `copy.deepcopy` calls against 17.6 million. About 6.7 s of it is the one
+  whole-plan `freeze_cast_snapshot`.
+- What is left in both is the markup work for each segment
+  (`parse_speech_markup`, `_character_catalog`, `remap_markup`, per span
+  `apply_resolved_binding` and `validate_retained_cast_resolution`), which
+  later stories own.
+
+**Equivalence.** The regression tests in `tests/test_audio_identity_cost.py`
+compare every identity and the frozen cast snapshot with a reference pass that
+drops the language memo, copies the controls and re-validates the characters
+for every span. On the 12-segment cast plan that reference makes 14
+`package_metadata` calls, 14 language-support endpoint lookups, 12 controls
+copies and 42 character validations; the identity pass now makes 1, 1, 0 and 3,
+the same for 6 segments as for 12.
