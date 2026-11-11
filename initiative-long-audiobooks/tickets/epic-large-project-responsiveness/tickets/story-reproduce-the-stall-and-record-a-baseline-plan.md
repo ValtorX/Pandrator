@@ -3,7 +3,7 @@ title: 'Reproduce the large-project stall and record a baseline'
 type: chore
 ticket: '1'
 created: '2026-11-10'
-status: built
+status: done
 baseline_revision: 'ebefb88c8d6ab538158bfb5af8ddff4c50213bfe'
 route: full
 route_source: auto
