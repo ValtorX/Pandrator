@@ -142,3 +142,53 @@ The Windows setup goes after the closing `<!-- /bmad:context -->` marker so a `b
   - *Status:* raised at presentation.
 - **Owner decision (medium):** the held items were not re-assessed after #120 merged.
   - *Status:* raised at presentation with the PR branches.
+
+## Code Review
+
+### 2026-11-10
+
+**Code review complete.** 1 `decision-needed`, 13 `patch`, 0 `defer`, 9 rejected. Scope: code `cee8fa56..cda93a86` plus fork-files `2311dfc6..12a6e602`, plan excluded. Lenses: blind, edge case, verification gap, intent; none failed.
+
+- [x] [Review][Decision] Three upstream rows end "owner to decide" — The leaked-actor fix `f94fd9f6`, the stories 7–12 test repairs and this story's test fixes have neither a PR link nor a reason, so acceptance criterion 2 is unmet while they stay open. Options: (1) re-check each against upstream `main` `83d4835d` and offer what still applies, each push on the owner's go-ahead; (2) record "not offered" with a reason now; (3) leave pending, story stays in review. Recommended: (2) for the stories 7–12 repairs and this story's fixes, (1) for `f94fd9f6`. The leak fix is a test-isolation bug that upstream may still have; the rest fixes fork-stale tests or applies only under a venv launcher.
+- [x] [Review][Patch] Step 5 lane command has a line break inside a Python string and cannot run [AGENTS.md:136]
+- [x] [Review][Patch] Step 9 and findings item 4 state a launcher-leak mechanism a review probe contradicts, and a broader rule than the tests follow [AGENTS.md:141]
+- [x] [Review][Patch] Upstream row points this story's fixes at "commits after `c30d2faf`", which drops two of the four [findings-fresh-clone.md:398]
+- [x] [Review][Patch] Amended setup steps were not rerun as written [AGENTS.md:136]
+- [x] [Review][Patch] Findings say fixes now in `c30d2faf` are uncommitted [findings-fresh-clone.md:343]
+- [x] [Review][Patch] Skip paragraph says "first four" over three platform items and leaves out the POSIX signal tests [findings-fresh-clone.md:326]
+- [x] [Review][Patch] `installer-serial` counts 306 and 487 are unexplained [findings-fresh-clone.md:338]
+- [x] [Review][Patch] Metadata test accepts any descendant pid, on every platform [tests/test_installer_metadata_coordination.py:116]
+- [x] [Review][Patch] pid-file race fixed at three readers rather than at the writer [tests/test_manager_control_plane.py:113]
+- [x] [Review][Patch] `upstream-pr-drafts.md` says the PRs are open and also that opening them is the owner's step; "PR 3" [upstream-pr-drafts.md:3]
+- [x] [Review][Patch] Bug ticket names the spec by line number, which moves after the merge; AC 2 leaves out CI [bug-manual-speaker-choice-lost-before-save.md:20]
+- [x] [Review][Patch] Managed-block line "stop stale servers first" contradicts step 7 [AGENTS.md:57]
+- [x] [Review][Patch] Unverified: other 5 s gates in the lifetime test could expire on a loaded runner; record as a watch item [findings-fresh-clone.md:376]
+
+**Rejected**
+- false: "the uv `xargs` failure hides results": it is covered by the step 5 patch. The traceback is visible.
+- false: "the 5 s to 30 s change lets the worker outlive the 10 s teardown join". The worker ends at t0+T and the join at T+10 for both values, so the condition is unchanged.
+- false: "metadata `finally` leaves the publisher running". Closing stdin makes `readline()` mismatch and the publisher raise. The probe also shows the launcher's end stops its child.
+- false: "the STARTUP_TIMEOUT comment states an inferred cause as fact". The CI traceback shows the 5 s wait expired, which is all the comment says.
+- false: "the WinError 32 teardown and unclosed applications are unaddressed". The findings already record them as consequences of the first failure. They predate this change.
+- false: "absolute worktree path in `upstream-pr-drafts.md`". It is not in a PR body, and the path policy covers PRs.
+- false: "no CI marker for the known E2E failure". The bug ticket records the decision not to add one.
+- rejected: "the setup is absent from a fresh clone". AGENTS.md is gitignored by owner policy, so a fix would edit the intent.
+- rejected: "only uv verified", "no pitfall bullet deleted", "Firefox not run and skips not counted". Each is an owner decision, a descriptive note with nothing named, or a recorded and raised environment fault.
+
+**Patches applied (uncommitted).** Owner's checkout, Windows, `<uv env>` (pyproject ranges):
+- `uvx ruff@0.17.3 check` on the two edited tests: pass.
+- The four touched test files: 75 passed, 1 skipped.
+- Corrected step 5 pipeline, run as written for `installer-serial` and `manager-serial`, 0 failures:
+  - `installer-serial`: 306 passed, 39 skipped, 142 subtests. That makes the JUnit total of 487 exactly.
+  - `manager-serial`: 667 passed, 17 skipped.
+- Its full lane list was dry-run: 27 lanes besides `fast-xdist`.
+- No `time.sleep(60)` processes were left behind.
+- `AGENTS.md` and the backup are identical.
+- The fresh clone was not rerun.
+
+**Decision resolved (owner, 2026-11-10): the recommended split.**
+- **Re-check of `f94fd9f6` against upstream `83d4835d`:** upstream fixed the leak itself in `dd38e331` (#120). Request teardown now restores the execution actor, and the test installs those hooks with `self.guards.register()`.
+- **Outcome:** all three rows now read "not offered", each with its reason, in `findings-fresh-clone.md`.
+- **Why the other two rows were not offered:**
+  - Every stories 7–12 commit conflicts with upstream `main`.
+  - This story's test fixes are specific to the virtualenv launcher, or answer an inferred CI cause.

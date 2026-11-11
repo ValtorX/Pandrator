@@ -2,9 +2,7 @@
 
 These are the PR bodies for the three branches built on 2026-11-10 from upstream `main` at `83d4835d` (after #120 merged). Opened 2026-11-10 as upstream #121 (temp root), #122 (LF rules) and #123 (lease fix), from branches pushed to `origin`. The worktree `C:\Users\Valtor\Source\Pandrator-pr` holds them.
 
-Each branch passes `_bmad-output/scripts/check_pr_branch.py` (exit 0). Pushing each branch to `origin` and opening its PR against `lukaszliniewicz/Pandrator:main` is the owner's step. Build each branch again first if upstream has moved.
-
-If the owner approves, open a PR with:
+Each branch passes `_bmad-output/scripts/check_pr_branch.py` (exit 0). The branches were pushed and the PRs opened on 2026-11-10, as the paragraph above records. For a later PR of the same kind, build the branch again if upstream has moved, and push and open it only with the owner's go-ahead. These are the commands that were used:
 
 ```bash
 git -C ../Pandrator-pr push origin <branch>
@@ -40,7 +38,7 @@ On a very long book, a generation run fails about 31 seconds in with "A voice re
 - Clear pause and cancel requests when the check fails the run.
 
 ### Tests
-- New tests in `tests/test_generation_workspace_execution.py`. All 21 tests in that file pass on Windows with a short `--basetemp`. Without one, five existing tests fail on path length, which PR 3 fixes.
+- New tests in `tests/test_generation_workspace_execution.py`. All 21 tests in that file pass on Windows with a short `--basetemp`. Without one, five existing tests fail on path length, which #121 fixes.
 - Field result: on a real book of about 5,000 segments, the check took 6 min 55 s on the stock 30-second lease and then generated. Before the fix it failed at about 31 s.
 
 ---

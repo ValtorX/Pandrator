@@ -19,10 +19,10 @@ In the speech annotation workspace, a user selects words, picks a character unde
 
 ## Reproduction
 
-Run `web/tests/project-ux.spec.ts:174` ("manual annotations preserve words, support phrase directions and protect against concurrent saves") on Chromium. Use fork `main` at `cee8fa56` or later, before the next upstream merge:
+Run the test "manual annotations preserve words, support phrase directions and protect against concurrent saves" in `web/tests/project-ux.spec.ts` (line 174 at `cee8fa56`; the line moves once upstream's extended spec is merged) on Chromium. Use fork `main` at `cee8fa56` or later, before the next upstream merge:
 
 ```bash
-<uv env> npm.cmd --prefix web run test:e2e -- --project=chromium tests/project-ux.spec.ts:174
+<uv env> npm.cmd --prefix web run test:e2e -- --project=chromium tests/project-ux.spec.ts -g "manual annotations preserve words"
 ```
 
 - Actual: `saved.items[0].speech_xml` lacks `<speaker ref="<character>">`. It failed 4 of 4 runs locally on Windows, and on CI run 42908347707.
@@ -45,8 +45,8 @@ Upstream fixed this in `5bb47cfc` ("Stabilize 0.14.2 CI contracts and annotated 
    **Then** the saved `speech_xml` assigns those words to that character
 2. **The spec passes on fork `main`**
    **Given** fork `main` after upstream `5bb47cfc` is merged in
-   **When** `project-ux.spec.ts` runs on Chromium
-   **Then** the annotation test passes
+   **When** `project-ux.spec.ts` runs on Chromium, locally and in fork CI
+   **Then** the annotation test passes in both
 
 ## References
 
