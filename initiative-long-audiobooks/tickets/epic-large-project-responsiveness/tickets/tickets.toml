@@ -16,7 +16,7 @@ notes = ["If the synthetic project doesn't reproduce what the real copy shows, m
 id = 2
 type = "story"
 title = "Shared audio identity work costs far less"
-description = "Reduces the per-segment cost of AudioIdentityContext.for_segment that listing, plan history, admission and the opening check all pay, giving identical identities for every segment. Its speed-up serves stories 3, 4, 8 and Epic 3."
+description = "Reduces the per-segment cost of AudioIdentityContext.for_segment that listing, plan history, admission and the opening check all pay, giving identical identities for every segment. Its speed-up serves stories 4, 5, 9 and Epic 3."
 verify = "A test proves identities are unchanged across a varied fixture while its query count falls, and the timing script shows the identity pass well below baseline."
 covers = ["R1", "R6", "R7"]
 after = [1]
@@ -26,27 +26,39 @@ risk = "high"
 [[entry]]
 id = 3
 type = "story"
-title = "Listing cost follows the page, not the project"
-description = "Makes limit and fields actually reduce the work of a segment listing, skipping reuse status when it isn't requested and making totals cheaper, with default responses unchanged."
-verify = "A query-count test shows a limit=1 id-only page does far less work than a full page, and the timing script shows pages of 100 inside 15 s on both datasets."
-covers = ["R1", "R2"]
-after = [2]
+title = "The identity pass stops repeating its performance and cast work"
+description = "Cuts the CPU work the identity pass still repeats per segment after story 2: performance compilation's language-support and package-metadata lookups, and the deep copies in the cast freeze, so each runs once per distinct input within one pass, with identical identities. Delivers the identity-pass part of R3, R6 and R7; story 4 delivers R3's 15 s limit, and stories 9 and 10 the admission and check targets, including the JSON decoding and retained-pin costs they name. Nothing is cached across requests or jobs."
+verify = "A test proves identities are unchanged across a varied fixture while language-support and package-metadata lookups and cast-freeze copies stop growing per segment, and the timing script shows the large non-active revision read, a single identity pass, at half its 15.9 s or less."
+covers = ["R3", "R6", "R7"]
+after = [2] # builds on story 2's per-pass catalogue cache and proof memo
 hitl = false
-risk = "medium"
+risk = "high"
+notes = ["Run the identity-equality tests under SQLAlchemy 2.0.52 and 2.1.8, and profile the non-active revision read before and after: most of the 17.6 million deep copies are expected inside the cast freeze; if they are not, split what is left into its own story rather than widen this one."]
 
 [[entry]]
 id = 4
 type = "story"
 title = "Plan status and revision reads return in time"
-description = "Brings list_speech_plan_revisions, get_speech_plan_status and non-active revision reads inside 15 s, using the existing summary path from MCP where the full history isn't needed."
+description = "Brings list_speech_plan_revisions, get_speech_plan_status and non-active revision reads inside 15 s, using the existing summary path from MCP where the full history isn't needed, and computing identities only for the revisions a response needs rather than for every revision."
 verify = "The timing script shows all three inside 15 s on both datasets, and MCP tests show the summary path is used."
 covers = ["R3"]
-after = [2]
+after = [3]
 hitl = false
 risk = "medium"
 
 [[entry]]
 id = 5
+type = "story"
+title = "Listing cost follows the page, not the project"
+description = "Makes limit and fields actually reduce the work of a segment listing, so a page no longer pays for the whole plan's cast freeze (building on story 3's cheaper freeze), skipping reuse status when it isn't requested and making totals cheaper, with default responses unchanged. Listings already meet 15 s alone; this gives the headroom concurrent listings need."
+verify = "A query-count test shows a limit=1 id-only page does far less work than a full page, and the timing script shows pages of 100 inside 15 s on both datasets."
+covers = ["R1", "R2"]
+after = [3]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 6
 type = "story"
 title = "Routine requests stop taking the write lock"
 description = "Stops read requests contending for the writer over token last_used_at and audit rows, making last_used_at coarser and batching or delaying audit writes, with no audit event lost."
@@ -57,79 +69,80 @@ hitl = false
 risk = "high"
 
 [[entry]]
-id = 6
+id = 7
 type = "story"
 title = "Abandoned reads stop stalling the server"
 description = "Keeps the server able to answer after clients give up on heavy reads, by a mechanism chosen from story 1's profile, such as a server-side deadline or a cap on concurrent heavy reads."
 verify = "A burst of abandoned heavy reads leaves /api/v1/auth/status and a small project's listing answering without a restart."
-covers = ["R4", "R2"] # R2's after-load part; story 3 delivers its page-cost part
-after = [1, 5] # both change the request lifecycle in http_lifecycle.py
+covers = ["R4", "R2"] # R2's after-load part; story 5 delivers its page-cost part
+after = [1, 6] # both change the request lifecycle in http_lifecycle.py
 hitl = false
 risk = "high"
-
-[[entry]]
-id = 7
-type = "story"
-title = "Heavy reads stop holding the WAL back"
-description = "Shortens how long heavy reads keep a read transaction open, so checkpoints can complete and the WAL stops growing after load, and no database is locked failures appear under read load."
-verify = "A read-load run with the timing script shows no database is locked errors and the WAL shrinking or stable once the load ends."
-covers = ["R5"] # the WAL and lock part; story 5 delivers the request-write part
-after = [3, 4, 6]
-hitl = false
-risk = "medium"
+notes = ["Measured 2026-11-11 on the real copy: after four clients abandoned 16 default large listings at 15 s, /api/v1/auth/status took 66 s to answer."]
 
 [[entry]]
 id = 8
 type = "story"
-title = "Admission meets its target without stalling reads"
-description = "Re-measures admission after story 2, fixes what remains until it meets the target from story 1, and finds out why reads stalled during it."
-verify = "The timing script shows admission of 1-15 segments meeting its target on both datasets, with listing inside 15 s while it runs."
-covers = ["R6"]
-after = [2, 5]
+title = "Heavy reads stop holding the WAL back"
+description = "Shortens how long heavy reads keep a read transaction open, so checkpoints can complete and the WAL stops growing after load, and no database is locked failures appear under read load."
+verify = "A read-load run with the timing script shows no database is locked errors and the WAL shrinking or stable once the load ends."
+covers = ["R5"] # the WAL and lock part; story 6 delivers the request-write part
+after = [4, 5, 7]
 hitl = false
 risk = "medium"
 
 [[entry]]
 id = 9
 type = "story"
+title = "Admission meets its target without stalling reads"
+description = "Re-measures admission after stories 2 and 3, fixes what remains until it meets its 60 s target, and finds out why reads stalled during it."
+verify = "The timing script shows admission of 1-15 segments meeting its target on both datasets, with listing inside 15 s while it runs."
+covers = ["R6"]
+after = [3, 6]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 10
+type = "story"
 title = "The reviewable generation route holds no writer through its check"
-description = "Moves run_reviewable_generation's snapshot and identity work out of its write transaction, as 415aaa8a did for queued runs, and confirms the opening check meets its target from story 1."
+description = "Moves run_reviewable_generation's snapshot and identity work out of its write transaction, as 415aaa8a did for queued runs, and confirms the opening check meets its 45 s target."
 verify = "A test with a slow identity check shows heartbeats succeeding throughout on this route, and the timing script shows the check meeting its target."
 covers = ["R7"]
-after = [2, 8] # both can change the opening-check path
+after = [3, 9] # both can change the opening-check path
 hitl = false
 risk = "medium"
 notes = ["Starts after upstream #125 is merged into fork main and this epic's branch (epic Notes, 2026-11-11); #125 changes prepare_segment_reference in workflow_generation_execution.py."]
 
 [[entry]]
-id = 10
+id = 11
 type = "story"
 title = "A cancel stops the opening check"
 description = "Gives the identity loop a cancellation hook, so a cancel during the opening check frees the worker promptly. Builds on upstream #125's cancel handling (_finish_owned_cancellation_locked in jobs.py, and the queue ending the run), merged into fork main and this epic's branch first."
 verify = "A test cancelling during a slow identity check shows the worker free within seconds and the job closed as cancelled."
 covers = ["R8"]
-after = [2, 8, 9, "1.1"]
+after = [3, 9, 10, "1.1"]
 hitl = false
 risk = "medium"
 
 [[entry]]
-id = 11
+id = 12
 type = "story"
 title = "Refactor sweep"
 description = "Cleans up what the plans and reviews in this epic deferred, with scope set at its start and cleanup only."
 verify = "The epic's focused tests, lint and type checks pass, with no behaviour change."
 covers = []
-after = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+after = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
 hitl = false
 risk = "low"
 
 [[entry]]
-id = 12
+id = 13
 type = "story"
 title = "Verified on real data in a released build"
 description = "Runs the timing script and a small regenerate against a fresh copy of the real database on a released fork build, on the stock 30-second lease, records the results against every line of this epic, and, with the owner's go-ahead, offers upstream as focused PRs any fixes not yet offered."
 verify = "The owner sees every timing inside its limit or target, a small regenerate completing on the released build, and a list showing each fix's upstream PR or why it wasn't offered."
 covers = ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8"]
-after = [11, "1.2", "1.13"] # cuts a new fork version by 1.13's procedure and installs it with 1.2's script
+after = [12, "1.2", "1.13"] # cuts a new fork version by 1.13's procedure and installs it with 1.2's script
 hitl = true # the owner provides the copy and runs the released build
 risk = "medium"

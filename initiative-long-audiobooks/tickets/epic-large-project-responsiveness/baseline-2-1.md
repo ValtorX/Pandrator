@@ -590,3 +590,51 @@ admission job within 1-3%, the opening check within 2%).
   evidence, so the surviving cost is unattributed here.
 - Not measured: the burst of abandoned reads (run with `--skip-burst`), which
   does not depend on this change.
+
+## Replan
+
+Measured 2026-11-11 for the epic's re-slice, on the committed story 2 code
+(`c5c0dcfb`, after its review patches), with `large_project_timing.py
+--timeout 900 --job-timeout 3600` and the burst on, on a fresh copy of `real`
+under `%USERPROFILE%\pandrator-perf\work-replan\` (uv environment, SQLAlchemy
+2.0.52). Only one root ran at a time, unlike "After story 2", where both ran
+at once; that and the review patches are why admission and the check are
+lower here. Medians over three runs. A second fresh copy was profiled
+(`--profile --runs 1`) for the large page of 100, plan status, the non-active
+revision and admission of 1 segment.
+
+Story numbers in the sections above are from before the re-slice: their
+stories 3 to 12 are now 5, 4, 6, 7, 8, 9, 10, 11, 12 and 13, and a new story 3
+cuts the shared identity-pass cost found below (epic Notes, 2026-11-11).
+
+| Operation, large project | After story 2 (real) | Replan (real) |
+|---|---|---|
+| `segments_default` | 6.39 s | 6.28 s |
+| `segments_limit100` | 6.60 s | 6.32 s |
+| `plan_status` | 42.63 s | 46.50 s |
+| `revisions` | 41.83 s | 42.12 s |
+| `revision_non_active` | 20.11 s | 15.87 s |
+| Admission, 1 / 15 segments | 104.8 s / 97.0 s | 70.6 s / 83.9 s |
+| Opening check, 1 / 15 segments | 85.8 s / 88.8 s | 69.4 s / 65.8 s |
+
+Small-project reads are unchanged (all under 1.6 s). During admission
+`auth/status` stayed under 0.8 s.
+
+**Burst.** Four clients sent default large listings for 60 s and gave up at
+15 s: all 16 were abandoned, since four at once take longer than 15 s each.
+The first request after it, `auth/status`, took 65.7 s, and small default
+listings took 6.7-7.2 s instead of 0.4 s; the server was idle again by the end
+of the after-load reads. No restart was needed, but R4 and R2's after-load
+part are not met.
+
+**Where the time goes now** (profiled; SQL is 0.04-3.7 s of each):
+
+- A page of 100 (25 s profiled): about 90% is one whole-plan
+  `freeze_cast_snapshot`, with about 17.6 million `copy.deepcopy` calls.
+- Plan status (176 s profiled): the identity pass runs for all 3 revisions
+  (15,228 `_with_performance` calls). Within it, `compile_performance` (46 s),
+  through `resolve_tts_language_support` and `audio_cpp_catalogue.package_metadata`,
+  and the cast freezes (67 s) lead.
+- Non-active revision (64 s profiled), admission (152 s) and opening check
+  (109 s): the same pattern for one pass, with `compile_performance` and its
+  language lookup run 6,400 times per pass.
