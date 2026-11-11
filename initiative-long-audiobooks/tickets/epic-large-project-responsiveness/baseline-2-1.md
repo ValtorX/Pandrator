@@ -1,0 +1,500 @@
+---
+title: "Large-project responsiveness: baseline"
+story: "Reproduce the stall and record a baseline"
+epic: epic-large-project-responsiveness
+measured: 2026-11-11
+checkout: 0ed54b07
+---
+
+# Large-project responsiveness: baseline
+
+Story 1 of the epic. Every number here comes from the harness in
+`_bmad-output/scripts/`, run against the checkout at `0ed54b07` on two data
+roots: a synthetic root seeded by `large_project_seed.py` and a local copy of
+the owner's real data. Results hold timings, counts, statuses and function or
+SQL names only.
+
+## Summary
+
+- **The stall reproduces on demand.** On the 5,167-segment book every full
+  read is far over 15 s on both datasets: segment listings 257-281 s whatever
+  the `limit`, `fields` or `view`; plan status and revision history over
+  900 s (26-31 minutes of server time each); a non-active revision 579-683
+  s. Only the `summary=true` variants and `auth/status` are fast.
+- **The small book is slow too.** 189 segments take 12-13 s to list (15 s
+  for 100 rows) and 54-62 s for plan status and revision history, because the
+  cost is per segment of the whole revision, not per row returned.
+- **Admission and the opening check reproduce the live numbers.** Admission
+  703 s (real copy) and 754 s (synthetic) for one segment, 710 s and 766 s for
+  15; the opening check 404 s and 434 s, 399 s and 431 s. The live install's
+  baselines are 640-741 s and 328-452 s.
+- **One cause dominates.** Under casting, each cast span's audio identity
+  rebuilds and deep-copies the whole TTS service catalogue
+  (`tts_service_catalogue._shared_service_configs`): 86-97% of the profiled
+  time of every slow operation. SQL is under 1% of the read time.
+- **Abandoned reads pile up.** A client timeout does not stop the server's
+  work. One minute of four clients giving up on the large listing at 15 s
+  left all 12 server threads busy, and `auth/status` itself then timed out at
+  900 s.
+- **The synthetic project agrees with the real copy** on every verdict but
+  one in a single full run of the final seed, within 2-18% on the timings,
+  after four seed versions. The exception is the small 100-row listing, which
+  sits on the 15 s line (real 15.5 s, synthetic 14.7 s); see Synthetic
+  against real.
+- **Proposed targets:** admission ≤ 60 s and the opening check ≤ 45 s on the
+  5,167-segment book, for 1 to 15 segments.
+
+## How it was measured
+
+- **Server.** `large_project_timing.py` starts the checkout's app on the data
+  root in a child process (`create_app(testing=False)`, waitress with 12
+  threads, one in-process worker, GPU probe patched out), on a free port that
+  is never 8097 or 8098. It mints an API token in-process on that root and
+  calls the endpoints over HTTP with the MCP tools' default parameters.
+- **Read matrix.** For the large and the small project: `auth/status`; segment
+  listing (`cursor=0&limit=50&audio_version_side=after`) as default,
+  `view=compact&take_history=selected`, `fields=id,ordinal,status`,
+  `limit=100` and the most recent non-active revision; plan status with and
+  without `summary=true`; revision history (`limit=50`) with and without
+  `summary=true`; and the non-active revision's detail. Three runs each; an
+  operation slower than 60 s runs once. The request timeout is 900 s rather
+  than the default 120 s, so most slow reads report a real duration.
+- **Abandoned work.** A client timeout does not stop the server. The harness
+  wraps the app in a request counter, and after a timeout it waits until the
+  server is idle before the next measurement, recording how long the
+  abandoned request kept running ("busy ... more").
+- **Order.** Small reads, large reads, the two admissions, then a 60 s burst
+  of four clients repeating the large default listing and giving up at 15 s,
+  like the MCP. The small reads run again immediately after the burst, while
+  its abandoned requests are still running.
+- **Admission and opening check.** `POST generation-admissions` with
+  `operation=regenerate` for the large project's first 1 and first 15
+  segments. Admission time is the admission job's `finished_at -
+  started_at`. The opening check runs from the child run's progress event
+  "Checking speech plan and voice references" to "Loading speech provider
+  settings", read from the job's event log. The harness holds the run at the
+  second event and cancels it through the API, so no TTS engine runs.
+  `auth/status` is sampled every 2 s while each admission and check runs.
+  The real copy's full run (and seed 3's) also sampled the small project's
+  default listing every 2 s; because that read is CPU-heavy it slowed the
+  jobs, so the real admission figures come from a separate clean run
+  (`--skip-reads --skip-burst`), and the script now samples the listing only
+  when `--listing-interval` asks for it. Seed 4's full run sampled only
+  `auth/status`.
+- **Verdict.** "slow" when any run took over 15 s (the MCP timeout) or timed
+  out; otherwise "fast".
+- **Profile mode** (`--profile`) runs the same requests in-process through
+  Flask's test client under cProfile, with a SQLAlchemy listener timing every
+  statement, and runs the admission and the opening check with
+  `Worker.run_once()`. cProfile slows Python code roughly 4x here, so profile
+  seconds are for ranking, not for comparison with the timing tables.
+
+## Environment
+
+- Windows 11, 16 logical CPUs, uv environment (`<uv env>` from AGENTS.md):
+  Python 3.11.15, SQLAlchemy 2.1.8 (CI's version, not `pixi.lock`'s 2.0.52),
+  SQLite 3.53.1, Flask 3.1.3, waitress 3.0.2.
+- The owner's app was not running during any run: nothing listened on 8097 or
+  8098, and every results file records `owner_app_listening: false`.
+- Several harness processes ran at once (up to five: the two timing runs, two
+  profile runs and a seed). Each is single-threaded Python and the machine has
+  16 logical CPUs, so they competed little, but the timings are not from an
+  idle machine.
+
+## Data
+
+The real copy was taken from the install's `data/` folder with the app closed:
+`pandrator.sqlite3` with its `-wal` and `-shm` files, `voices/`, `artifacts/`,
+and `migration-web-v1.json`. The marker file was not in the agreed list but is
+required: without it, startup treats the database as an unfinished legacy
+import and moves it aside for an empty one, which the first attempt did to a
+throwaway copy. The timing script now refuses a root without it. Take audio
+under `sessions/` (5.1 GB) was not copied; reuse decisions read only artifact
+metadata, so no measured path reads those files. Each run used a fresh copy
+of `%USERPROFILE%\pandrator-perf\real\`, never the copy itself.
+
+Shape counts, from `large_project_seed.py --measure` (counts only). "Large"
+is the plan closest to 5,000 segments and "small" the one closest to 189; the
+harness picks them the same way on both roots.
+
+| | Real copy | Synthetic (final seed) |
+|---|---|---|
+| Large plan, revisions (segments) | 3 (4,894; 5,167; 5,167 active) | 3 (4,893; 5,167; 5,167 active) |
+| Large plan, takes on those revisions | 4,894; 11,144; 11,161 | 4,893; 11,165; 11,180 |
+| Large plan, optimized segments (active) | 15 | 15 |
+| Large plan, cast slots (retained references) | 27 (narrator, 2 categories, 24 characters) | 27 (same split) |
+| Large plan, adopted speaker plans | on revisions 2 and 3 (4 plans in all) | on revisions 2 and 3 (2 plans) |
+| Large plan, segments with 1 / 2 / 3 dialogue speakers | 1,556 / 223 / 1 | 1,137 / 132 / 0 (short segments cannot take a dialogue part, so the 30.1% and 4.3% draws land lower) |
+| Small plan, revisions (segments) | 4 (191; 189; 200 draft, 11 removed, no audio; 189 active) | 4 (191; 189; 200 draft, 11 removed, no audio; 189 active) |
+| Small plan, takes (rev. 1, 2, active) | 1,146; 378; 379 | 1,146; 378; 379 |
+| Small plan, cast slots | 7 | 7 |
+| Third plan (uncast, one revision) | 11,424 segments, 3,131 takes | 11,424 segments, 3,084 takes |
+| Segment text, mean / max characters | 50.6 / 475 (large) | 52.8 / 476 (large) |
+| Casting enabled, an audio.cpp model | yes (large and small) | yes (large and small) |
+| Voices with one reviewed sample each | 37 | 37 |
+| All segments / takes / artifacts | 27,422 / 32,235 / 19,799 | 27,420 / 32,225 / 20,787 |
+| Takes per segment (1 / 2 / 3 / 6) | 8,025 / 9,080 / 1,629 / 191 | 7,977 / 9,037 / 1,672 / 191 |
+| Generation runs; jobs; job events | 26; 252; 105,540 | none |
+
+## Results
+
+Cells give median / max over three runs, or one run where the first took over
+60 s. "busy ... more" is how long the server kept working on the abandoned
+request after the client's 900 s timeout. The real column is one full run on
+a fresh copy of the real data; the synthetic column is one full run of the
+final seed (seed 4) on a fresh copy of `synthetic`, from the patched scripts,
+11:00-15:01 UTC, with a profile run on another copy overlapping it
+throughout. Server start-up took 3.1-3.5 s on every root.
+
+### Reads, small project (189 segments)
+
+| Operation | Real copy | Verdict | Synthetic | Verdict | Agree |
+|---|---|---|---|---|---|
+| `auth_status` | 0.02 s / 0.03 s | fast | 0.02 s / 0.03 s | fast | yes |
+| `segments_default` | 12.75 s / 12.81 s | fast | 12.14 s / 12.19 s | fast | yes |
+| `segments_compact` | 12.74 s / 12.79 s | fast | 12.11 s / 12.12 s | fast | yes |
+| `segments_fields` | 12.73 s / 12.73 s | fast | 12.01 s / 12.09 s | fast | yes |
+| `segments_limit100` | 15.50 s / 15.54 s | slow | 14.70 s / 14.73 s | fast | **no**, borderline (see below) |
+| `segments_non_active` | 9.84 s / 10.01 s | fast | 9.10 s / 9.14 s | fast | yes |
+| `plan_status` | 61.52 s (1 run) | slow | 53.77 s / 54.09 s | slow | yes |
+| `plan_status_summary` | 0.12 s / 0.17 s | fast | 0.11 s / 0.11 s | fast | yes |
+| `revisions` | 62.16 s (1 run) | slow | 53.78 s / 54.20 s | slow | yes |
+| `revisions_summary` | 0.03 s / 0.03 s | fast | 0.03 s / 0.03 s | fast | yes |
+| `revision_non_active` | 0.11 s / 0.17 s | fast | 0.09 s / 0.11 s | fast | yes |
+
+The listings sit just under the 15 s limit with 50 rows and around it with
+100: R2's small-project part fails, or nearly fails, without any load.
+
+### Reads, large project (5,167 segments)
+
+| Operation | Real copy | Verdict | Synthetic | Verdict | Agree |
+|---|---|---|---|---|---|
+| `auth_status` | 0.02 s / 0.03 s | fast | 0.01 s / 0.03 s | fast | yes |
+| `segments_default` | 281.21 s (1 run) | slow | 260.39 s (1 run) | slow | yes |
+| `segments_compact` | 273.05 s (1 run) | slow | 257.40 s (1 run) | slow | yes |
+| `segments_fields` | 266.44 s (1 run) | slow | 257.93 s (1 run) | slow | yes |
+| `segments_limit100` | 268.45 s (1 run) | slow | 263.45 s (1 run) | slow | yes |
+| `segments_non_active` | 275.06 s (1 run) | slow | 259.99 s (1 run) | slow | yes |
+| `plan_status` | timed out at 900 s, busy 666 s more | slow | timed out at 900 s, busy 746 s more | slow | yes |
+| `plan_status_summary` | 0.40 s / 0.42 s | fast | 0.34 s / 0.40 s | fast | yes |
+| `revisions` | timed out at 900 s, busy 623 s more | slow | timed out at 900 s, busy 968 s more | slow | yes |
+| `revisions_summary` | 0.03 s / 0.03 s | fast | 0.02 s / 0.02 s | fast | yes |
+| `revision_non_active` | 579.42 s (1 run) | slow | 683.10 s (1 run) | slow | yes |
+
+### Admission and opening check, large project
+
+Only `auth/status` sampled every 2 s beside the jobs. The real column comes
+from a separate clean run (`--skip-reads --skip-burst`), because the real
+copy's full run also sampled a small listing (below); the synthetic column is
+the full seed-4 run.
+
+| Segments | | Real copy | Synthetic |
+|---|---|---|---|
+| 1 | `POST generation-admissions` | 0.22 s, 202 | 0.09 s, 202 |
+| 1 | admission job (queue wait) | 703.4 s (0.04 s) | 753.8 s (0.20 s) |
+| 1 | opening check (run queue wait) | 403.7 s (0.11 s) | 433.9 s (0.13 s) |
+| 1 | cancel request at the provider line | 0.18 s; run canceled | 0.07 s; run canceled |
+| 1 | `auth/status` during both, median / max | 0.08 s / 0.77 s (516 samples) | 0.06 s / 0.53 s (560) |
+| 15 | admission job | 710.2 s | 765.6 s |
+| 15 | opening check | 398.6 s | 430.9 s |
+| 15 | `auth/status` during both, median / max | 0.09 s / 0.80 s (514) | 0.06 s / 0.61 s (565) |
+
+An earlier clean run of seed 4 alone, overlapping other harness runs rather
+than a profile, measured 713.4 s / 409.1 s (1 segment) and 724.6 s / 402.2 s
+(15). The 6-8% spread between the two seed-4 runs is machine load.
+
+With a small-project listing also sampled every 2 s (the real copy's full run,
+and seed 3's, before the script stopped sampling it by default):
+
+| Segments | | Real copy | Synthetic (seed 3) |
+|---|---|---|---|
+| 1 | admission / opening check | 1,595.5 s / 1,296.4 s | 1,767.9 s / 1,401.0 s |
+| 15 | admission / opening check | 1,629.8 s / 1,135.3 s | 1,714.5 s / 1,217.4 s |
+| 1 | small listing during, median / max | 18.6 s / 53.6 s (129 samples) | 20.6 s / 50.7 s (133) |
+| 15 | small listing during, median / max | 17.3 s / 57.3 s (128) | 18.5 s / 55.2 s (130) |
+| 1 and 15 | `auth/status` during, max | 0.59 s and 1.54 s | 0.77 s and 0.53 s |
+
+One heavy read beside the job makes admission 2.3-2.5x and the check
+2.8-3.4x slower: both are CPU-bound Python in one process, so they share the
+interpreter. The listing itself goes from 13 s to a median of 17-21 s and a
+maximum of 57 s. No `database is locked` failure and no read error occurred
+in any run. The server logged "Audit writer busy; event saved to pending
+audit spool" once in the clean real admission run, twice in seed 3's full
+run and once in seed 1's run (R5 territory, story 5).
+
+### After a burst of abandoned reads
+
+Four clients repeated the large default listing for 60 s, each giving up at
+15 s: 16 requests, all abandoned. Every one of them kept running. With 12
+server threads, the 16 requests filled the pool and queued the rest, and the
+in-flight counter itself could not answer within 30 s.
+
+| Operation, small project, right after the burst | Real copy | Verdict | Synthetic | Verdict | Agree |
+|---|---|---|---|---|---|
+| `auth_status` | timed out at 900 s | slow | timed out at 900 s | slow | yes |
+| `segments_default` | timed out at 900 s | slow | timed out at 900 s | slow | yes |
+| `segments_compact` | timed out at 900 s | slow | timed out at 900 s | slow | yes |
+| `segments_fields` | timed out at 900 s | slow | timed out at 900 s | slow | yes |
+| `segments_limit100` | 152.87 s (1 run) | slow | timed out at 900 s | slow | yes |
+| `segments_non_active` | 93.95 s (1 run) | slow | 29.19 s / 32.54 s | slow | yes |
+| `plan_status` | 539.50 s (1 run) | slow | 430.89 s (1 run) | slow | yes |
+| `plan_status_summary` | 7.57 s / 7.81 s | fast | 8.07 s / 9.17 s | fast | yes |
+| `revisions` | 455.63 s (1 run) | slow | 396.75 s (1 run) | slow | yes |
+| `revisions_summary` | 0.60 s / 0.70 s | fast | 0.66 s / 0.66 s | fast | yes |
+| `revision_non_active` | 1.00 s / 1.09 s | fast | 1.08 s / 1.31 s | fast | yes |
+
+The server answered nothing for about an hour after one minute of abandoned
+MCP reads: the first four (real) or five (synthetic) small reads each waited
+out the full 900 s, and those abandoned reads joined the backlog in turn. It
+was idle again 46 s (real) and 513 s (synthetic) after the last after-load
+read. No restart was needed, but no client would have waited that long.
+
+## Synthetic against real
+
+The seed went through four versions. Each was timed against the real copy,
+and each change answered a gap in slow or fast verdicts.
+
+| Seed | What it had | Large listing | Small `limit100` | Small `revision_non_active` | Admission / check (1 seg.) | Verdicts against real |
+|---|---|---|---|---|---|---|
+| 1, plain | Real shape counts, no casting, default TTS settings | 0.3 s | 0.3 s | 0.2 s | 68 s / 66 s | Every slow read came out fast |
+| 2, cast | + audio.cpp voices, cast with narrator, 2 categories and 24 characters as retained references, casting on | 223 s | 12.3 s | 16.7 s | not run | Small `limit100` fast (real 15.5 s, slow); large plan status timed out as on real |
+| 3, cast + speakers | + adopted speaker plans with dialogue XML on the last earlier and the active revision; the real model setting, empty narrator voice, no generation prompt | 296 s | 17.2 s | 22.1 s | 1,768 s / 1,401 s, with a sampled listing | Small `revision_non_active` slow (real 0.1 s, fast) |
+| 4, final | + the small plan's draft revision (200 segments, 11 removed, no audio) before the restore | 260 s | 14.7 s (16.3 s in an earlier small-only run) | 0.1 s | 754 s / 434 s | All agree except small `limit100`, on the 15 s line |
+
+- Seed 1 shows the stall needs casting: without cast resolution, identities
+  are cheap and every read is fast.
+- Seed 2 gets the large reads slow but runs about 20% fast, and the small
+  100-row page lands under 15 s where the real one is over. The real book's
+  speaker plan adds dialogue parts, so more spans per segment and more
+  catalogue rebuilds.
+- Seed 3 matches the large reads within 5% and most small reads within 11%,
+  but the harness picks each plan's most recent non-active revision, which on
+  the real small plan is a draft with no audio. Seed 3 had none, so its
+  non-active revision was a full revision with takes: 22 s where the real one
+  answers in 0.1 s.
+- Seed 4 adds the draft and is the seed's default. Its full run agrees on
+  every verdict but one, including after the burst.
+- **Remaining gap: small `segments_limit100`.** Real 15.5 s (slow), seed 4
+  14.7 s (fast) in its full run and 16.3 s (slow) in an earlier small-only
+  run. The row sits within 5% of the 15 s limit, so machine load alone flips
+  it: the real full run shared the machine with up to five harness processes,
+  seed 4's full run with one. Seed 4 also has fewer dialogue segments than the
+  real book (1,269 against 1,780 segments with a speaker part, because short
+  synthetic segments cannot take one), and dialogue parts are what the cost
+  scales with. Raising `one_speaker_fraction` and `two_speaker_fraction` so
+  the drawn counts match the real ones is the next seed change; it was not
+  made here, so the final run stays the single run of one seed.
+
+Remaining differences, none of which changes a verdict: seed 4's small
+listings run 5-8% and its small plan status and history 13% faster than
+real; its large listings 2-7% faster, while its large non-active revision
+detail runs 18% slower; its admission 7-8% and opening check 7-8% slower. After the
+burst the two roots drift further apart, as expected when the timing depends
+on which abandoned requests still hold the interpreter.
+
+## Where the time goes
+
+Profile mode, on copies of both roots. Seconds are under cProfile (about 3.3x
+to 4.5x the timed duration) and serve for ranking. cProfile follows only the
+main thread. SQL time, though, is measured on the engine, so it also counts
+the worker's lease monitor, which reads its job row every 0.2 s from another
+thread; that is where most "jobs" SELECTs in the admission and check profiles
+come from, and they are not per-segment work.
+
+One mechanism dominates every slow operation: computing a segment's audio
+identity under casting rebuilds the TTS service catalogue
+(`logic.tts_service_catalogue._shared_service_configs`) for each cast span.
+Every operation in the read matrix and both admission sizes has a profile;
+"real" rows come from copies of the real data, "seed 3" and "seed 4" rows
+from the synthetic roots (the large plan is the same in both seeds).
+
+| Operation | Profile | Profiled | Catalogue rebuilds: share, calls | SQL statements, seconds |
+|---|---|---|---|---|
+| large `segments_default` | real | 1,223 s | 97%, 6,614 | 1,870, 1.5 s |
+| large `segments_default` | seed 3 | 1,255 s | 97%, 6,991 | 2,105, 1.8 s |
+| large `segments_compact` | seed 4 | 1,217 s | 97%, 6,991 | 2,096, 1.6 s |
+| large `segments_fields` | seed 4 | 1,216 s | 97%, 6,991 | 2,095, 1.8 s |
+| large `segments_limit100` | seed 4 | 1,546 s | 97%, 7,207 | 3,296, 2.1 s |
+| large `segments_non_active` | real | 1,210 s | 97%, 6,614 | 1,896, 1.7 s |
+| large `plan_status` | real | 6,682 s | 95%, 70,916 | 427,297, 16.8 s |
+| large `plan_status` | seed 3 | 6,989 s | 95%, 72,453 | 435,331, 18.3 s |
+| large `revisions` | seed 4 | 8,394 s | 95%, 72,451 | 435,341, 20.3 s |
+| large `revision_non_active` | real | 2,494 s | 95%, 25,719 | 154,817, 6.3 s |
+| large `plan_status_summary` | real | 0.9 s | none | 117, 0.02 s |
+| small `segments_default` | seed 4 | 68.7 s | 97%, 472 | 1,335, 0.1 s |
+| small `segments_compact` | seed 4 | 72.8 s | 97%, 472 | 1,326, 0.1 s |
+| small `segments_fields` | seed 4 | 70.1 s | 97%, 472 | 1,325, 0.1 s |
+| small `segments_limit100` | seed 4 | 87.9 s | 97%, 670 | 2,457, 0.2 s |
+| small `segments_non_active` | seed 4 | 50.8 s | 98%, 351 | 970, 0.1 s |
+| small `plan_status` | seed 4 | 274.5 s | 96%, 2,742 | 16,961, 0.7 s |
+| small `revisions` | seed 4 | 285.9 s | 96%, 2,740 | 16,834, 0.8 s |
+| small `plan_status_summary`, `revisions_summary`, `revision_non_active`, `auth_status` | seed 4 (and real for `revision_non_active`) | 0.01-0.6 s | 2 or none | 20-155, under 0.01 s |
+| admission, 1 segment | real | 2,602 s | 91%, 25,708 | 200,241, 188 s (mostly the lease monitor) |
+| admission, 1 segment | seed 3 | 2,654 s | 92%, 26,376 | 205,163, 190 s (same) |
+| admission, 15 segments | seed 4 | 2,675 s | 92%, 26,404 | 205,320, 195 s (same) |
+| opening check, 1 segment | real | 1,323 s | 87%, 19,301 | 191,422, 83 s (same) |
+| opening check, 1 segment | seed 3 | 1,424 s | 86%, 19,801 | 196,509, 86 s (same) |
+| opening check, 15 segments | seed 4 | 1,354 s | 88%, 19,801 | 196,246, 77 s (same) |
+
+The large plan's `auth_status` and `revisions_summary` were not profiled;
+both answer in 0.03 s and do no identity work.
+
+What the profiles show, per operation:
+
+- **Segment listing, every variant.** `limit`, `fields` and `view` do not
+  change the cost: default, compact and fields profiles are identical (6,991
+  rebuilds each on the large plan, 472 on the small one). Even for a page of
+  50, the read freezes a cast snapshot for the whole revision, and the cast
+  resolution of every span goes through `generation_rendering._binding_result`
+  → `tts_service_catalogue.get_service_config` without the request's cache,
+  so `_shared_service_configs` rebuilds the catalogue each time: about 1.3
+  rebuilds per segment. A page of 100 adds per-row identities on top (7,207
+  rebuilds large, 670 small), which is why it is the slowest listing. Inside
+  the rebuild, `copy.deepcopy` takes about 550 s of own time (1.1 billion
+  calls), `preset_voice_metadata.decorate_preset_voices` 98 s and
+  `speech_capabilities.decorate_service_capabilities` 14 s. SQL is under 0.2%
+  of the time. The small plan pays the same per segment of its revision.
+- **Plan status and revision history (full).** Both run
+  `grouped_revision_history` / `revision_history` with audio reuse, which
+  computes identities for every segment of every revision: 15,227
+  `_with_performance` calls and about 72,000 catalogue rebuilds on the large
+  plan in each, 2,740 on the small one. Secondary:
+  `validate_retained_cast_resolution` (17,744 calls, 126 s in the real plan
+  status profile) repeats project, session and token lookups per cast span
+  (124,212 `session_project` calls, each two or three SELECTs), which is why
+  the statement count reaches 435,000. The plan status handler also loads
+  every active segment (`speech_plan_workspace.py:413-425`) but that is
+  negligible next to the identities.
+- **Non-active revision detail.** The same identity pass for one revision of
+  5,167 segments (25,719 rebuilds). The small project's non-active revision is
+  a draft without audio, so it does no identity work and answers in 0.1 s.
+- **Summary variants and `auth/status`.** Under 1 s: no identity work, at
+  most two catalogue builds.
+- **Admission.** `prepare_start` computes the identity of all 5,167 segments
+  even to regenerate one, then freezes the cast snapshot, so it pays the
+  catalogue rebuild about 5 times per segment. 1 and 15 segments cost the
+  same (26,376 and 26,404 rebuilds).
+- **Opening check.** `plan_audio_identities` over the whole revision: 5,167
+  `for_segment` calls and 19,301-19,801 catalogue rebuilds (86-88%). Next:
+  `validate_retained_cast_resolution` (6,400-6,568 calls, about 60 s
+  profiled) and JSON decoding of rows (about 141,000 decodes, 68-80 s own
+  time profiled; the run's settings snapshot alone is 7.9 MB). 1 and 15
+  segments cost the same.
+- **Abandoned reads.** A request the client gave up on keeps running to the
+  end: timed-out large plan status and revision history kept the server busy
+  10-16 more minutes. See the burst results above.
+
+## Proposed targets
+
+Measured without competing reads, on the 5,167-segment plan:
+
+| | Live install (epic baseline) | Real copy, this checkout | Synthetic (seed 4, clean run) | Proposed target |
+|---|---|---|---|---|
+| Admission, 1 segment | 640-741 s | 703 s | 713 s | **≤ 60 s** |
+| Admission, 15 segments | 640-741 s | 710 s | 725 s | **≤ 60 s** |
+| Opening check, 1 segment | 328-452 s | 404 s | 409 s | **≤ 45 s** |
+| Opening check, 15 segments | 328-452 s | 399 s | 402 s | **≤ 45 s** |
+
+Reasoning:
+
+- Both are dominated by the per-span catalogue rebuild: 91% of the real
+  copy's profiled admission (2,373 of 2,602 s) and 87% of its profiled check
+  (1,146 of 1,323 s). Story 2 removes it by building the catalogue once per
+  distinct settings input within a request or job, which
+  `AudioIdentityContext` already intends with its `_service_config_cache`
+  but the cast path does not pass on.
+- cProfile profiles only the thread it runs on, so the residual outside the
+  rebuild is all main-thread work; the lease monitor's SQL, counted in the
+  statement totals, is not part of it. The residual is 229 s of the profiled
+  admission and 177 s of the profiled check. Scaled by each job's profile
+  overhead (2,602 / 703 = 3.7x and 1,323 / 404 = 3.3x), removing the
+  catalogue rebuild alone is estimated to leave about **62 s of admission**
+  and **54 s of opening check**: just over the first target and well over the
+  second.
+- What that residual is made of, from the same real-copy profiles:
+  - admission: JSON decoding of rows (75 s own time, 315,316 decodes),
+    `generation_cast_runtime.validate_retained_cast_resolution` (58 s, 6,424
+    calls, of which `require_current_session_access` 27 s and
+    `speech_inputs._graph` 24 s are per-span lookups), and the rest of cast
+    binding in `generation_rendering._binding_result` outside the catalogue;
+  - opening check: JSON decoding (68 s own time, 141,405 decodes; the run's
+    settings snapshot alone is 7.9 MB), `validate_retained_cast_resolution`
+    (58 s, 6,400 calls), `speech_performance.compile_performance` (17 s) and
+    `tts_language_preflight.resolve_tts_language_support` (16 s).
+- The targets stay about ten times faster than today: admission ≤ 60 s for 1
+  to 15 segments, the opening check ≤ 45 s. Meeting them needs the catalogue
+  fix plus a cut in those secondary costs: per-span retained-resolution
+  lookups done once per binding rather than per span, and the large JSON
+  snapshot decoded once rather than per use. If the measured times land well
+  below the targets, story 8 should tighten the admission target.
+- Neither job is a request, so the 15 s MCP limit does not apply to them. It
+  does apply to the reads sampled while they run (R6): `auth/status` stayed
+  under 1 s throughout (max 0.8 s), while a small-project listing sampled
+  every 2 s took 13-60 s and slowed the job it ran beside by about 2.3x, so a
+  heavy read beside admission is itself a stall (story 8).
+- Admission and check cost the same for 1 and 15 segments because both
+  compute the identity of the whole plan. A cheaper path for a small
+  regenerate (identities only for the selected segments where that is safe)
+  would change both by orders of magnitude, but "a take is only reused when
+  its audio identity truly matches" may require the whole plan. The targets
+  above do not assume it.
+
+## Limits of this baseline
+
+- The large reads ran once each: every one is far over the 60 s repeat limit,
+  so their "median" is one sample. Small reads ran three times; their spread
+  was under 0.5 s.
+- Two large reads, full plan status and full revision history, timed out at
+  900 s on both roots, so their total server time is the 900 s plus the busy
+  time recorded after it.
+- Profiles are spread over four runs and three roots (real, seed 3, seed 4),
+  because one large plan status or revision history takes about two hours
+  under cProfile. Each operation has at least one profile; the large plan's
+  `auth_status` and `revisions_summary` have none (they answer in 0.03 s).
+  Two early profile runs were stopped after their plan status section, before
+  the script saved after each operation, so the real large `segments_non_active`
+  and `plan_status` and seed 3's large `segments_default` and `plan_status`
+  sections exist only in the printed output the cost table was taken from;
+  the rest are in `results/` beside the data roots. The script now rewrites
+  its results file after every operation.
+- The database is a copy without take audio. No timed path opens take files,
+  so this should not matter, but the live install could differ in disk cache
+  and WAL size.
+- The checkout is `0ed54b07` with SQLAlchemy 2.1.8 from ranges, not the
+  installed fork build or `pixi.lock`'s versions. The admission and check
+  times nonetheless land inside the live install's 640-741 s and 328-452 s.
+- Timings come from a machine running other harness processes (up to five
+  CPU-bound Python processes on 16 logical CPUs). The real copy's full run
+  overlapped with up to four others; seed 4's full run overlapped with the
+  seed 4 profile run for its whole length (11:00-15:01 UTC); the real clean
+  admission run overlapped with the two earlier timing runs and two
+  profiles. Load moves timings by several percent, enough to flip the small
+  100-row listing, which sits on the 15 s line.
+- The synthetic seed has no job history (the real copy has 252 jobs and
+  105,540 job events), fewer dialogue segments (see Data), and two adopted
+  speaker plans where the real large plan has four plans in various states.
+  The fewer dialogue segments probably explain why seed 4 runs 2-13% faster
+  than real on most reads, and may decide the borderline small 100-row
+  listing; the others changed no verdict.
+
+## Rerunning
+
+```
+<uv env> python _bmad-output/scripts/large_project_seed.py --root %USERPROFILE%\pandrator-perf\synthetic
+<uv env> python _bmad-output/scripts/large_project_timing.py --root %USERPROFILE%\pandrator-perf\synthetic --timeout 900 --job-timeout 3600
+<uv env> python _bmad-output/scripts/large_project_timing.py --root %USERPROFILE%\pandrator-perf\synthetic --profile --only small,large.segments_compact,large.segments_fields,large.segments_limit100,large.revisions,admission --admission-sizes 15
+<uv env> python _bmad-output/scripts/large_project_seed.py --measure <copy of a data root>
+```
+
+The second command is seed 4's full run, the third its profile run, each
+started on its own fresh copy of `synthetic` (the timing script refuses a
+root with queued or running jobs, and a run leaves its jobs finished, but
+startup still writes to the root). Seeding takes about 25 minutes, most of
+it computing the app's audio identity for every seeded take. The full timing
+run took 4 h 1 min (11:00-15:01 UTC), about an hour of it waiting out the
+after-burst reads. The profile run took 4 h 49 min (11:00-15:49 UTC), 2 h 20
+min of it the large revision history. `--only` takes operation names,
+`small` or `large`, `small.<operation>` or `large.<operation>`, `admission`
+and `burst`. Results are rewritten after each operation, so a stopped run
+keeps what it measured. Time a copy of a real root, never the original: startup migrates,
+reconciles and writes to it. Results go to `results/` beside the data root.
