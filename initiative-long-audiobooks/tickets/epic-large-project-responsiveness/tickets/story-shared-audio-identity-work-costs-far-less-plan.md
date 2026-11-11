@@ -3,7 +3,7 @@ title: 'Shared audio identity work costs far less'
 type: bugfix
 ticket: '2'
 created: '2026-11-11'
-status: built
+status: done
 baseline_revision: '0ed54b0764eaae756fcbf935cf3f3bbdfe2ca91d'
 route: full
 route_source: auto
@@ -104,3 +104,39 @@ Pass 1, quick lens. 0 high, 1 medium, 4 low, 0 false, 0 maybe-false.
 - `uvx ruff@0.17.3 check .` and `<uv env> --with sqlalchemy==2.0.52 python scripts/check_types.py` -- expected: clean except the known `nemo_normalizer.py:98`
 - `<uv env> python scripts/check_docs.py` -- expected: pass
 - `<uv env> python _bmad-output/scripts/large_project_timing.py --root <fresh copy> --timeout 900 --job-timeout 3600 --skip-burst` -- expected: table printed, exit 0
+
+## Code Review
+
+### 2026-11-11
+
+Code review complete. 0 decision-needed, 8 patch, 0 defer, 9 rejected. Lenses: blind-hunter, edge-case-hunter, verification-gap, intent-alignment (none failed).
+
+- [x] [Review][Patch] apply_resolved_binding call sites outside the threaded set still rebuild the catalogue per cast span (freeze_boundaries with a voice-change pause, apply_segment_voice via segment_performance_settings, preview_render_parts) [pandrator/web/speech_boundaries.py:195]
+- [x] [Review][Patch] Carried-freeze proof memo is unguarded by any test [pandrator/web/generation_cast_runtime.py:855]
+- [x] [Review][Patch] Listing's live-material mode and the pending-proof memo path are untested [tests/test_audio_identity_cost.py:390]
+- [x] [Review][Patch] The test's uncached reference and its comments misdescribe the old code [tests/test_audio_identity_cost.py:327]
+- [x] [Review][Patch] Test module docstring names private planning [tests/test_audio_identity_cost.py:3]
+- [x] [Review][Patch] reference_pass and _freeze_fresh manage patches by hand [tests/test_audio_identity_cost.py:322]
+- [x] [Review][Patch] `_proofs` memo should be a set [pandrator/web/generation_cast_runtime.py:200]
+- [x] [Review][Patch] Release note uses internal terms [docs/release-notes-next.md:9]
+
+Applied 2026-11-11:
+- F1: `apply_segment_voice` and `segment_performance_settings` take an optional `_service_config_cache`. The identity pass, the admission freeze loop (`speech_plan_workspace.py`) and `freeze_boundaries` pass one cache, and `preview_render_parts` passes its existing one. Synthesis-time callers are unchanged. Two new tests failed on the reviewed code: 13 builds for 12 segment-level voices and 10 with a voice-change pause. Each now has at most 1-2.
+- F2: the carried freeze test counts `check_speech_input`: 2 proofs, against 10 without the memo.
+- F3: the identity test compares a live-material context, as the listing uses one. A new test shows a pending proof is consulted once per revision and pin, and that a declined one falls through to the graph check once.
+- F4-F6: the reference docstring and measured comment are corrected, the story reference is gone, and the patches use `ExitStack`.
+- F7: `_proofs` is a `set[tuple[Any, ...]]`; its docstring says a hit skips only the access and pin proofs.
+- F8: the release note is reworded for users.
+- Checks (uv env, Windows): the focused files below plus every test of the newly touched functions (24 files) gave 554 passed, 1 xfailed under SQLAlchemy 2.0.52 and again under 2.1.8. `fast-xdist`: 3673 passed. Ruff clean; types clean except the known `nemo_normalizer.py:98`; `test_lanes.py check`, `check_docs.py` and `vulture` pass. Timing was not rerun after the patches.
+- Expected conflict: upstream PR #125 (lukaszliniewicz/Pandrator) adds `self._revision_plan_rows` to `AudioIdentityContext.__init__` beside `_retained_proofs`. Expect a small conflict there when upstream is merged. The changes do not otherwise overlap, and their gains add up.
+
+Rejected:
+- false: the access memo key omits the actor; every context and freeze is function-local inside one session and one actor scope.
+- low: the live segment-slot path in for_segment re-proves without the memo; segment slots each hold their own reference and are reached only after a segment voice changes, and the fix needs another parameter through resolve_project_cast_binding.
+- false: no test that a run's per-segment context catches a mid-run pin deletion; the diff does not touch that site and the memo cannot cross contexts.
+- low: cost bounds are loose; they still separate 2 from 22 statements per segment, with headroom for SQLAlchemy 2.0/2.1 differences.
+- false: admission, the opening check and large plan reads miss their targets; stays with stories 4, 8 and 9, which own those targets.
+- low: "query count falls" checked as a bound; the pre-change counts are recorded as the plan required, and a same-run before needs the old code.
+- low: identities compared with a simulated before; it covers exactly the two mechanisms the change adds.
+- false: the freeze change exceeds the literal for_segment scope; the plan's Code Map names the freeze.
+- low: the access proof once per context hides a lease lost mid-pass; already rejected in the Review Triage Log above.
