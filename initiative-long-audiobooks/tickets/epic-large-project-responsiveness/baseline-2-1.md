@@ -729,3 +729,58 @@ An MCP status call now costs `plan_status_summary` + `revision_active` (about
 7.0 s on `real`), and a history call `revisions_summary` + `revision_active`
 (about 6.6 s), each request separately under the 15 s client timeout. The five
 operations the acceptance criterion names are all at most 6.61 s.
+
+## After story 5
+
+Story 5 stops a segment listing from paying for the whole plan. The identity
+pass (the page's audio reuse status) now runs only when the response carries
+`audio_reuse_reason` or `has_reusable_take` (the default and compact views, or a
+`fields` list naming one of them), and when it runs it freezes the cast for the
+page's segments, not every segment of the revision. Measured on the story 5
+working tree on top of `35e82ff9` (uncommitted), with
+`large_project_timing.py --timeout 900 --skip-burst --skip-admission` on fresh
+copies of `real` and `synthetic` under
+`%USERPROFILE%\pandrator-perf\work-2-5\` (uv environment, SQLAlchemy 2.0.52,
+one root running at a time, no other harness process). Medians over three runs,
+large project; the story 3 column is the "After story 3" section above.
+
+| Operation, large project | Story 3 (real) | real | synthetic |
+|---|---|---|---|
+| `segments_default` | 3.12 s | 0.70 s | 0.81 s |
+| `segments_compact` | 2.72 s | 0.40 s | 0.51 s |
+| `segments_fields` | 2.71 s | 0.08 s | 0.06 s |
+| `segments_limit100` | 3.02 s | 0.77 s | 0.89 s |
+| `segments_non_active` | 2.95 s | 0.64 s | 0.68 s |
+| `plan_status` (not in scope) | 16.47 s | 16.70 s | 16.54 s |
+| `revisions` (not in scope) | 16.23 s | 16.18 s | 16.20 s |
+| `revision_non_active` (not in scope) | 6.62 s | 6.49 s | 6.64 s |
+
+All five listings are far inside 15 s and below their story 3 figures.
+Small-project segment listings are all under 0.35 s. The plan
+status and revision history reads are untouched by this story.
+
+**Profile of `segments_limit100`** (`--profile --runs 1 --only
+large.segments_limit100`, fresh copy of `real`): 2.2 s under cProfile against
+8.6 s after story 3, with 210 statements (0.025 s in SQL). The cast freeze
+(`freeze_cast_snapshot`) is 0.18 s of it, called once for the page's 100
+segments, against about 6.7 s for the whole-plan freeze. What remains is
+`for_segment` (0.88 s, 100 calls), two `freeze_performance_snapshot` calls
+(0.94 s: the assembly-pause and identity freezes, which story 5 leaves whole by
+design), and `copy.deepcopy` (1.2 million calls).
+
+**Work the regression tests count** (`tests/test_audio_identity_cost.py`,
+12-segment cast plan, through `services.generation.list_segments`):
+
+| Page | Statements | `build_render_parts` calls | Segments the cast freeze visits |
+|---|---|---|---|
+| `limit=1, fields=["id"]`, before | 70 | 13 | 12 |
+| `limit=1, fields=["id"]`, after | 24 | 0 | 0 |
+| `limit=1`, default, before | 74 | 13 | 12 |
+| `limit=1`, default, after | 46 | 2 | 1 |
+| Default page of all 12, before and after | 100 | 24 | 12 |
+
+**One behaviour change** (owner decision, 2026-11-11): a cast voice that fails
+to resolve for a segment outside the page no longer marks the page's rows
+`audio_identity_unknown`; each page reports its own rows' identity, and the
+page that holds the failing segment still reports all its rows unknown. This
+matches how a retained-input run validates its own segments.
