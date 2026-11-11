@@ -498,3 +498,95 @@ min of it the large revision history. `--only` takes operation names,
 and `burst`. Results are rewritten after each operation, so a stopped run
 keeps what it measured. Time a copy of a real root, never the original: startup migrates,
 reconciles and writes to it. Results go to `results/` beside the data root.
+
+## After story 2
+
+Story 2 passes the request's catalogue cache through the cast-binding path and
+remembers, within one identity context or one cast freeze, which retained pins
+already passed their database proof. Measured on the story 2 working tree on
+top of `0ed54b07` (uncommitted), with `large_project_timing.py --skip-burst
+--timeout 900 --job-timeout 3600` on fresh copies of `real` and `synthetic`
+(seed 4) under `%USERPROFILE%\pandrator-perf\work-2-2\after-real` and
+`after-synthetic`, run at the same time on one machine (uv environment,
+SQLAlchemy 2.0.52, no other harness process). Each cell gives the median over
+three runs; the before column is the story 1 table above (real copy, then
+synthetic), and a timeout counts as 900 s.
+
+### Reads, small project (189 segments)
+
+| Operation | Before, real / synthetic | After, real | After, synthetic |
+|---|---|---|---|
+| `auth_status` | 0.02 s / 0.02 s | 0.02 s | 0.02 s |
+| `segments_default` | 12.75 s / 12.14 s | 0.42 s | 0.41 s |
+| `segments_compact` | 12.74 s / 12.11 s | 0.32 s | 0.34 s |
+| `segments_fields` | 12.73 s / 12.01 s | 0.38 s | 0.33 s |
+| `segments_limit100` | 15.50 s / 14.70 s | 0.46 s | 0.50 s |
+| `segments_non_active` | 9.84 s / 9.10 s | 0.27 s | 0.23 s |
+| `plan_status` | 61.52 s / 53.77 s | 1.58 s | 1.43 s |
+| `plan_status_summary` | 0.12 s / 0.11 s | 0.12 s | 0.11 s |
+| `revisions` | 62.16 s / 53.78 s | 1.47 s | 1.27 s |
+| `revisions_summary` | 0.03 s / 0.03 s | 0.03 s | 0.03 s |
+| `revision_non_active` | 0.11 s / 0.09 s | 0.09 s | 0.10 s |
+
+### Reads, large project (5,167 segments)
+
+| Operation | Before, real / synthetic | After, real | After, synthetic |
+|---|---|---|---|
+| `auth_status` | 0.02 s / 0.01 s | 0.01 s | 0.02 s |
+| `segments_default` | 281.21 s / 260.39 s | 6.39 s | 6.64 s |
+| `segments_compact` | 273.05 s / 257.40 s | 6.15 s | 6.26 s |
+| `segments_fields` | 266.44 s / 257.93 s | 6.25 s | 6.33 s |
+| `segments_limit100` | 268.45 s / 263.45 s | 6.60 s | 6.70 s |
+| `segments_non_active` | 275.06 s / 259.99 s | 6.39 s | 6.48 s |
+| `plan_status` | over 900 s (timed out, busy 666 s more) / over 900 s (busy 746 s more) | 42.63 s | 43.27 s |
+| `plan_status_summary` | 0.40 s / 0.34 s | 0.40 s | 0.29 s |
+| `revisions` | over 900 s (busy 623 s more) / over 900 s (busy 968 s more) | 41.83 s | 42.54 s |
+| `revisions_summary` | 0.03 s / 0.02 s | 0.03 s | 0.03 s |
+| `revision_non_active` | 579.42 s / 683.10 s | 20.11 s | 20.17 s |
+
+### Admission and opening check, large project
+
+| Segments | | Before, real / synthetic | After, real | After, synthetic |
+|---|---|---|---|---|
+| 1 | admission job | 703.4 s / 753.8 s | 104.8 s | 103.6 s |
+| 1 | opening check | 403.7 s / 433.9 s | 85.8 s | 85.6 s |
+| 1 | `auth/status` during, median / max | 0.08 s / 0.77 s | 0.12 s / 1.32 s | 0.12 s / 0.20 s |
+| 15 | admission job | 710.2 s / 765.6 s | 97.0 s | 94.9 s |
+| 15 | opening check | 398.6 s / 430.9 s | 88.8 s | 86.8 s |
+| 15 | `auth/status` during, median / max | 0.09 s / 0.80 s | 0.09 s / 0.24 s | 0.09 s / 0.21 s |
+
+All requests answered 200 and both roots agree within 2-3% on every row (the
+admission job within 1-3%, the opening check within 2%).
+
+### What this says
+
+- **Every read that was over its limit by two orders of magnitude is down by
+  40 to 100 times or more.** Large listings 260-281 s to 6.1-6.7 s, small
+  listings 9-15 s to under 0.5 s (all under 15 s), small plan status and
+  revision history 54-62 s to 1.3-1.6 s, large non-active revision 579-683 s
+  to 20 s.
+- **Large plan status and revision history went from a 900 s timeout (26-31
+  minutes of server time) to about 42 s.** Both still run over the 15 s MCP
+  limit; the large non-active revision (20 s) too, and the large listing (6.4
+  s) is inside it only by a factor of 2.3. The cost that remains is the
+  per-segment Python work in identity computation, which was not profiled for
+  this section; stories 3 and 4 own the listing's page logic and the summary
+  paths.
+- **Admission is 7x faster (about 95-105 s) and the opening check 4.7-5x
+  faster (about 86-89 s).** Neither meets the proposed targets (admission
+  at most 60 s, opening check at most 45 s), and the 62 s and 54 s the
+  baseline estimated for removing only the catalogue rebuild were
+  optimistic by about 1.6x on both. The remaining time is the secondary costs
+  named in the baseline (JSON decoding of large rows and the settings
+  snapshot, per-span cast binding outside the catalogue, performance
+  compilation), which story 8 owns; if story 8 holds the targets, this is the
+  starting point to profile from.
+- **Statements no longer grow per retained span.** The regression test
+  `tests/test_audio_identity_cost.py` records it on a 12-segment cast plan:
+  11 catalogue builds and 271 statements before, 1 build and 75 statements
+  after (139 for the first six segments before, 63 after).
+- The baseline's profile-share claims (catalogue rebuild 86-97% of every
+  slow read) were not re-measured with `--profile`; the timings above are the
+  evidence, so the surviving cost is unattributed here.
+- Not measured: the burst of abandoned reads (run with `--skip-burst`), which
+  does not depend on this change.
