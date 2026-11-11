@@ -3,7 +3,7 @@ title: 'A fresh Windows clone follows a written setup to passing checks'
 type: chore
 ticket: '14'
 created: '2026-11-10'
-status: built
+status: done
 baseline_revision: 'cee8fa56c36c0962f7b22f46b788bfd4d52fcdbd'
 route: full
 route_source: auto
