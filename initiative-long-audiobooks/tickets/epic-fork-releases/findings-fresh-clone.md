@@ -76,8 +76,8 @@ The two test fixes were applied to the fresh clone and to the owner's checkout. 
 3. **Open, owner to decide.** `web/tests/project-ux.spec.ts:174` fails on Chromium every time: 4 of 4 runs alone, plus the full run.
    - **What fails:** after the UI reports "Block directions and speaker assignments saved", the saved `speech_xml` has the `<ins>` direction but no `<speaker ref="...">` for the chosen character.
    - **History:** it also failed on CI run 42908347707.
-   - **Reading:** probably a product bug. No backlog bug exists for it yet.
-4. **Open, owner to decide: test processes leak under the uv route.**
+   - **Status:** a real product bug, already fixed upstream in `5bb47cfc` (part of #120). It is filed as `_bmad-output/backlog/bug-manual-speaker-choice-lost-before-save.md` and closes with the next upstream merge into fork `main`.
+4. **Fixed after the story, test fault: test processes leaked under the uv route.** `tests/test_installer_uninstall.py` now starts its child with `tests.platform_support.direct_python()`, so terminating it stops the sleeping interpreter. The rerun left 0 processes (9 passed). The original record follows.
    - **Mechanism:** under `<uv env>` on Windows, `sys.executable` is a launcher. Tests that `Popen([sys.executable, ...])` and later `terminate()` it stop only the launcher, and the real interpreter keeps running.
    - **Evidence:** reproduced directly — after `terminate()`, the child of the launcher was still alive.
    - **Measured:** running each file that spawns such a child showed `tests/test_installer_uninstall.py` as the only file that left processes behind. The run of `test_manager_control_plane.py` with two other files left none.
@@ -100,7 +100,8 @@ The two test fixes were applied to the fresh clone and to the owner's checkout. 
   - **History:** neither the test nor `pandrator_manager/` changed since the last green run (42721766846).
   - **Locally:** 6 of 6 passes, alone and in its lane.
   - **Reading:** the test does not close three applications and relies on 5 s thread gates, so a loaded runner can hold the database open at teardown. That is a reading, not a proven cause.
-  - **Status:** open, timing-dependent.
+  - **CI traceback:** the first assertion to fail was `before_stop.wait(5)` (line 402). Daemon startup did not reach the recovered update's stop task within 5 s. Every later error follows from that: the worker still alive, and the database still open at teardown.
+  - **Fixed after the story, test fault (cause inferred from the traceback):** the two startup waits now use `STARTUP_TIMEOUT = 30`, matching the file's `_wait` helper. The other gates are unchanged. 12 passed locally.
 - **Web migration preview, run 42930053446, `ubuntu-web-01`.** 239 passed and 0 failed. The job failed only at artifact upload (`ENOTFOUND`), which is GitHub infrastructure.
 - **Same run, E2E Windows Firefox shard 3/4.**
   - **`readiness-summary.spec.ts:70`:** a deep-equality failure. It also failed on Ubuntu Firefox in run 42922628333. Two consecutive runs on two operating systems makes it likely a real Firefox-only failure, but it could not be checked here because Firefox does not start.
@@ -111,17 +112,17 @@ The two test fixes were applied to the fresh clone and to the owner's checkout. 
 
 ## Upstream PRs
 
-Upstream #120 merged while this story ran, and upstream `main` is now `83d4835d`. Upstream still
+Upstream #120 merged while this story ran, and upstream `main` is now `83d4835d`. The PR bodies are in `upstream-pr-drafts.md`, beside this file. Upstream still
 has none of the three fixes below. The conflict results come from `git merge-tree` against that
 commit.
 
 | Fix | Commits | Against upstream `main` | Status |
 | --- | --- | --- | --- |
-| Lease heartbeat during the opening identity check | `415aaa8a` | conflicts only in `docs/release-notes-next.md` (left out of the PR) | awaiting go-ahead |
-| LF rules for browser build inputs and outputs | `3b4484ce`, `0a07679d` | first clean; second conflicts in `tests/test_frontend_architecture.py` | awaiting go-ahead |
-| Short Windows test temp root | `0ce71320`, `a5918f5b`, `f6aefbe2` | clean in order | awaiting go-ahead |
+| Lease heartbeat during the opening identity check | `415aaa8a` → branch `keep-generation-heartbeats-during-identity-check` `2f643fac` | release-notes hunk left out; 21 of 21 tests pass with a short temp root | opened 2026-11-10: [#123](https://github.com/lukaszliniewicz/Pandrator/pull/123) |
+| LF rules for browser build inputs and outputs | `3b4484ce`, `0a07679d` → branch `keep-browser-build-files-lf` `b81cce4d` | both applied cleanly; Windows LF rebuild leaves `static` clean | opened 2026-11-10: [#122](https://github.com/lukaszliniewicz/Pandrator/pull/122) |
+| Short Windows test temp root | `0ce71320`, `a5918f5b`, `f6aefbe2` squashed → branch `windows-test-temp-root` `57a1b9b7` | upstream's generation tests go from 5 failed to 15 passed | opened 2026-11-10: [#121](https://github.com/lukaszliniewicz/Pandrator/pull/121) |
 | Leaked execution actor | `f94fd9f6` | conflicts in `tests/test_web_security.py` | held for #120, which has now landed: owner to decide |
 | Test repairs of stories 7–12 | many | not checked | held for #120, which has now landed: owner to decide |
-| The two test fixes of this story | uncommitted | not checked | owner to decide |
+| The test fixes of this story (metadata pid, control-plane pid file, uninstall child, Manager startup wait) | fork commits after `c30d2faf` | not checked | owner to decide; the uninstall and pid fixes matter only under a venv launcher |
 | Lane split; FFmpeg CI | `93c0e68e`; `e2ca83b8`, `388a1bb7` | — | dropped: #120 reworks the same workflows |
 | Fork version and identity | `ebe7194d`, `84645183`, `4c12bc41` | — | never offered: fork-only |
