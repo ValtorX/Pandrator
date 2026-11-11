@@ -347,7 +347,7 @@ def test_timing_run_writes_the_result_schema(seeded_root: Path, tmp_path: Path) 
     operations = {(row["phase"], row["operation"]) for row in result["reads"]}
     for name in ("auth_status", "segments_default", "segments_compact", "segments_fields",
                  "segments_limit100", "segments_non_active", "plan_status", "plan_status_summary",
-                 "revisions", "revisions_summary", "revision_non_active"):
+                 "revisions", "revisions_summary", "revision_active", "revision_non_active"):
         assert ("large", name) in operations and ("small", name) in operations
     assert all(row["statuses"] == [200] for row in result["reads"])
     (admission,) = result["admissions"]

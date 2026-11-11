@@ -701,3 +701,31 @@ for every span. On the 12-segment cast plan that reference makes 14
 `package_metadata` calls, 14 language-support endpoint lookups, 12 controls
 copies and 42 character validations; the identity pass now makes 1, 1, 0 and 3,
 the same for 6 segments as for 12.
+
+## After story 4
+
+Story 4 makes the MCP tools `pandrator_get_speech_plan_status` and
+`pandrator_list_speech_plan_revisions` request the summary variants, then fetch
+the detail of the active revision only (a separate request) and copy its five
+audio reuse fields onto that item. Default HTTP responses are unchanged, so the
+full `plan_status` and `revisions` stay at about 16 s and nothing requests them
+by default. Measured on the story 4 working tree on top of `24c1dd36`
+(uncommitted), with `large_project_timing.py --timeout 900 --skip-burst
+--skip-admission` on fresh copies of `real` and `synthetic` under
+`%USERPROFILE%\pandrator-perf\work-2-4\` (uv environment, SQLAlchemy 2.0.52,
+one root running at a time). Medians over three runs, large project.
+
+| Operation | real | synthetic |
+|---|---|---|
+| `plan_status_summary` | 0.39 s | 0.28 s |
+| `revisions_summary` | 0.04 s | 0.03 s |
+| `revision_active` | 6.61 s | 6.56 s |
+| `revision_non_active` | 6.44 s | 6.28 s |
+| `segments_non_active` | 2.96 s | 3.01 s |
+| `plan_status` (full, reference) | 16.68 s | 16.74 s |
+| `revisions` (full, reference) | 16.22 s | 15.69 s |
+
+An MCP status call now costs `plan_status_summary` + `revision_active` (about
+7.0 s on `real`), and a history call `revisions_summary` + `revision_active`
+(about 6.6 s), each request separately under the 15 s client timeout. The five
+operations the acceptance criterion names are all at most 6.61 s.

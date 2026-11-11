@@ -427,7 +427,8 @@ class Operation:
 
 
 def read_matrix(project: ProjectChoice) -> list[Operation]:
-    """The MCP tools' read requests for one project, with their default parameters."""
+    """Read requests for one project. The MCP status and history tools send the summary
+    variants plus `revision_active`; the full `plan_status` and `revisions` stay for reference."""
     session = f"/api/v1/sessions/{project.session_id}"
     listing = {"cursor": 0, "limit": 50, "audio_version_side": "after"}
     operations = [
@@ -459,6 +460,10 @@ def read_matrix(project: ProjectChoice) -> list[Operation]:
             {"limit": 50, "summary": "true"},
         ),
     ]
+    operations.append(Operation(
+        "revision_active", "GET",
+        f"{session}/generation-plan/revisions/{project.active_revision_id}",
+    ))
     if project.non_active_revision_id:
         operations.append(Operation(
             "revision_non_active", "GET",
