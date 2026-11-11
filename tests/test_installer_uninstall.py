@@ -18,6 +18,7 @@ from pandrator_installer.lifecycle import main
 from pandrator_installer.lifecycle_guard import LIFECYCLE_GUARD_NAME, installation_lifecycle_guard
 from pandrator_installer.process_identity import capture_process_identity, identity_payload
 from pandrator_installer.service import HeadlessInstaller
+from tests.platform_support import direct_python
 
 
 def _populate(workspace: Path) -> Path:
@@ -73,7 +74,7 @@ class InstallerUninstallTests(unittest.TestCase):
                 root = _populate(workspace)
                 token = uuid.uuid4().hex
                 child = subprocess.Popen(
-                    [sys.executable, "-c", "import time; time.sleep(60)", token],
+                    [direct_python(), "-c", "import time; time.sleep(60)", token],
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,

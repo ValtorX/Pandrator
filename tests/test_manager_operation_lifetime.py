@@ -38,6 +38,11 @@ from pandrator_manager.operations import OperationEngine
 from pandrator_manager.supervisor import ProcessSupervisor
 from tests.test_manager_operations import _commit, _registry, _wait
 
+# Daemon startup reaches the recovered update's stop task only after creating the application,
+# recovering the operation and reading the component repository. A loaded Windows CI runner
+# has taken longer than 5 s for that, so bound it like `_wait` does.
+STARTUP_TIMEOUT = 30
+
 
 class _BackpressureChannel(Protocol):
     """The native Waitress testing hook is absent from its public stubs."""
@@ -357,7 +362,7 @@ class OperationLifetimeTests(unittest.TestCase):
 
             def start() -> None:
                 original_start()
-                if not before_stop.wait(5):
+                if not before_stop.wait(STARTUP_TIMEOUT):
                     raise RuntimeError("Recovered update did not reach its stop task")
 
             engine.start = start
@@ -399,7 +404,7 @@ class OperationLifetimeTests(unittest.TestCase):
             worker = threading.Thread(target=run)
             try:
                 worker.start()
-                self.assertTrue(before_stop.wait(5))
+                self.assertTrue(before_stop.wait(STARTUP_TIMEOUT))
                 # Give the old implementation time to snapshot True before stop.
                 selected_before_stop = selected.wait(0.1)
                 allow_stop.set()
