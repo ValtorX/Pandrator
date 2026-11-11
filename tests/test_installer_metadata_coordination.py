@@ -112,10 +112,9 @@ class InstallerMetadataCoordinationTests(unittest.TestCase):
                     message = json.loads(line)
                     if not publisher_pids:
                         # A virtualenv python.exe on Windows is a launcher: the process that
-                        # reports is its child, so accept the child or any descendant.
+                        # reports is its direct child, so accept the child or its child.
                         reporter = psutil.Process(message["pid"])
-                        lineage = {reporter.pid, *(p.pid for p in reporter.parents())}
-                        self.assertIn(child.pid, lineage)
+                        self.assertIn(child.pid, {reporter.pid, reporter.ppid()})
                         publisher_pids.append(message["pid"])
                     self.assertEqual(message["pid"], publisher_pids[0])
                     self.assertEqual(message["token"], token)

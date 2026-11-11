@@ -117,7 +117,10 @@ import sys
 import time
 from pathlib import Path
 child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
-Path({str(child_pid_path)!r}).write_text(str(child.pid), encoding='ascii')
+# Publish the pid atomically, so a reader never sees the file before it is written.
+pending = Path({str(child_pid_path)!r} + '.pending')
+pending.write_text(str(child.pid), encoding='ascii')
+pending.replace({str(child_pid_path)!r})
 time.sleep(0.5)
 """
     return ManagedProcessSpec(
@@ -254,12 +257,9 @@ class SupervisorIntegrationTests(unittest.TestCase):
             supervisor.register(spec)
             service = supervisor.start(spec.service_id)
             deadline = time.monotonic() + 3
-            while (
-                not (child_pid_path.exists() and child_pid_path.stat().st_size)
-                and time.monotonic() < deadline
-            ):
+            while not child_pid_path.exists() and time.monotonic() < deadline:
                 time.sleep(0.05)
-            self.assertTrue(child_pid_path.exists() and child_pid_path.stat().st_size)
+            self.assertTrue(child_pid_path.exists())
             child_pid = int(child_pid_path.read_text(encoding="ascii"))
             try:
                 self.assertEqual(
@@ -286,12 +286,9 @@ class SupervisorIntegrationTests(unittest.TestCase):
             service = supervisor.start(spec.service_id)
             launcher_pid = service.process.pid
             deadline = time.monotonic() + 3
-            while (
-                not (child_pid_path.exists() and child_pid_path.stat().st_size)
-                and time.monotonic() < deadline
-            ):
+            while not child_pid_path.exists() and time.monotonic() < deadline:
                 time.sleep(0.05)
-            self.assertTrue(child_pid_path.exists() and child_pid_path.stat().st_size)
+            self.assertTrue(child_pid_path.exists())
             self.assertTrue(wait_for_process_exit(launcher_pid))
             child_pid = int(child_pid_path.read_text(encoding="ascii"))
             try:
@@ -316,12 +313,9 @@ class SupervisorIntegrationTests(unittest.TestCase):
             started = first.start(spec.service_id)
             launcher_pid = started.process.pid
             deadline = time.monotonic() + 3
-            while (
-                not (child_pid_path.exists() and child_pid_path.stat().st_size)
-                and time.monotonic() < deadline
-            ):
+            while not child_pid_path.exists() and time.monotonic() < deadline:
                 time.sleep(0.05)
-            self.assertTrue(child_pid_path.exists() and child_pid_path.stat().st_size)
+            self.assertTrue(child_pid_path.exists())
             self.assertTrue(wait_for_process_exit(launcher_pid))
             child_pid = int(child_pid_path.read_text(encoding="ascii"))
             unrelated = subprocess.Popen(
