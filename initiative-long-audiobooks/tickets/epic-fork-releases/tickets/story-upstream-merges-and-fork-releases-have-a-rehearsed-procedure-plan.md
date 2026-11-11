@@ -123,7 +123,7 @@ For story 14 (owner discussion, 2026-11-10, after this story was done). The owne
 - Offer, one PR each:
   - The lease fix `415aaa8a`. #120 touches the same files but conflicts only on `docs/release-notes-next.md`, which the PR leaves out. Evidence: on the stock 30-second lease the real book's 5,167-segment opening check ran 6 min 55 s and passed on the first attempt (story 2's notes); before the fix it failed at about 31 s.
   - The LF rules for the browser build, `3b4484ce` and `0a07679d`. No overlap with #120 apart from one conflict in `tests/test_frontend_architecture.py`.
-  - The short Windows test temp root, `0ce71320` and `a5918f5b`. No overlap of substance.
+  - The short Windows test temp root, `0ce71320` and `a5918f5b`, plus the follow-up fix that resets explicit ACL entries (story 6's follow-up, `f6aefbe2`). Without it, `test_restrict_leaves_only_the_current_user` fails on GitHub's Windows runners. No overlap of substance.
 - Drop as superseded: the lane split `93c0e68e` and the FFmpeg CI changes `e2ca83b8` and `388a1bb7`, because #120 reworks the same workflows and lanes.
 - Hold until #120 lands: the leak fix `f94fd9f6` (#120 rewrites 8 of its 10 files) and the test repairs of stories 7 to 12 (78 conflicts with the epic branch). Then rerun them on the new upstream `main` and offer only what still fails, as small PRs grouped by cause.
 - File as issues, not PRs: the backlog bugs, such as saved preview settings failing generation and the security log on Windows.

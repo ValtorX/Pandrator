@@ -151,3 +151,9 @@ Rejected:
 - Fix lives in conftest, not the lane runner — false: the approved approach.
 - Persistent root and pruning are outside the intent — false: the frozen approach and matrix specify both.
 - Leak-guard's copied conftest relies on `PYTHONPATH` — low: passes today, and a self-contained copy adds machinery for a case nobody meets.
+
+### Follow-up fix, 2026-11-10
+
+Fork CI (runs `42851994115` and `42908347707`) failed `test_restrict_leaves_only_the_current_user` on the Windows runners: after `restrict_to_current_user` the folder still held SYSTEM, Administrators and the runner account, as explicit entries with no `(I)` flag. `/inheritance:r` removes only inherited entries, so on any folder that already holds explicit ones the root was not restricted to the current user. It passed locally only because local folders get inherited entries. Fix: `tests/windows_temp_root.py` runs `icacls <root> /reset` before the existing `/inheritance:r /grant:r` call. New test `test_restrict_removes_explicit_entries_too` makes the entries explicit with `/inheritance:d` first. The old code leaves 4 entries there; with the fix, `tests/test_windows_temp_root.py` passes 25 of 25 (Windows, `<uv env>`, Python 3.11) and ruff is clean. Committed as `f6aefbe2` with the owner's go-ahead and pushed. On fork CI run `42916821305`, the `windows-fast-xdist` job succeeded, and its JUnit report shows both `test_restrict_leaves_only_the_current_user` and `test_restrict_removes_explicit_entries_too` passed, not skipped.
+
+With the strict expected-failure markers in `cee8fa56`, fork run `42922628333` passed every Python lane on Ubuntu and Windows (63 of 65 jobs). The 2 failures were single flaky browser tests, a different test on each run.

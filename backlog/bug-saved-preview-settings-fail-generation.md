@@ -52,3 +52,4 @@ Freezing a run computes its adapter from settings that still hold the preview ke
 ## Notes
 
 - Decision (2026-11-09): Standalone rather than in a sibling epic, because `epic-fork-releases` story 2 needs it first if the owner's install holds these keys. Story 2 checks that before its real run.
+- Marked (2026-11-10, `cee8fa56` on `epic-fork-releases`): `test_generation_ignores_saved_preview_routing_metadata` carries `xfail(strict=True, raises=AssertionError)` naming this bug, so CI lanes can go green. Strict means the fix turns it into an unexpected pass that fails the run; remove the marker with the fix. Upstream's open release PR #120 changes this test and the code behind it, so the fix may arrive with the next upstream merge.

@@ -50,3 +50,4 @@ The assembly validation loop proves access once per segment, at 3 SELECTs each. 
 ## Notes
 
 - Open question: Should the check be throttled by time, as project copy does, or should the test allow one check per segment? Throttling keeps the test's rule at about 5 product lines, and relaxing is about 3 test lines. Upstream's author owns this test, so any upstream PR leaves the choice to them.
+- Marked (2026-11-10, `cee8fa56` on `epic-fork-releases`): `test_assembly_select_count_does_not_scale_with_segments` carries `xfail(strict=True, raises=AssertionError)` naming this bug, so CI lanes can go green. Strict means the fix turns it into an unexpected pass that fails the run; remove the marker with the fix. Upstream's #120 does not touch it.

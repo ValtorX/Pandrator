@@ -67,3 +67,4 @@ A strict-single regeneration keeps the run's retained speech binding while the s
 ## Notes
 
 - Decision (2026-11-09): Standalone, because it is outside `epic-fork-releases` and upstream has it too. Worth offering upstream once fixed.
+- Marked (2026-11-10, `cee8fa56` on `epic-fork-releases`): both reproduction tests now carry `@pytest.mark.usefixtures("host_execution_actor")`. Without it they failed earlier with `AccessDenied` and never reached this bug. They also carry `xfail(strict=True, raises=AssertionError)` naming this bug, and fail on the `202 != 409` binding error. Strict means the fix turns them into unexpected passes that fail the run; remove the markers with the fix. Upstream's #120 does not touch them.
