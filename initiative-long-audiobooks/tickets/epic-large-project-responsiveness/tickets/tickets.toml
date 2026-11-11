@@ -99,12 +99,13 @@ covers = ["R7"]
 after = [2, 8] # both can change the opening-check path
 hitl = false
 risk = "medium"
+notes = ["Starts after upstream #125 is merged into fork main and this epic's branch (epic Notes, 2026-11-11); #125 changes prepare_segment_reference in workflow_generation_execution.py."]
 
 [[entry]]
 id = 10
 type = "story"
 title = "A cancel stops the opening check"
-description = "Gives the identity loop a cancellation hook, so a cancel during the opening check frees the worker promptly. Builds on the release line carrying 415aaa8a."
+description = "Gives the identity loop a cancellation hook, so a cancel during the opening check frees the worker promptly. Builds on upstream #125's cancel handling (_finish_owned_cancellation_locked in jobs.py, and the queue ending the run), merged into fork main and this epic's branch first."
 verify = "A test cancelling during a slow identity check shows the worker free within seconds and the job closed as cancelled."
 covers = ["R8"]
 after = [2, 8, 9, "1.1"]
