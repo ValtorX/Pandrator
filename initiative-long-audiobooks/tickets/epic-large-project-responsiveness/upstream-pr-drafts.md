@@ -10,9 +10,9 @@ below show `#IDENTITY` where the opened ones say #126.
 
 | Order | Branch | Head | Picked from | Size against `upstream/main` |
 |---|---|---|---|---|
-| 1 | `identity-pass-builds-shared-work-once` | `bade0a9a` | `7f2b631d`, `c5c0dcfb`, `24c1dd36` | 15 files, +1,204 / -29 |
+| 1 | `identity-pass-builds-shared-work-once` | `dec600c5` | `7f2b631d`, `c5c0dcfb`, `24c1dd36`, then CodeRabbit fix `dec600c5` (fork `b2300cc1`) | 15 files, +1,215 / -30 |
 | 2 | `mcp-plan-reads-use-revision-summaries` | `c848b488` | `35e82ff9` | 6 files, +330 / -14 |
-| 3 | `segment-listing-cost-follows-the-page` | `e71c7d06` | branch 1, then `bd700684`, `51848d06` | 16 files, +1,605 / -42 |
+| 3 | `segment-listing-cost-follows-the-page` | `7277945d` | branch 1, then `bd700684`, `51848d06` (rebased onto `dec600c5`) | 16 files, +1,605 / -42 |
 
 Differences from the epic's commits, all deliberate:
 
