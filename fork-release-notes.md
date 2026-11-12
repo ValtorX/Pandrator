@@ -8,7 +8,7 @@ once an upstream release ships it.
 
 ## Unreleased
 
-From `epic-large-project-responsiveness`, story 7.
+From `epic-large-project-responsiveness`, story 7 (upstream PR #132).
 
 ### Fixes
 
