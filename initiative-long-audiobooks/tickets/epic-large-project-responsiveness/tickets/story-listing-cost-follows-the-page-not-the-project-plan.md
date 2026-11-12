@@ -3,7 +3,7 @@ title: 'Listing cost follows the page, not the project'
 type: bugfix
 ticket: '5'
 created: '2026-11-11'
-status: built
+status: done
 baseline_revision: '35e82ff9ef5f282b9553221d5c19f475082bfe53'
 route: full
 route_source: auto
@@ -102,3 +102,29 @@ Owner chose to fix finding 1 here (frozen Decision, 2026-11-11). Patched directl
 - `<uv env> python scripts/test_lanes.py run web-20-serial` and `run fast-xdist` -- expected: pass
 - `uvx ruff@0.17.3 check .`; `<uv env> --with sqlalchemy==2.0.52 python scripts/check_types.py` (only `nemo_normalizer.py:98`); `<uv env> python scripts/test_lanes.py check`; `<uv env> python scripts/check_docs.py`; `<uv env> vulture` -- expected: clean
 - `<uv env> python _bmad-output/scripts/large_project_timing.py --root <fresh copy> --timeout 900 --skip-burst --skip-admission` for `real` and `synthetic` -- expected: table printed, exit 0, every large listing inside 15 s
+
+## Code Review
+
+### 2026-11-11
+
+Code review complete. 1 `decision-needed`, 4 `patch`, 0 `defer`, 12 rejected. Lenses: blind-hunter, edge-case-hunter, verification-gap, intent-alignment (none failed).
+
+- [x] [Review][Decision] Per-segment identity errors after the freeze still mark later rows unknown — `_with_performance` (`generation_audio_identity.py:646`) caches any per-segment ValueError for the whole revision, so the removed-row sort covers removed rows only. Unverified: in a live listing every page row is validated by the page freeze itself, so the open path is a history listing whose selected run's pinned snapshot skips the freeze, after a retained pin was deleted. Options: (a) probe a selected-run listing of `varied_plan` after deleting Fred's pin; if non-Fred rows after the first Fred row turn unknown, isolate per-segment errors for the listing context only (admission and the opening check unchanged); (b) probe only and record the result here; (c) leave it, since story 3 made the shared failure deliberate. Recommended: (a) — the probe settles the claim cheaply, and a listing-only fix matches how the removed-row case was fixed.
+  - Owner chose (a). Probe confirmed it: listing a past run of `varied_plan` after deleting Fred's pin made every row from the first Fred row on `audio_identity_unknown`, Wilma, narration and uncast rows included. Fixed with `_isolate_segment_errors` on `AudioIdentityContext`, set only by `list_segments`: a failure after a clean freeze stays with its row, a failed freeze still marks the whole page. Test: `test_a_failure_after_a_past_runs_freeze_stays_with_its_own_rows` (whole page and each single-row page).
+- [x] [Review][Patch] Test `effective_take` on a page without a reuse field, with takes present [tests/test_audio_identity_cost.py:565]
+- [x] [Review][Patch] Release note implies per-row isolation; a missing voice on the same page still shows that page unknown [docs/release-notes-next.md:10]
+- [x] [Review][Patch] Stale docstrings for the two freeze scopes (`_freeze_segment_ids` vs `cast_segment_ids`) [pandrator/web/generation_cast_runtime.py:717]
+- [x] [Review][Patch] Build the AudioIdentityContext only when the page has rows [pandrator/web/generation_segment_reads.py:737]
+
+Rejected:
+- Page-dependent reuse answer when a page-mate fails (blind, edge): false — the frozen matrix row "Cast fails on the page" specifies it.
+- Removed rows pay a doomed identity computation: low — cost only, short-circuit needs a special identity value.
+- "Costs what it shows" holds only for the cast freeze: false — other freezes stay whole-revision by design; pages of 100 measure 0.77-0.89 s.
+- `needs_reuse` restates projection rules: low — drift is caught by the compact equality test or costs an unused pass.
+- Partial snapshot looks complete: low — private deepcopy, never persisted, guarded in `for_segment`.
+- Equivalence tests miss other cast paths: false — a listing freeze has no carried snapshot or missing-selection callback, keys resolve once, other freezes stay whole-revision.
+- Docstring counts not asserted: low — exact statement counts are brittle; the plan asks for relative checks.
+- MCP default full view computes reuse it drops: low — page-sized cost, no wrong output; fix needs an MCP field map with non-projectable keys.
+- No HTTP/MCP test, timing and concurrency absent from diff: false — timing in `baseline-2-1.md` "After story 5"; concurrency belongs to stories 6-8.
+- Removed-row test reference is not the pre-change output: false — the owner decided that change and the test asserts the new values.
+- Totals not made cheaper: rejected — the frozen Approach keeps totals; the fix would edit the intent.
