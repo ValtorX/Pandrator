@@ -19,6 +19,7 @@ import argparse
 import contextlib
 import cProfile
 import json
+import logging
 import os
 import pstats
 import re
@@ -39,6 +40,9 @@ CHECK_START = "Checking speech plan and voice references"
 CHECK_END = "Loading speech provider settings"
 OWNER_PORTS = (8097, 8098)
 READY_PREFIX = "PERF-READY "
+LOGS_PREFIX = "PERF-LOGS "
+AUDIT_SPOOL_MARKER = "Audit writer busy"
+DATABASE_LOCKED_MARKER = "database is locked"
 INFLIGHT_PATH = "/__perf/inflight"
 HARNESS_JOB_KINDS = ("generation.admit", "generation.run")
 TERMINAL_JOB_STATES = {"succeeded", "failed", "canceled", "cancelled", "dead"}
@@ -319,6 +323,51 @@ class InflightCounter:
                 self.count -= 1
 
 
+class ServerLogCounter(logging.Handler):
+    """Counts the two contention symptoms in the server's log without keeping any text."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+        self.audit_spools = 0
+        self.database_locked = 0
+        self._counts_lock = threading.Lock()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            text = record.getMessage()
+            if record.exc_info and record.exc_info[1] is not None:
+                text += " " + str(record.exc_info[1])
+        except Exception:
+            return
+        with self._counts_lock:
+            if AUDIT_SPOOL_MARKER in text:
+                self.audit_spools += 1
+            if DATABASE_LOCKED_MARKER in text.lower():
+                self.database_locked += 1
+
+    def line(self) -> str:
+        with self._counts_lock:
+            return LOGS_PREFIX + json.dumps(
+                {"audit_spools": self.audit_spools, "database_locked": self.database_locked}
+            )
+
+
+def parse_log_counts(line: str) -> dict[str, int] | None:
+    """Read back a child's LOGS line; anything else is not one."""
+    if not line.startswith(LOGS_PREFIX):
+        return None
+    try:
+        data = json.loads(line[len(LOGS_PREFIX):])
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    counts = {key: data.get(key) for key in ("audit_spools", "database_locked")}
+    if not all(isinstance(value, int) and not isinstance(value, bool) for value in counts.values()):
+        return None
+    return {key: int(value) for key, value in counts.items()}  # type: ignore[arg-type]
+
+
 def serve_child(root: Path, port: int, hold_seconds: float) -> int:
     """Child process: serve the root and run one worker until stdin closes."""
     from waitress import create_server
@@ -328,6 +377,11 @@ def serve_child(root: Path, port: int, hold_seconds: float) -> int:
         target=worker.run_forever, kwargs={"poll_interval": 0.2}, daemon=True
     )
     worker_thread.start()
+    # A handler on the root logger switches off logging's last-resort console output
+    # and makes later basicConfig calls no-ops, so configure the console first.
+    logging.basicConfig()
+    log_counter = ServerLogCounter()
+    logging.getLogger().addHandler(log_counter)
     server = create_server(
         InflightCounter(app), host="127.0.0.1", port=port, threads=12,
         connection_limit=512, channel_timeout=120, cleanup_interval=5,
@@ -335,6 +389,7 @@ def serve_child(root: Path, port: int, hold_seconds: float) -> int:
 
     def watch_parent() -> None:
         sys.stdin.read()
+        print(log_counter.line(), flush=True)
         worker.stop()
         worker_thread.join(timeout=5)
         with contextlib.suppress(Exception):
@@ -545,13 +600,34 @@ def format_sample(sample: Sample) -> str:
     return f"{sample.status} in {sample.seconds:.2f}s"
 
 
+LIGHT_TIMEOUT_SECONDS = 30.0
+
+
 def read_burst(
     client: Client, operation: Operation, *, seconds: float, workers: int, abandon_after: float,
+    light_operation: Operation | None = None, light_workers: int = 0, light_pace: float = 0.0,
 ) -> dict[str, Any]:
-    """Heavy reads whose clients give up like the MCP's 15 s timeout."""
+    """Heavy reads whose clients give up like the MCP's 15 s timeout.
+
+    Light workers loop a cheap read beside them for the same window; they show the
+    per-request write contention that heavy listings alone do not.
+    """
     deadline = time.monotonic() + seconds
     lock = threading.Lock()
     samples: list[Sample] = []
+    light_samples: list[Sample] = []
+
+    def light_loop() -> None:
+        assert light_operation is not None
+        while time.monotonic() < deadline:
+            sample, _ = client.call(
+                light_operation.method, light_operation.path, params=light_operation.params,
+                timeout=LIGHT_TIMEOUT_SECONDS,
+            )
+            with lock:
+                light_samples.append(sample)
+            if light_pace > 0:
+                time.sleep(light_pace)
 
     def loop() -> None:
         while time.monotonic() < deadline:
@@ -562,17 +638,29 @@ def read_burst(
                 samples.append(sample)
 
     threads = [threading.Thread(target=loop, daemon=True) for _ in range(workers)]
+    if light_operation is not None:
+        threads += [threading.Thread(target=light_loop, daemon=True) for _ in range(light_workers)]
     for thread in threads:
         thread.start()
     for thread in threads:
-        thread.join(seconds + abandon_after + 30)
-    return {
+        thread.join(seconds + max(abandon_after, LIGHT_TIMEOUT_SECONDS) + 30)
+    result: dict[str, Any] = {
         "operation": operation.name, "seconds": seconds, "workers": workers,
         "abandon_after_seconds": abandon_after, "requests": len(samples),
         "abandoned": sum(sample.timed_out for sample in samples),
         "completed": sum(sample.status is not None for sample in samples),
         "errors": sum(sample.error is not None for sample in samples),
     }
+    if light_operation is not None and light_workers > 0:
+        summary = summarize(light_samples)
+        result["light"] = {
+            "operation": light_operation.name, "workers": light_workers,
+            "pace_seconds": light_pace, "timeout_seconds": LIGHT_TIMEOUT_SECONDS,
+            "requests": summary["runs"], "statuses": summary["statuses"],
+            "median_seconds": summary["median_seconds"], "max_seconds": summary["max_seconds"],
+            "timeouts": summary["timeouts"], "errors": summary["errors"],
+        }
+    return result
 
 
 def parse_timestamp(value: str | None) -> datetime | None:
@@ -742,24 +830,32 @@ def start_server(root: Path, port: int, hold_seconds: float, startup_timeout: fl
         command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8",
     )
     ready: dict[str, Any] = {}
+    started = threading.Event()
+    log_counts: dict[str, int] = {}
 
-    def read_ready() -> None:
+    def read_output() -> None:
         assert child.stdout is not None
         for line in child.stdout:
             if line.startswith(READY_PREFIX):
                 ready.update(json.loads(line[len(READY_PREFIX):]))
-                return
+                started.set()
+            elif (counts := parse_log_counts(line)) is not None:
+                log_counts.update(counts)
+        started.set()  # a child that exits before READY must not wait out the timeout
 
-    reader = threading.Thread(target=read_ready, daemon=True)
+    reader = threading.Thread(target=read_output, daemon=True)
     reader.start()
-    reader.join(startup_timeout)
+    started.wait(startup_timeout)
+    child.log_counts = log_counts  # type: ignore[attr-defined]
+    child.output_reader = reader  # type: ignore[attr-defined]
     if not ready:
         stop_server(child)
         raise RuntimeError("The timing server did not start.")
     return child, ready
 
 
-def stop_server(child: subprocess.Popen) -> None:
+def stop_server(child: subprocess.Popen) -> dict[str, int]:
+    """Stop the child and return the contention counts it printed on the way out."""
     with contextlib.suppress(Exception):
         assert child.stdin is not None
         child.stdin.close()
@@ -768,6 +864,10 @@ def stop_server(child: subprocess.Popen) -> None:
     except subprocess.TimeoutExpired:
         child.kill()
         child.wait(10)
+    reader = getattr(child, "output_reader", None)
+    if reader is not None:
+        reader.join(5)
+    return dict(getattr(child, "log_counts", {}))
 
 
 def git_revision() -> str | None:
@@ -974,6 +1074,15 @@ def print_table(results: dict[str, Any], log: Callable[[str], None]) -> None:
             f"clients, {burst['abandoned']} abandoned at {burst['abandon_after_seconds']:.0f}s; "
             f"{burst.get('inflight_after')} still running after it, server busy "
             f"{burst.get('busy_after_small_reads_seconds')}s more after the after-load reads")
+        if light := burst.get("light"):
+            log(f"burst light reads: {light['requests']} {light['operation']} requests by "
+                f"{light['workers']} clients (pace {light['pace_seconds']}s), statuses "
+                f"{light['statuses']}, median {light['median_seconds']}s, "
+                f"max {light['max_seconds']}s, timeouts {light['timeouts']}, "
+                f"errors {light['errors']}")
+    if server_logs := results.get("server_logs"):
+        log(f"server log, whole run: audit spools {server_logs['audit_spools']}, "
+            f"database-locked records {server_logs['database_locked']}")
     for item in results.get("admissions", []):
         admission = item.get("admission") or {}
         run = item.get("run") or {}
@@ -1004,6 +1113,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--load-seconds", type=float, default=60.0, help="Read-load burst length.")
     parser.add_argument("--load-workers", type=int, default=4, help="Concurrent burst clients.")
     parser.add_argument("--abandon-after", type=float, default=15.0, help="Burst client timeout.")
+    parser.add_argument("--light-workers", type=int, default=0,
+                        help="Clients that loop the small project's auth_status beside the burst.")
+    parser.add_argument("--light-pace", type=float, default=0.0,
+                        help="Seconds between one light client's requests.")
     parser.add_argument("--admission-sizes", default="1,15", help="Comma list of segment counts.")
     parser.add_argument("--sample-interval", type=float, default=2.0,
                         help="Seconds between auth-status samples during jobs.")
@@ -1126,6 +1239,9 @@ def main(argv: list[str] | None = None) -> int:
                 results["burst"] = read_burst(
                     client, heavy, seconds=args.load_seconds, workers=args.load_workers,
                     abandon_after=args.abandon_after,
+                    light_operation=next(
+                        op for op in read_matrix(small) if op.name == "auth_status"),
+                    light_workers=args.light_workers, light_pace=args.light_pace,
                 )
                 results["burst"]["inflight_after"] = inflight(client)
                 save()
@@ -1140,7 +1256,9 @@ def main(argv: list[str] | None = None) -> int:
                 results["burst"]["busy_after_small_reads_seconds"] = busy
                 log(f"  server busy {busy}s more after the after-load reads")
         finally:
-            stop_server(child)
+            server_logs = stop_server(child)
+            if server_logs:
+                results["server_logs"] = server_logs
         print_table(results, log)
     results["finished_at"] = datetime.now(UTC).isoformat()
     save()

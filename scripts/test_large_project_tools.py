@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import http.server
 import json
+import logging
 import os
 import sys
 import threading
@@ -376,3 +377,60 @@ def test_inflight_counter_counts_requests_and_answers_its_own_path() -> None:
     assert seen == [1] and counter.count == 0
     (body,) = counter({"PATH_INFO": timing.INFLIGHT_PATH}, lambda *_args: None)
     assert json.loads(body) == {"inflight": 0}
+
+
+def test_server_log_counter_counts_spools_and_locked_records_and_round_trips() -> None:
+    counter = timing.ServerLogCounter()
+    logger = logging.getLogger("perf-counter-test")
+    logger.propagate = False
+    logger.addHandler(counter)
+    try:
+        logger.warning("Audit writer busy; event saved to pending audit spool")
+        logger.warning("Audit writer busy; event saved to pending audit spool")
+        logger.error("request failed: (sqlite3.OperationalError) database is locked")
+        try:
+            raise RuntimeError("Database is locked")
+        except RuntimeError:
+            logger.exception("write failed")
+        logger.warning("unrelated")
+    finally:
+        logger.removeHandler(counter)
+    assert (counter.audit_spools, counter.database_locked) == (2, 2)
+    assert timing.parse_log_counts(counter.line() + "\n") == {
+        "audit_spools": 2, "database_locked": 2}
+
+
+def test_log_counts_ignore_lines_that_are_not_counts() -> None:
+    assert timing.parse_log_counts("PERF-READY {}") is None
+    assert timing.parse_log_counts(timing.LOGS_PREFIX + "not json") is None
+    assert timing.parse_log_counts(timing.LOGS_PREFIX + "[1]") is None
+    assert timing.parse_log_counts(timing.LOGS_PREFIX + '{"audit_spools": "1"}') is None
+    assert timing.parse_log_counts(timing.LOGS_PREFIX + '{"audit_spools": 0, "database_locked": 0}') == {
+        "audit_spools": 0, "database_locked": 0}
+
+
+def test_burst_adds_light_reads_beside_the_heavy_ones() -> None:
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _SlowHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        client = timing.Client(f"http://127.0.0.1:{server.server_address[1]}", "token", timeout=5)
+        heavy = timing.Operation("heavy", "GET", "/heavy")
+        light = timing.Operation("auth_status", "GET", "/light")
+        alone = timing.read_burst(client, heavy, seconds=0.3, workers=1, abandon_after=5)
+        mixed = timing.read_burst(
+            client, heavy, seconds=0.3, workers=1, abandon_after=5,
+            light_operation=light, light_workers=3, light_pace=0.05)
+    finally:
+        server.shutdown()
+    assert "light" not in alone
+    assert mixed["requests"] >= 1 and mixed["workers"] == 1
+    summary = mixed["light"]
+    assert summary["operation"] == "auth_status" and summary["workers"] == 3
+    assert summary["pace_seconds"] == 0.05 and summary["timeout_seconds"] == 30.0
+    assert summary["requests"] >= 3 and summary["statuses"] == [200]
+    assert summary["timeouts"] == 0 and summary["errors"] == 0
+    assert summary["median_seconds"] is not None and summary["max_seconds"] is not None
+    lines: list[str] = []
+    timing.print_table({"burst": {**mixed, "inflight_after": 0}}, lines.append)
+    assert any("burst light reads" in line and "3 clients" in line for line in lines)
