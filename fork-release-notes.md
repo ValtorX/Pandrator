@@ -12,7 +12,7 @@ From `epic-large-project-responsiveness`, story 8 (not yet offered upstream).
 
 ### Fixes
 
-- After heavy use, the database's write-ahead log now shrinks back to a small size instead of staying at its largest.
+- After heavy use, the database's write-ahead log now shrinks back to a small size the next time the app saves anything, instead of staying at its largest.
 
 From `epic-large-project-responsiveness`, story 7 (upstream PR #132).
 

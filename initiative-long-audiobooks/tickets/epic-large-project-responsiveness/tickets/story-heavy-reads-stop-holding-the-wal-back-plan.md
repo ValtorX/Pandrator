@@ -3,7 +3,7 @@ title: 'Heavy reads stop holding the WAL back'
 type: bugfix
 ticket: '8'
 created: '2026-11-12'
-status: built
+status: done
 baseline_revision: 'b9df5a5c762bdbde035f1f2f929743044319ee46'
 route: full
 route_source: auto
@@ -126,3 +126,46 @@ Measured growth under load: 60 MB in 60 s with 28 concurrent clients, which is f
 - `uvx ruff@0.17.3 check .`, `<uv env> vulture`, `<uv env> python scripts/test_lanes.py check` and `<uv env> --with sqlalchemy==2.0.52 python scripts/check_types.py`: expected clean, apart from `nemo_normalizer.py:98`.
 - `<uv env> python -m pytest -q _bmad-output/scripts/test_large_project_tools.py`: expected to pass.
 - `<uv env> python _bmad-output/scripts/large_project_timing.py --root %USERPROFILE%\pandrator-perf\work-2-8\<fresh copy> --only burst --burst-operation plan_status --light-workers 24 --light-pace 0.5 --timeout 900`: run on `synthetic` and `real` for this change, and on further fresh copies for the baseline. Expected: as the first three ACs say.
+
+## Code Review
+
+### 2026-11-12
+
+Code review complete. 0 decision-needed, 5 patch, 0 defer, 20 rejected. Lenses: blind-hunter, edge-case-hunter, verification-gap, intent-alignment; none failed.
+
+- [x] [Review][Patch] Release note says the WAL shrinks after heavy use without saying it needs the next write [_bmad-output/fork-release-notes.md:15]
+- [x] [Review][Patch] WAL sampler stops at burst end, so peak_bytes can miss later growth [_bmad-output/scripts/large_project_timing.py:1333]
+- [x] [Review][Patch] `_grow_under_reader` loops forever if the WAL never grows [tests/test_wal_size.py:96]
+- [x] [Review][Patch] Search test bypasses the short Windows temp root (`tempfile` in place of `tmp_path`) [tests/test_wal_size.py:143]
+- [x] [Review][Patch] `tests/test_wal_size.py` is out of alphabetical place in `web-18-serial` [scripts/test_lanes.py:936]
+
+Rejected:
+- low: the only read-shortening change is not on the burst's path. Heavy reads were already short (Implementation Notes); the verified outcome comes from the size limit, and the fix would edit the frozen intent.
+- false: the size limit does not bound growth during load. R5 asks only that growth stop once load ends; Design Notes accept growth during load.
+- low: the harness test does not assert settled at most peak or under the limit. On the small seeded root that could never fail; the real-root runs check it.
+- false: the WAL tests use a bare `Database`. That is the plan's chosen repo-test surface; the harness runs are the end-to-end proof.
+- low: no test asserts zero locked errors or spools. No production change touches those paths, and the recorded runs show 0 and 0.
+- false: the diff carries no Verify output. The runs are in Implementation Notes.
+- false: the release note describes only the after-load outcome. That matches what changed; the wording is handled by the first patch.
+- false: `.all()` loads every segment into memory. The ORM select was already fetched in full before matching, so memory use is unchanged.
+- false: other streaming loops and `snapshot_session` callers were not audited. ORM results are buffered the same way, the Code Map records the sweep, and snapshot scopes belong to stories 9 to 11.
+- low: the 5 MiB grow target is coupled to the 8 MiB constant. It matters only if the constant is lowered, and then the setup assert fails naming the limit.
+- false: the WAL tests are slow. Measured 0.17 s per grow test and 1.57 s for search.
+- false: the release note leaves out the search fix. `.all()` changes no behaviour.
+- low: settled is sampled even when `wait_for_idle` returned None. The results already record that None and the audit-spool count.
+- low: `print_table` rounds to 0.1 MiB and omits settle statuses. The JSON keeps exact bytes and statuses, and missing keys are already skipped.
+- false: raw `sqlite3.connect` writers miss the limit. The two cited sites only read; every app writer goes through `create_database_engine`.
+- false: the `int()` cast is redundant. It keeps the interpolated SQL an integer whatever a test patches in.
+- low: `.all()` changes nothing and the search test passes without it (verification-gap). Already recorded in Implementation Notes; the test guards against a switch to streaming.
+- low: the sampler thread dies on a non-`FileNotFoundError` `OSError`. Narrowed on purpose in pass 1; the traceback prints and `stop()` raises, so it is not silent.
+- low: settle runs when `wait_for_idle` is None (edge-case). Same as above.
+- low: the `.all()` claim (edge-case). Same as the verification-gap item.
+
+Patches applied:
+- The release note now says the log shrinks the next time the app saves anything.
+- The harness's sampler keeps running until `settled_bytes` is taken, so `peak_bytes` covers the after-load reads and the idle wait.
+- `_grow_under_reader` stops after 2,000 rounds and fails with the size it reached.
+- The search test uses `tmp_path`.
+- `tests/test_wal_size.py` now sits after `test_subtitle_settings_snapshot.py`.
+
+Checks after the patches, uv env: `test_wal_size.py`, `test_generation_search.py` and `test_web_database_bootstrap_lifetime.py` give 36 passed under SQLAlchemy 2.0.52 and the same under 2.1.8. Harness tests: 27 passed. `test_lanes.py check` and ruff are clean. Lane `web-18-serial` and the burst timings were not rerun; the patches touch only tests, lane order, the harness's sampling and the release note.

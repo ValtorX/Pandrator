@@ -1310,6 +1310,8 @@ def main(argv: list[str] | None = None) -> int:
             if heavy is not None:
                 log(f"  read-load burst: {args.burst_operation}, {args.load_seconds:.0f}s x "
                     f"{args.load_workers} clients")
+                # The sampler runs until the settled size is taken, so the peak
+                # covers the after-load reads and the idle wait too.
                 wal = WalSampler(args.root / "pandrator.sqlite3").start()
                 try:
                     results["burst"] = read_burst(
@@ -1319,29 +1321,31 @@ def main(argv: list[str] | None = None) -> int:
                             op for op in read_matrix(small) if op.name == "auth_status"),
                         light_workers=args.light_workers, light_pace=args.light_pace,
                     )
+                    wal_figures = {"start_bytes": wal.start_bytes,
+                                   "burst_end_bytes": wal.sample()}
+                    wal_figures["peak_bytes"] = wal.peak_bytes
+                    results["burst"]["wal"] = wal_figures
+                    results["burst"]["inflight_after"] = inflight(client)
+                    save()
+                    # Measured while the abandoned reads still run, as a client
+                    # would meet the server after a burst of timeouts. With
+                    # --only, the burst names the phase; the small reads follow
+                    # the usual selection, all of them when only "burst" is given.
+                    after_only = (None if only is None or only <= {"burst", "admission"}
+                                  else only)
+                    run_matrix(client, read_matrix(small), args.runs, "small_after_load",
+                               after_only, log, repeat_limit=repeat, after_row=record)
+                    wal_figures["after_load_reads_bytes"] = wal.sample()
+                    busy = wait_for_idle(client, args.job_timeout)
+                    results["burst"]["busy_after_small_reads_seconds"] = busy
+                    # Each request's audit write is what restarts and truncates the log.
+                    wal_figures["settle_statuses"] = [
+                        client.call("GET", "/api/v1/auth/status", timeout=30)[0].status
+                        for _ in range(3)]
+                    wal_figures["settled_bytes"] = wal.stop()
+                    wal_figures["peak_bytes"] = wal.peak_bytes
                 finally:
-                    burst_end_bytes = wal.stop()
-                wal_figures = {"start_bytes": wal.start_bytes, "peak_bytes": wal.peak_bytes,
-                               "burst_end_bytes": burst_end_bytes}
-                results["burst"]["wal"] = wal_figures
-                results["burst"]["inflight_after"] = inflight(client)
-                save()
-                # Measured while the abandoned reads still run, as a client
-                # would meet the server after a burst of timeouts. With
-                # --only, the burst names the phase; the small reads follow
-                # the usual selection, all of them when only "burst" is given.
-                after_only = None if only is None or only <= {"burst", "admission"} else only
-                run_matrix(client, read_matrix(small), args.runs, "small_after_load", after_only,
-                           log, repeat_limit=repeat, after_row=record)
-                wal_figures["after_load_reads_bytes"] = wal.sample()
-                busy = wait_for_idle(client, args.job_timeout)
-                results["burst"]["busy_after_small_reads_seconds"] = busy
-                # Each request's audit write is what restarts and truncates the log.
-                wal_figures["settle_statuses"] = [
-                    client.call("GET", "/api/v1/auth/status", timeout=30)[0].status
-                    for _ in range(3)]
-                wal_figures["settled_bytes"] = wal.sample()
-                wal_figures["peak_bytes"] = wal.peak_bytes
+                    wal.stop()
                 log(f"  server busy {busy}s more after the after-load reads")
         finally:
             # None, not a missing key, when the child printed no counts, so a run
