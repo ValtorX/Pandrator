@@ -370,9 +370,7 @@ def parse_log_counts(line: str) -> dict[str, int] | None:
 
 def serve_child(root: Path, port: int, hold_seconds: float) -> int:
     """Child process: serve the root and run one worker until stdin closes."""
-    from waitress import create_server
-
-    from pandrator.web.api_server import REQUEST_LOOKAHEAD
+    from pandrator.web.api_server import create_api_server
 
     app, token, worker, _ = build_services(root, hold_seconds=hold_seconds, cancel_in_process=False)
     worker_thread = threading.Thread(
@@ -384,10 +382,9 @@ def serve_child(root: Path, port: int, hold_seconds: float) -> int:
     logging.basicConfig()
     log_counter = ServerLogCounter()
     logging.getLogger().addHandler(log_counter)
-    server = create_server(
-        InflightCounter(app), host="127.0.0.1", port=port, threads=12,
+    server = create_api_server(
+        InflightCounter(app), {}, host="127.0.0.1", port=port, threads=12,
         connection_limit=512, channel_timeout=120, cleanup_interval=5,
-        channel_request_lookahead=REQUEST_LOOKAHEAD,
     )
 
     def watch_parent() -> None:
@@ -1189,7 +1186,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Refused: {error}", file=sys.stderr)
         return 2
     # Rejected here, not when the burst starts after server startup and every earlier phase.
-    heavy = burst_operation(read_matrix(large), args.burst_operation)
+    # A run without the burst ignores the option, which may name a root-specific read.
+    selected = set(args.only.split(",")) if args.only else None
+    runs_burst = not args.skip_burst and (not selected or "burst" in selected)
+    heavy = burst_operation(read_matrix(large), args.burst_operation) if runs_burst else None
     label = args.label or args.root.name
     results: dict[str, Any] = {
         "schema_version": 1,
@@ -1255,7 +1255,7 @@ def main(argv: list[str] | None = None) -> int:
                         sample_interval=args.sample_interval, log=log,
                         listing_interval=args.listing_interval))
                     save()
-            if not args.skip_burst and (not only or "burst" in only):
+            if heavy is not None:
                 log(f"  read-load burst: {args.burst_operation}, {args.load_seconds:.0f}s x "
                     f"{args.load_workers} clients")
                 results["burst"] = read_burst(

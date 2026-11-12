@@ -3,7 +3,7 @@ title: 'Abandoned reads stop stalling the server'
 type: bugfix
 ticket: '7'
 created: '2026-11-12'
-status: built
+status: done
 baseline_revision: '79e2feeae8a39f73675c3e93bba3b90f8d22213e'
 route: full
 route_source: auto
@@ -129,3 +129,49 @@ def raise_if_abandoned() -> None:
 - `uvx ruff@0.17.3 check .`, `<uv env> vulture`, `<uv env> python scripts/test_lanes.py check`, and `<uv env> --with sqlalchemy==2.0.52 python scripts/check_types.py` -- expected: clean except `nemo_normalizer.py:98`
 - `<uv env> python -m pytest -q _bmad-output/scripts/test_large_project_tools.py` -- expected: pass
 - `<uv env> python _bmad-output/scripts/large_project_timing.py --root %USERPROFILE%\pandrator-perf\<fresh copy> --only small,burst --burst-operation plan_status --timeout 900` on the synthetic root and on a fresh copy of `real`, with the baseline commit's result for comparison -- expected: as the first two ACs say
+
+## Code Review
+
+### 2026-11-12
+
+0 `decision-needed`, 4 `patch`, 0 `defer`, 15 rejected. Lenses: blind-hunter, edge-case-hunter, verification-gap (no gaps), intent-alignment.
+
+- [x] [Review][Patch] Lookahead lets waitress drop a queued mutation whose client already left [pandrator/web/api_server.py:16]
+- [x] [Review][Patch] The release note and tests claim more than the two checkpoints cover [_bmad-output/fork-release-notes.md:17]
+- [x] [Review][Patch] list_segments test's N + 1 bound silently depends on the shared fixture size [tests/test_abandoned_reads.py:384]
+- [x] [Review][Patch] Harness rejects a root-specific --burst-operation even when no burst runs [_bmad-output/scripts/large_project_timing.py:1191]
+
+Rejected:
+
+- false: the Verify observable has no recorded run. Implementation Notes record one harness run per root, with result files.
+- false: R2's 15 s bound under load from clients that keep waiting is not addressed. A cap or deadline is in the plan's Never list.
+- low: a proxy, or a client that does not close its socket, never trips the probe. The fallback is the old behaviour, not a regression, and httpx closes the socket on timeout.
+- false: only GET and HEAD are armed. That is the frozen intent.
+- false: the "stops early" wording was raised only to note that it is consistent.
+- false: the E2E server does not use the lookahead. The plan's Never list forbids changing `scripts/run_web_e2e_server.py`.
+- false: the read-only POST preview is never armed. Arming only GET and HEAD is the frozen intent.
+- false: queued requests that waitress skips leave no audit row or log. The frozen matrix specifies "no app call, no audit event".
+- low / false: the harness has no 499 counter, which is rarely visible and would need a new counter path. The drain comments are still accurate.
+- false: 499 is audited as `failed`. The frozen Boundaries specify that.
+- false: a failing probe is logged at DEBUG once per request. The frozen matrix specifies that.
+- low: a half-closed client is treated as gone. That edge is already accepted in Design Notes, and no client in play half-closes. Raised twice, by blind-hunter and edge-case-hunter.
+- low: the waitress tests escape `no_network` with `monkeypatch.undo()`. No other fixture on those tests uses monkeypatch, a future break would fail loudly, and the fix would restructure the tests.
+- false: queued reads that are skipped leave no audit (edge-case-hunter's version of the item above). The matrix specifies it.
+
+Applied:
+
+- **Queued mutations.** `api_server.create_api_server` builds the server for `serve_api` and for the harness. It installs `ReadDisconnectChannel`, which stops reading a connection while a non-GET/HEAD request heads its queue. Waitress therefore cannot see a mutation's client leave, and the mutation runs. A pipelined mutation queued behind a read can still be dropped along with that read; RFC 9112 tells clients not to pipeline non-idempotent requests.
+  - New test: `test_waitress_still_runs_a_queued_mutation_whose_client_left`. With the old `readable()` restored, it fails with a timeout, so it pins the defect.
+  - New test: `test_api_server_listeners_use_the_read_only_disconnect_channel`.
+- **Release note.** The note now names the listing, plan status and plan history, and says that a change still runs.
+- **Plan status and revisions tests.** `test_each_heavy_read_of_a_cast_plan_with_takes_answers_499` covers the listing, plan status and revisions on the 12-segment cast plan once it has matching takes. Each of these reads reaches a checkpoint only once takes exist; a plain plan with no takes answers 200 even with the probe set.
+- **list_segments test.** The test now asserts its precondition `max(N) < 2 * len(plan.ids)`.
+- **Harness.** It resolves `--burst-operation` only when the burst phase is selected.
+
+Checks:
+
+- Under `<uv env>`, `tests/test_abandoned_reads.py`, `test_audio_identity_cost.py`, `test_web_api_shutdown.py`, `test_routine_request_writes.py`, `test_session_view_performance.py` and `test_web_contract_boundaries.py` give 142 passed and 6 skipped under SQLAlchemy 2.1.8, and the same under 2.0.52.
+- Lane `web-07-04-serial`: 324 passed.
+- Harness tests: 25 passed.
+- ruff, vulture and `test_lanes.py check` are clean. Typecheck shows only `nemo_normalizer.py:98`.
+- The timing burst was not rerun after these patches. They change only how mutations are queued, and the burst sends reads.
