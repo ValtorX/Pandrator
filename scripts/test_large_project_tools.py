@@ -175,9 +175,16 @@ def test_only_selects_projects_operations_and_the_burst(seeded_root: Path, tmp_p
         ("small", "auth_status"), ("large", "auth_status")}
     with_burst = tmp_path / "with.json"
     assert timing.main([*common, "--only", "auth_status,burst", "--load-seconds", "1",
+                        "--light-workers", "1", "--light-pace", "0.1",
                         "--out", str(with_burst)]) == 0
     result = json.loads(with_burst.read_text(encoding="utf-8"))
     assert result["burst"]["requests"] >= 1
+    light = result["burst"]["light"]
+    assert light["operation"] == "auth_status" and light["workers"] == 1
+    assert light["requests"] >= 1 and light["statuses"] == [200]
+    # The child's log counts come back through stop_server for the whole run.
+    assert set(result["server_logs"]) == {"audit_spools", "database_locked"}
+    assert all(type(value) is int for value in result["server_logs"].values())
     assert ("small_after_load", "auth_status") in {
         (row["phase"], row["operation"]) for row in result["reads"]}
 
@@ -195,6 +202,7 @@ def test_a_stopped_run_keeps_what_it_measured(seeded_root: Path, tmp_path: Path,
     partial = json.loads(output.read_text(encoding="utf-8"))
     assert "finished_at" not in partial
     assert [row["operation"] for row in partial["reads"]] == ["auth_status", "auth_status"]
+    assert set(partial["server_logs"]) == {"audit_spools", "database_locked"}
 
 
 def test_timing_never_uses_the_owner_ports() -> None:
@@ -434,3 +442,12 @@ def test_burst_adds_light_reads_beside_the_heavy_ones() -> None:
     lines: list[str] = []
     timing.print_table({"burst": {**mixed, "inflight_after": 0}}, lines.append)
     assert any("burst light reads" in line and "3 clients" in line for line in lines)
+
+
+def test_table_says_when_server_log_counts_were_not_collected() -> None:
+    lines: list[str] = []
+    timing.print_table({"server_logs": None}, lines.append)
+    assert any("counts not collected" in line for line in lines)
+    lines.clear()
+    timing.print_table({"server_logs": {"audit_spools": 3, "database_locked": 0}}, lines.append)
+    assert any("audit spools 3" in line for line in lines)

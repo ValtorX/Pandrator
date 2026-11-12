@@ -1080,9 +1080,12 @@ def print_table(results: dict[str, Any], log: Callable[[str], None]) -> None:
                 f"{light['statuses']}, median {light['median_seconds']}s, "
                 f"max {light['max_seconds']}s, timeouts {light['timeouts']}, "
                 f"errors {light['errors']}")
-    if server_logs := results.get("server_logs"):
-        log(f"server log, whole run: audit spools {server_logs['audit_spools']}, "
-            f"database-locked records {server_logs['database_locked']}")
+    if "server_logs" in results:
+        if (server_logs := results["server_logs"]) is None:
+            log("server log, whole run: counts not collected")
+        else:
+            log(f"server log, whole run: audit spools {server_logs['audit_spools']}, "
+                f"database-locked records {server_logs['database_locked']}")
     for item in results.get("admissions", []):
         admission = item.get("admission") or {}
         run = item.get("run") or {}
@@ -1256,9 +1259,11 @@ def main(argv: list[str] | None = None) -> int:
                 results["burst"]["busy_after_small_reads_seconds"] = busy
                 log(f"  server busy {busy}s more after the after-load reads")
         finally:
-            server_logs = stop_server(child)
-            if server_logs:
-                results["server_logs"] = server_logs
+            # None, not a missing key, when the child printed no counts, so a run
+            # without them is not mistaken for an older run; saved here so a
+            # stopped run keeps them too.
+            results["server_logs"] = stop_server(child) or None
+            save()
         print_table(results, log)
     results["finished_at"] = datetime.now(UTC).isoformat()
     save()

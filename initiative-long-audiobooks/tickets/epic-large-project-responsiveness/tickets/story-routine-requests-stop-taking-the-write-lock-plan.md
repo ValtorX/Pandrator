@@ -3,7 +3,7 @@ title: 'Routine requests stop taking the write lock'
 type: bugfix
 ticket: '6'
 created: '2026-11-12'
-status: built
+status: done
 baseline_revision: '8051c406612064b529fb61ef96c323da2004c327'
 route: full
 route_source: auto
@@ -136,4 +136,56 @@ Build a fresh `AuditEvent` from the entry's field dict for each attempt; after a
 - `uvx ruff@0.17.3 check .` and `<uv env> --with sqlalchemy==2.0.52 python scripts/check_types.py` -- expected: clean except the known `nemo_normalizer.py:98`
 - `<uv env> python scripts/test_lanes.py check` -- expected: pass
 - `<uv env> python -m pytest -q _bmad-output/scripts/test_large_project_tools.py` -- expected: pass
-- `<uv env> python _bmad-output/scripts/large_project_timing.py --root %USERPROFILE%\pandrator-perf\synthetic --only burst` -- expected: burst reports 0 audit spools and 0 locked records
+- `<uv env> python _bmad-output/scripts/large_project_timing.py --root %USERPROFILE%\pandrator-perf\synthetic --only burst --light-workers 24 --light-pace 0.5` -- expected: the server log reports 0 audit spools and 0 locked records (the heavy-only default burst cannot show the symptom; see Review Triage Log)
+
+## Code Review
+
+### 2026-11-12
+
+Full review (blind, edge-case, verification-gap and intent lenses): 0 `decision-needed`, 9 `patch`, 0 `defer`, 27 rejected.
+
+- [x] [Review][Patch] Token touch "due" ignores this process's own recent attempts. There is no back-off after a busy skip, so each request waits 250 ms while the writer is held, and every concurrent request takes the writer when the interval ends. [pandrator/web/auth.py:531]
+- [x] [Review][Patch] The group-commit test gate does not fix the batch shape, so the transaction bound is loose and the failing-entry tests can pass with the entry alone. [tests/test_routine_request_writes.py:317]
+- [x] [Review][Patch] The batch-wide prune trigger is untested. [pandrator/web/audit.py:281]
+- [x] [Review][Patch] The harness's server log counts and `--light-workers` wiring are not tested end to end. [_bmad-output/scripts/test_large_project_tools.py:161]
+- [x] [Review][Patch] The release note overstates the change: reads still take the writer for their audit row, and a held writer still spools. [_bmad-output/fork-release-notes.md:16]
+- [x] [Review][Patch] A future `last_used_at` (clock stepped back) freezes the touch until the clock catches up. [pandrator/web/auth.py:599]
+- [x] [Review][Patch] The harness loses its server log counts on an interrupted run and hides them when they were not collected. [_bmad-output/scripts/large_project_timing.py:1259]
+- [x] [Review][Patch] Token tests have small holes: the due-minus-1µs step checks no UPDATE, and the concurrent test never checks that its threads finished. [tests/test_routine_request_writes.py:141]
+- [x] [Review][Patch] The plan's AC3 verification command runs the heavy-only burst, which cannot show the symptom. [this plan, Verification]
+
+Rejected:
+- false: The token is not re-checked after writer admission. The request linearizes at its snapshot, and the frozen Approach keeps that principal; expiry at lookup is tested.
+- false: Browser sessions still wait on the writer. The Never list forbids touching them.
+- low: Only the leader replays the spool. The events are durable, and having followers replay brings back per-request writer contention.
+- low: Followers wait with no deadline. They wait only for the batches ahead; a timed fallback is new machinery.
+- low: One BaseException is shared across threads and followers re-raise interrupts. This is unreachable from waitress worker threads (pass 1 already rejected it).
+- low: One bad event costs serial single writes. Batches are capped near the worker count; bisection is new logic.
+- false: A non-busy touch error fails the request. The plan catches only busy errors, and the old code failed the same way.
+- false: Skipped touches are logged only at DEBUG. That is the plan's matrix.
+- false: `_BASE` is fixed at import. Every test is clock-relative, and no path fails.
+- false: The harness raises StopIteration without `auth_status`. `read_matrix` always has it.
+- false: Negative `--light-workers` and `--light-pace` are accepted. They are harmless.
+- false: The light timeout has no flag. That is a missing option, not a defect.
+- false: The harness sets attributes on Popen with `type: ignore`. That is style only.
+- false: The review diff's path headers are doubled. That is a review artifact.
+- low: (edge) A BaseException gives followers SystemExit. Same as the shared-exception item.
+- low: (edge) The leader's entry stays queued after a BaseException. Unreachable in the server (pass 1).
+- low: (edge) Followers wait for every batch ahead. Same as the no-deadline item.
+- low: (edge) A non-busy failure followed by busy retries runs up to 200 x 250 ms. It needs a buggy event and a held writer at once; short-circuiting is new logic.
+- false: (edge) A revoke between snapshot and touch. Same linearization as any request answered just before a revoke.
+- low: (verification) An already-spooled entry gets a later BaseException. Same unreachable branch.
+- false: (edge) StopIteration without `auth_status`. Same as above.
+- low: (edge claim) "No event lost" fails on the BaseException path. Same unreachable branch.
+- false: (intent) Non-overlapping reads still take BEGIN IMMEDIATE for audit. That is the frozen Approach's group commit; the wording is fixed in the release-note patch.
+- false: (intent) The HTTP test relies on less than 60 s of real time. It makes 11 quick requests and has no failure path.
+- false: (intent) "Recorded" includes the spool, and HTTP concurrency is untested. The frozen intent defines it so, and the harness measured it.
+- false: (intent) The WAL clause of R5. It stays with story 8, which owns WAL and checkpoints.
+- false: (intent) The api_token expiry variant was removed. Same as the first item.
+
+Patches applied. Verification (uv, Python 3.11, Windows):
+- The six focused test files: 81 passed under SQLAlchemy 2.1.8 and again under 2.0.52.
+- `web-06-serial` under 2.1.8: 475 passed, 11 skipped.
+- ruff, vulture and `test_lanes.py check` are clean. `check_types.py` under 2.0.52 reports only `nemo_normalizer.py:98`.
+- `test_large_project_tools.py`: 23 passed.
+- Not rerun: the timing harness burst on the synthetic root.
