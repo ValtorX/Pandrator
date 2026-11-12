@@ -187,6 +187,32 @@ def test_only_selects_projects_operations_and_the_burst(seeded_root: Path, tmp_p
     assert all(type(value) is int for value in result["server_logs"].values())
     assert ("small_after_load", "auth_status") in {
         (row["phase"], row["operation"]) for row in result["reads"]}
+    assert result["burst"]["operation"] == "segments_default"
+    chosen = tmp_path / "chosen.json"
+    assert timing.main([*common, "--only", "auth_status,burst", "--load-seconds", "1",
+                        "--burst-operation", "plan_status", "--out", str(chosen)]) == 0
+    assert json.loads(chosen.read_text(encoding="utf-8"))["burst"]["operation"] == "plan_status"
+
+
+def test_unknown_burst_operation_is_rejected_before_the_server_starts(
+    seeded_root: Path, tmp_path: Path, monkeypatch,
+) -> None:
+    def started(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("the server must not start for an unknown burst operation")
+
+    monkeypatch.setattr(timing, "start_server", started)
+    with pytest.raises(SystemExit, match="nope"):
+        timing.main(["--root", str(seeded_root), "--runs", "1", "--label", "tiny",
+                     "--large-segments", "12", "--small-segments", "5",
+                     "--burst-operation", "nope", "--out", str(tmp_path / "x.json")])
+
+
+def test_burst_operation_must_be_a_read_matrix_name() -> None:
+    operations = [timing.Operation("auth_status", "GET", "/a"),
+                  timing.Operation("plan_status", "GET", "/p")]
+    assert timing.burst_operation(operations, "plan_status").path == "/p"
+    with pytest.raises(SystemExit, match="auth_status, plan_status"):
+        timing.burst_operation(operations, "nope")
 
 
 def test_a_stopped_run_keeps_what_it_measured(seeded_root: Path, tmp_path: Path, monkeypatch) -> None:

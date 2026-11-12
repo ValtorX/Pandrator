@@ -372,6 +372,8 @@ def serve_child(root: Path, port: int, hold_seconds: float) -> int:
     """Child process: serve the root and run one worker until stdin closes."""
     from waitress import create_server
 
+    from pandrator.web.api_server import REQUEST_LOOKAHEAD
+
     app, token, worker, _ = build_services(root, hold_seconds=hold_seconds, cancel_in_process=False)
     worker_thread = threading.Thread(
         target=worker.run_forever, kwargs={"poll_interval": 0.2}, daemon=True
@@ -385,6 +387,7 @@ def serve_child(root: Path, port: int, hold_seconds: float) -> int:
     server = create_server(
         InflightCounter(app), host="127.0.0.1", port=port, threads=12,
         connection_limit=512, channel_timeout=120, cleanup_interval=5,
+        channel_request_lookahead=REQUEST_LOOKAHEAD,
     )
 
     def watch_parent() -> None:
@@ -661,6 +664,17 @@ def read_burst(
             "timeouts": summary["timeouts"], "errors": summary["errors"],
         }
     return result
+
+
+def burst_operation(operations: list[Operation], name: str) -> Operation:
+    """The read matrix's operation a burst loops, by name."""
+    for operation in operations:
+        if operation.name == name:
+            return operation
+    raise SystemExit(
+        f"--burst-operation {name!r} is not a read operation; choose one of "
+        + ", ".join(operation.name for operation in operations)
+    )
 
 
 def parse_timestamp(value: str | None) -> datetime | None:
@@ -1116,6 +1130,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--load-seconds", type=float, default=60.0, help="Read-load burst length.")
     parser.add_argument("--load-workers", type=int, default=4, help="Concurrent burst clients.")
     parser.add_argument("--abandon-after", type=float, default=15.0, help="Burst client timeout.")
+    parser.add_argument("--burst-operation", default="segments_default",
+                        help="Read the burst clients loop on the large project: any read_matrix "
+                             "operation name (default: segments_default).")
     parser.add_argument("--light-workers", type=int, default=0,
                         help="Clients that loop the small project's auth_status beside the burst.")
     parser.add_argument("--light-pace", type=float, default=0.0,
@@ -1171,6 +1188,8 @@ def main(argv: list[str] | None = None) -> int:
     except RootRefused as error:
         print(f"Refused: {error}", file=sys.stderr)
         return 2
+    # Rejected here, not when the burst starts after server startup and every earlier phase.
+    heavy = burst_operation(read_matrix(large), args.burst_operation)
     label = args.label or args.root.name
     results: dict[str, Any] = {
         "schema_version": 1,
@@ -1237,8 +1256,8 @@ def main(argv: list[str] | None = None) -> int:
                         listing_interval=args.listing_interval))
                     save()
             if not args.skip_burst and (not only or "burst" in only):
-                heavy = next(op for op in read_matrix(large) if op.name == "segments_default")
-                log(f"  read-load burst: {args.load_seconds:.0f}s x {args.load_workers} clients")
+                log(f"  read-load burst: {args.burst_operation}, {args.load_seconds:.0f}s x "
+                    f"{args.load_workers} clients")
                 results["burst"] = read_burst(
                     client, heavy, seconds=args.load_seconds, workers=args.load_workers,
                     abandon_after=args.abandon_after,
