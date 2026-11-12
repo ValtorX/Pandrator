@@ -54,3 +54,4 @@ The sink sets the file's mode with `os.fchmod`, which doesn't exist on Windows P
 ## Notes
 
 - Assumption: Whether to write with Windows ACLs or refuse at startup is left to whoever builds this.
+- Changed (2026-11-11): the 0.14.3 merge (`bc363582`) took upstream's version of the exposing test, which skips on Windows without naming this bug, so no strict xfail tracks it any more. The bug itself is still open.
