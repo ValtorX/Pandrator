@@ -12,7 +12,7 @@ From `epic-large-project-responsiveness`, story 7.
 
 ### Fixes
 
-- Listing segments, plan status and plan history now stop partway through the book once their client has given up, and a read still waiting its turn never starts. Heavy MCP reads that time out no longer stall the server. A change whose client gave up still runs.
+- Listing segments, plan status and plan history now stop partway through the book once their client has given up, and a read still waiting its turn never starts. Heavy MCP reads that time out no longer stall the server. A change whose client gave up still runs. The server now requires waitress 3.0.1 or later, which fixes a request-smuggling flaw that this setting would otherwise expose.
 
 ## Merged upstream, not yet released
 

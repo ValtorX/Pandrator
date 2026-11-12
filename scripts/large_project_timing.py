@@ -370,7 +370,15 @@ def parse_log_counts(line: str) -> dict[str, int] | None:
 
 def serve_child(root: Path, port: int, hold_seconds: float) -> int:
     """Child process: serve the root and run one worker until stdin closes."""
-    from pandrator.web.api_server import create_api_server
+    try:
+        from pandrator.web.api_server import create_api_server
+    except ImportError:
+        # A checkout from before the abandoned-reads story (upstream main, a
+        # baseline) has no shared factory; serve it the way it serves itself.
+        from waitress import create_server
+
+        def create_api_server(application, socket_map, **adjustments):
+            return create_server(application, map=socket_map, **adjustments)
 
     app, token, worker, _ = build_services(root, hold_seconds=hold_seconds, cancel_in_process=False)
     worker_thread = threading.Thread(

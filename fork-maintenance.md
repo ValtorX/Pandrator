@@ -123,12 +123,22 @@ What upstream's PR history shows (read 2026-11-10; upstream has no CONTRIBUTING 
    minutes, one of 10 reviews per rolling hour). It is an extra pass, not a gate: on 2026-11-12 it
    found nothing on #129 at `0d300f9a`, where the PR review found two issues. It sends the diff to
    CodeRabbit's service, so never run it from `_bmad-output/` or with `--include-untracked`.
-8. **Draft, push and open** **[owner]**. The body has Summary, Reproduction, Root cause, Fix (one
+8. **Fork PR review** **[owner]** for the pushes. This is the review that matches upstream's: the
+   CodeRabbit app is installed on `ValtorX/Pandrator`, with the same plan and profile (Advanced,
+   CHILL) and no repository config. Push current upstream `main` to the fork as `upstream-main`
+   (`git push origin upstream/main:refs/heads/upstream-main`) and the PR branch, then open a PR in
+   the fork from the branch into `upstream-main`, not as a draft, with the upstream title and body.
+   Auto reviews skip a base other than the fork's default branch, so comment `@coderabbitai review`
+   to start one (about 6 minutes), and again after each pushed fix. Answer findings inside their
+   threads as in step 10 and update the draft body. Close the fork PR without merging once a review
+   comes back clean; the upstream PR then uses the same branch. On story 7 this found a Critical
+   waitress advisory that the pre-review, the local CLI and the story's code review all missed.
+9. **Draft, push and open** **[owner]**. The body has Summary, Reproduction, Root cause, Fix (one
    bullet per commit), Timings when relevant, Tests and a suggested release note, and goes in the
    epic's `upstream-pr-drafts.md` first. A PR's base must be upstream `main`: a fork branch cannot
    be a base there, so a PR that builds on another opens with "Depends on #N" and names the
    commits to review.
-9. **Answer review** **[owner]** for pushes and replies. Reply to each CodeRabbit finding inside
+10. **Answer review** **[owner]** for pushes and replies. Reply to each CodeRabbit finding inside
    its own review thread, not as a PR comment; CodeRabbit checks the fix and resolves the thread
    itself. For each fix: commit on the PR branch, rebase any PR stacked on it and push that one
    with `--force-with-lease`, rerun step 3, update the PR body's commit list, and add the round to

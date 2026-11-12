@@ -241,3 +241,53 @@ The remaining timeouts, and the server staying busy after the burst, come from t
 Busy reads no longer fail with "database is locked" or push audit records into the pending audit file in bulk. Checking a request's API token no longer takes the database's single writer, and requests that arrive together now write their audit records in one shared write instead of queueing for one each. While another write holds the database, audit records still go to the pending file and are replayed later. An API token's "last used" time now updates at most once a minute.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+---
+
+## 5. `abandoned-reads-stop-stalling-the-server`
+
+Story 7. From upstream `main` at `c2b6fe1a` (with #126 to #129): `8e23dbcc` and `6a7308ad` picked from fork `d3b511f6` and `3d1c9fdd`, then the pre-review fix `c38388e3` and two fixes from a CodeRabbit review on a fork-internal PR (ValtorX/Pandrator#1 into the `upstream-main` mirror, 2026-11-12): `fb3f518a` and `ea77744a`. The fork review's second pass found nothing more, and both threads were resolved by CodeRabbit. The three fixes are on the epic branch as `23f5dde2`, `a102e1f1` and `b9df5a5c`. Passes `check_pr_branch.py`; no release-notes hunk. Before/after timings: `%USERPROFILE%\pandrator-perf\work-2-7-pr\`. Pre-review (2026-11-12): no major findings and no regressions; taken: socket timeouts and cleanup in the real-waitress tests, a comment naming the waitress internals the channel relies on (checked against 3.0.2), and two wording fixes. Not taken: rejecting a duplicate `channel_request_lookahead` (only our two call sites use the factory) and guarding the token reset (no context in which it can fail was found).
+
+**Title:** Stop reads whose client gave up from stalling the server
+
+**Body:**
+
+### Summary
+A read whose client has given up keeps running to the end. When an MCP client times out on a few heavy reads, their work keeps every server thread busy and new requests wait behind it. On a 5,167-segment book with #126 to #129, a 60 s burst of `plan_status` reads that four clients abandoned at 15 s left `GET /api/v1/auth/status` taking 292 s to answer, and the server stayed busy for another minute after that.
+
+### Reproduction
+1. Serve a large project (a few thousand segments, casting on).
+2. From 4 clients, request `GET .../generation-plan/status` repeatedly for 60 s, each giving up after 15 s.
+3. Right after, request `GET /api/v1/auth/status` and a small project's segment listing. They wait for the abandoned reads to finish.
+
+### Root cause
+Waitress runs with `channel_request_lookahead = 0`, its default. It then stops reading a connection while that connection's request is queued or running, so it never notices that the client left: a queued request still starts, and a running one runs to the end. The heavy reads spend their time in the audio identity pass and the cast freeze, which never check whether anyone is still waiting.
+
+### Fix
+- `8e23dbcc`: the server is built through a shared `create_api_server` with `channel_request_lookahead = 1`, so waitress watches the connection and skips a queued request whose client already left. For `GET` and `HEAD` requests, `waitress.client_disconnected` is bound as a per-request probe, and `raise_if_abandoned()` checkpoints at the top of each segment step of the identity pass and the cast freeze stop a read whose client is gone. It answers 499 `client_closed_request`, which no client reads, and is audited as usual. Everywhere else the checkpoints do nothing: mutations, worker jobs, admission and the opening check run as before.
+- `6a7308ad`: lookahead would also let waitress skip a queued mutation whose client left. The server's channel now reads a connection only while a `GET` or `HEAD` heads its queue, so a queued change still runs to its commit as it did before.
+- `c38388e3`: the real-socket tests time out instead of hanging and close their sockets on failure; a comment names the waitress internals the channel relies on, checked against waitress 3.0.2.
+- `fb3f518a`: waitress before 3.0.1 has a request-smuggling race that applies only when `channel_request_lookahead` is above 0 (CVE-2024-49768, GHSA-9298-4cf8-g4wj), so both packages now require `waitress>=3.0.1,<4`; 3.0.1 also fixes a disconnect busy-loop in any configuration (CVE-2024-49769). `requirements.txt` and the two ranges recorded in `pixi.lock` follow; the lock already resolves 3.0.2.
+- `ea77744a`: the real-waitress test waits for the queued channel to disconnect before releasing the worker, so it cannot serve the abandoned request first and fail spuriously.
+
+### Timings
+The same burst on a synthetic 5,167-segment book (4 clients, `plan_status` for 60 s, abandoned at 15 s, all 16 abandoned), then the small project's reads, on upstream `main` with and without this PR:
+
+| After the burst | Upstream `main` | With this PR |
+|---|---|---|
+| `auth/status` | 292 s | 0.06 s |
+| Small segment listing, default | 3.09 s | 0.44 s |
+| Small segment page of 100 | 5.39 s | 0.28 s |
+| Small `plan_status` | 4.72 s | 0.87 s |
+| Server still busy after those reads | 56.7 s | 0 s |
+
+With this PR every read after the burst matched its speed before the burst. Neither run recorded audit spools or locked-database errors.
+
+### Tests
+- New `tests/test_abandoned_reads.py` (in `web-07-04-serial`): the checkpoint with no probe, a connected and a departed client, and a probe that raises; the identity pass, the segment listing and the whole-plan cast freeze stop within one segment of the client leaving; each heavy read answers 499 and is audited once; mutations and worker threads never see a probe; and against a real waitress server, a closed client is reported to its running read, a queued read whose client left is skipped, and a queued mutation whose client left still runs.
+- On Windows (uv, Python 3.11): the story's six test files give 142 passed and 6 skipped under SQLAlchemy 2.1.8 and 2.0.52; `web-07-04-serial` 324 passed; `tests/test_abandoned_reads.py` 22 passed after the last fix, and its three real-waitress tests passed three runs in a row. ruff, vulture, `test_lanes.py check` and `generate_requirements.py --check` pass; basedpyright reports only the existing `nemo_normalizer.py:98` on win32.
+
+### Suggested release note
+Listing segments, plan status and plan history now stop partway through the book once their client has given up, and a read still waiting its turn never starts. Heavy MCP reads that time out no longer stall the server. A change whose client gave up still runs. The server now requires waitress 3.0.1 or later, which fixes a request-smuggling flaw that this setting would otherwise expose.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
