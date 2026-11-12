@@ -189,3 +189,55 @@ A page of segments now costs what it shows: a page that leaves out the audio reu
 Review rounds (2026-11-12): CodeRabbit's two Mapping findings are fixed and answered on their threads. Two pre-emptive reviews (identity and listing; MCP) found nothing major; the fixes taken are `bfd43a5e`, `a3328a21` and `a2d978f2`. Not taken: a lazy `shared_controls` copy and skipping unused `reuse_inputs` (small wins, more risk), widening `resolve_capabilities` to `Mapping` (upstream's signature, cascades into typed callees), the error text inside MCP warnings (matches `system.py`), and a detail/summary race check (narrow).
 
 Third CodeRabbit round (2026-11-12): it resolved all three Mapping threads after checking the fixes against the code. It then raised two small points, both fixed, tested and answered: `copy_record` kept mutable keys as the original objects where `deepcopy` copies them through the memo (#128 thread, fixed in #126 as `89abef28`); and `test_incomplete_detail_merges_nothing_and_warns` did not assert which revision was requested (#127 review nitpick, fixed in `970bbaf9`, answered with a PR comment because it had no thread). #128 was rebased onto `89abef28` and force-pushed with lease; its own commits are now `4224255b`, `5d1ae9db` and `b169fec1`.
+
+---
+
+## 4. `routine-requests-stop-taking-the-write-lock`
+
+Story 6. Branch head `0d300f9a`, from upstream `main` at `fb72c018`: `9658a55b` and `ebe3b3b1` picked from fork `f7d62018` and `58fcaada`, then the pre-review fix `0d300f9a`. 5 files, +1,013 / -168. Passes `check_pr_branch.py`; no release-notes hunk to leave out. Independent of #126 to #128. Pushed and opened 2026-11-12 on the owner's go-ahead as upstream #129; the fix `0d300f9a` is on the fork's epic branch as `79e2feea`. Before/after timings: `%USERPROFILE%\pandrator-perf\work-2-6-pr\` (`before-stopped.log` and `after.log`, results JSON beside them; the before run was stopped while waiting for upstream's server to go idle, after its burst and after-load reads were saved).
+
+**Title:** Stop routine requests from taking the database write lock
+
+**Body:**
+
+### Summary
+Under read load, ordinary authenticated requests queue for SQLite's single writer. On a burst against a 5,167-segment book, 35 audit events went to the pending audit file instead of the database, and replaying them failed 76 times. `auth/status` took a median of 1.43 s. Nothing in those requests needs to write except their audit row.
+
+### Reproduction
+1. Serve a large project and send a few heavy reads (segment listings) that clients abandon after 15 s.
+2. At the same time, send light authenticated requests: 24 clients calling `GET /api/v1/auth/status` with a bearer token every 0.5 s.
+3. The server log fills with "Audit writer busy; event saved to pending audit spool" and "Pending audit event retained after replay failure".
+
+### Root cause
+- `AuthService.resolve_api_token` checks every bearer token inside `immediate_session()`, a `BEGIN IMMEDIATE` transaction, only to set `last_used_at`. Every bearer request therefore holds the one writer across the hash check and the account queries.
+- `AuditService.record` then writes each request's audit row in its own write transaction with a 250 ms busy timeout. Under load these writers queue behind each other and behind the token writes, and an audit write that waits too long is spooled.
+
+### Fix
+- `9658a55b`: resolve bearer tokens in a read snapshot, as browser sessions already are. Every authorization check still runs on every request: expiry, revocation, instance, origin, scopes, account state and the automation client's state. `last_used_at` (token and client) is written only when it is at least 60 s old, as a short conditional UPDATE whose busy failure is logged and ignored. Audit rows are written by group commit: concurrent requests' events share one write transaction per batch, and each request still returns only after its own event is committed or spooled, so no event is lost. A held writer spools the batch as before; a non-busy failure in a batch is retried per event, so only that event's request fails.
+- `ebe3b3b1`: one request per token per interval in each process attempts the touch, so a touch skipped while the writer is busy is not retried by every following request. The conditional UPDATE still settles races between processes.
+- `0d300f9a`: requests read the clock in an order that can differ from the order they touch. Only a stored time more than one interval ahead now counts as a clock step back, so an earlier clock never retouches or moves `last_used_at` backwards.
+
+User-visible: a token's "last used" time now updates at most once a minute.
+
+### Timings
+The same burst on a synthetic 5,167-segment book (4 heavy clients abandoning segment listings at 15 s, plus 24 light clients sending `auth/status` every 0.5 s, for 60 s), before and after this PR, both on top of 0.14.3:
+
+| | 0.14.3 | With this PR |
+|---|---|---|
+| Audit events spooled | 35 | 0 |
+| Failed spool replays | 76 | 0 |
+| `auth/status` requests answered in 60 s | 397 | 795 |
+| `auth/status` median | 1.43 s | 0.42 s |
+| `auth/status` timeouts at 30 s | 24 | 24 |
+
+The remaining timeouts, and the server staying busy after the burst, come from the heavy listings: each takes minutes on 0.14.3 and keeps running after its client gives up. #126 and #128 remove that cost. With all three on our fork, a heavier burst (53 heavy and 2,425 light requests) answered every light request, the slowest in 0.44 s, with no spools and no locked errors.
+
+### Tests
+- New `tests/test_routine_request_writes.py` (in `web-06-serial`): token reads within the interval open no write transaction; a due touch writes once; concurrent resolutions in one process touch once and across two processes update once; a busy touch still authenticates and is not retried; earlier clocks neither retouch nor rewind; invalid tokens never write; group commit shares transactions, keeps each event's actor, spools every event of a held batch, raises only in the request whose spool or event failed, bounds batch size and prunes once per batch.
+- `test_account_authentication_integration.py`: the expiry-after-writer test now covers enrollment codes only, since bearer tokens no longer take a writer; token expiry is tested in the new file.
+- On Windows (uv, Python 3.11): the six auth and audit test files, 84 passed under SQLAlchemy 2.1.8 and 2.0.52. `web-06-serial` under 2.1.8: 478 passed, 10 skipped, 1 failed, which is an existing symlink test that needs a Windows privilege (`WinError 1314`). ruff, vulture and `test_lanes.py check` pass; basedpyright reports only the existing `nemo_normalizer.py:98` on win32.
+
+### Suggested release note
+Busy reads no longer fail with "database is locked" or push audit records into the pending audit file in bulk. Checking a request's API token no longer takes the database's single writer, and requests that arrive together now write their audit records in one shared write instead of queueing for one each. While another write holds the database, audit records still go to the pending file and are replayed later. An API token's "last used" time now updates at most once a minute.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
