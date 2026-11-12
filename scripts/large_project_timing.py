@@ -470,6 +470,45 @@ def inflight(client: Client) -> int | None:
     return int(payload.get("inflight", 0))
 
 
+def wal_bytes(database: Path) -> int:
+    """Size of the database's write-ahead log by stat alone; a missing file is 0."""
+    try:
+        return Path(f"{database}-wal").stat().st_size
+    except FileNotFoundError:
+        return 0
+
+
+class WalSampler:
+    """Stats the write-ahead log on a thread. It never opens or writes the database."""
+
+    def __init__(self, database: Path, interval: float = 1.0):
+        self.database = database
+        self.interval = interval
+        self.start_bytes = wal_bytes(database)
+        self.peak_bytes = self.start_bytes
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval):
+            self.sample()
+
+    def sample(self) -> int:
+        size = wal_bytes(self.database)
+        self.peak_bytes = max(self.peak_bytes, size)
+        return size
+
+    def start(self) -> WalSampler:
+        self._thread.start()
+        return self
+
+    def stop(self) -> int:
+        self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join()
+        return self.sample()
+
+
 def wait_for_idle(client: Client, timeout: float, *, own: int = 1) -> float | None:
     """Seconds until abandoned requests finish; None if they outlast timeout."""
     started = time.monotonic()
@@ -1093,6 +1132,11 @@ def print_table(results: dict[str, Any], log: Callable[[str], None]) -> None:
             f"clients, {burst['abandoned']} abandoned at {burst['abandon_after_seconds']:.0f}s; "
             f"{burst.get('inflight_after')} still running after it, server busy "
             f"{burst.get('busy_after_small_reads_seconds')}s more after the after-load reads")
+        if wal := burst.get("wal"):
+            log("burst WAL: " + ", ".join(
+                f"{name.removesuffix('_bytes')} {wal[name] / 1048576:.1f} MiB"
+                for name in ("start_bytes", "peak_bytes", "burst_end_bytes",
+                             "after_load_reads_bytes", "settled_bytes") if name in wal))
         if light := burst.get("light"):
             log(f"burst light reads: {light['requests']} {light['operation']} requests by "
                 f"{light['workers']} clients (pace {light['pace_seconds']}s), statuses "
@@ -1266,13 +1310,20 @@ def main(argv: list[str] | None = None) -> int:
             if heavy is not None:
                 log(f"  read-load burst: {args.burst_operation}, {args.load_seconds:.0f}s x "
                     f"{args.load_workers} clients")
-                results["burst"] = read_burst(
-                    client, heavy, seconds=args.load_seconds, workers=args.load_workers,
-                    abandon_after=args.abandon_after,
-                    light_operation=next(
-                        op for op in read_matrix(small) if op.name == "auth_status"),
-                    light_workers=args.light_workers, light_pace=args.light_pace,
-                )
+                wal = WalSampler(args.root / "pandrator.sqlite3").start()
+                try:
+                    results["burst"] = read_burst(
+                        client, heavy, seconds=args.load_seconds, workers=args.load_workers,
+                        abandon_after=args.abandon_after,
+                        light_operation=next(
+                            op for op in read_matrix(small) if op.name == "auth_status"),
+                        light_workers=args.light_workers, light_pace=args.light_pace,
+                    )
+                finally:
+                    burst_end_bytes = wal.stop()
+                wal_figures = {"start_bytes": wal.start_bytes, "peak_bytes": wal.peak_bytes,
+                               "burst_end_bytes": burst_end_bytes}
+                results["burst"]["wal"] = wal_figures
                 results["burst"]["inflight_after"] = inflight(client)
                 save()
                 # Measured while the abandoned reads still run, as a client
@@ -1282,8 +1333,15 @@ def main(argv: list[str] | None = None) -> int:
                 after_only = None if only is None or only <= {"burst", "admission"} else only
                 run_matrix(client, read_matrix(small), args.runs, "small_after_load", after_only,
                            log, repeat_limit=repeat, after_row=record)
+                wal_figures["after_load_reads_bytes"] = wal.sample()
                 busy = wait_for_idle(client, args.job_timeout)
                 results["burst"]["busy_after_small_reads_seconds"] = busy
+                # Each request's audit write is what restarts and truncates the log.
+                wal_figures["settle_statuses"] = [
+                    client.call("GET", "/api/v1/auth/status", timeout=30)[0].status
+                    for _ in range(3)]
+                wal_figures["settled_bytes"] = wal.sample()
+                wal_figures["peak_bytes"] = wal.peak_bytes
                 log(f"  server busy {busy}s more after the after-load reads")
         finally:
             # None, not a missing key, when the child printed no counts, so a run

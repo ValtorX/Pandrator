@@ -179,6 +179,10 @@ def test_only_selects_projects_operations_and_the_burst(seeded_root: Path, tmp_p
                         "--out", str(with_burst)]) == 0
     result = json.loads(with_burst.read_text(encoding="utf-8"))
     assert result["burst"]["requests"] >= 1
+    assert set(result["burst"]["wal"]) == {
+        "start_bytes", "peak_bytes", "burst_end_bytes", "after_load_reads_bytes",
+        "settled_bytes", "settle_statuses"}
+    assert result["burst"]["wal"]["settle_statuses"] == [200, 200, 200]
     light = result["burst"]["light"]
     assert light["operation"] == "auth_status" and light["workers"] == 1
     assert light["requests"] >= 1 and light["statuses"] == [200]
@@ -477,3 +481,33 @@ def test_table_says_when_server_log_counts_were_not_collected() -> None:
     lines.clear()
     timing.print_table({"server_logs": {"audit_spools": 3, "database_locked": 0}}, lines.append)
     assert any("audit spools 3" in line for line in lines)
+
+
+def test_wal_sampler_tracks_the_peak_and_a_missing_file_counts_as_zero(tmp_path: Path) -> None:
+    database = tmp_path / "pandrator.sqlite3"
+    wal = tmp_path / "pandrator.sqlite3-wal"
+    assert timing.wal_bytes(database) == 0
+    sampler = timing.WalSampler(database, interval=0.01).start()
+    try:
+        wal.write_bytes(b"x" * 100)
+        deadline = time.monotonic() + 10
+        while sampler.peak_bytes < 100 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        wal.write_bytes(b"x" * 10)
+    finally:
+        final = sampler.stop()
+    assert sampler.start_bytes == 0 and sampler.peak_bytes == 100 and final == 10
+    wal.unlink()
+    assert timing.wal_bytes(database) == 0
+    assert not database.exists()
+
+
+def test_table_prints_one_wal_line() -> None:
+    lines: list[str] = []
+    wal = {"start_bytes": 0, "peak_bytes": 2097152, "burst_end_bytes": 2097152,
+           "after_load_reads_bytes": 2097152, "settled_bytes": 1048576}
+    burst = {"requests": 1, "seconds": 1.0, "workers": 1, "abandoned": 0,
+             "abandon_after_seconds": 15.0, "wal": wal}
+    timing.print_table({"burst": burst}, lines.append)
+    printed = [line for line in lines if line.startswith("burst WAL")]
+    assert len(printed) == 1 and "settled 1.0 MiB" in printed[0] and "peak 2.0 MiB" in printed[0]
