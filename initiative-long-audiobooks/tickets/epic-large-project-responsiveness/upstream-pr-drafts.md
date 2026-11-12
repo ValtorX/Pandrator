@@ -6,7 +6,7 @@ epic's commits with `git cherry-pick -n`, leaves out the `docs/release-notes-nex
 maintainer writes it; each body carries a suggested note instead) and passes
 `_bmad-output/scripts/check_pr_branch.py` (exit 0). Pushed and opened 2026-11-11 on the owner's
 go-ahead as upstream #126 (identity), #127 (MCP) and #128 (listing, on top of #126); the bodies
-below show `#IDENTITY` where the opened ones say #126.
+below show `#IDENTITY` where the opened ones say #126. The maintainer merged all three as written, with no comments, on 2026-11-12 (`14fb5d0c`, `bc356959`, `87afec8e` on upstream `main`); their branches are deleted. Upstream also merged its own #130, which regenerates the stale 0.14.3 contract.
 
 | Order | Branch | Head | Picked from | Size against `upstream/main` |
 |---|---|---|---|---|
