@@ -10,9 +10,9 @@ below show `#IDENTITY` where the opened ones say #126.
 
 | Order | Branch | Head | Picked from | Size against `upstream/main` |
 |---|---|---|---|---|
-| 1 | `identity-pass-builds-shared-work-once` | `dec600c5` | `7f2b631d`, `c5c0dcfb`, `24c1dd36`, then CodeRabbit fix `dec600c5` (fork `b2300cc1`) | 16 files, +1,217 / -30 |
-| 2 | `mcp-plan-reads-use-revision-summaries` | `c848b488` | `35e82ff9` | 6 files, +330 / -14 |
-| 3 | `segment-listing-cost-follows-the-page` | `7277945d` | branch 1, then `bd700684`, `51848d06` (rebased onto `dec600c5`) | 16 files, +1,605 / -42 |
+| 1 | `identity-pass-builds-shared-work-once` | `bfd43a5e` | `7f2b631d`, `c5c0dcfb`, `24c1dd36`, then review fixes `dec600c5`, `bf246115`, `bfd43a5e` (fork `b2300cc1`, `cffc0728`, `dd462b8f`) | sizes: see the PRs |
+| 2 | `mcp-plan-reads-use-revision-summaries` | `a2d978f2` | `35e82ff9`, then review fix `a2d978f2` (fork `4d6559a0`) | 6 files, +330 / -14 |
+| 3 | `segment-listing-cost-follows-the-page` | `a3328a21` | branch 1, then `bd700684`, `51848d06` (rebased), then `a3328a21` (fork `b807b4cd`) | 16 files, +1,605 / -42 |
 
 Differences from the epic's commits, all deliberate:
 
@@ -185,3 +185,5 @@ On the 12-segment cast plan in `tests/test_audio_identity_cost.py`:
 A page of segments now costs what it shows: a page that leaves out the audio reuse fields skips the voice and audio-reuse checks, and a page that includes them checks only its own segments. A character voice that is missing elsewhere in the book no longer marks the page's audio reuse unknown; a missing voice used on the page itself still does, for the whole page. A removed segment, or a voice deleted since a past run you are reviewing, no longer makes the other segments on the same page show their audio reuse as unknown.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Review rounds (2026-11-12): CodeRabbit's two Mapping findings are fixed and answered on their threads. Two pre-emptive reviews (identity and listing; MCP) found nothing major; the fixes taken are `bfd43a5e`, `a3328a21` and `a2d978f2`. Not taken: a lazy `shared_controls` copy and skipping unused `reuse_inputs` (small wins, more risk), widening `resolve_capabilities` to `Mapping` (upstream's signature, cascades into typed callees), the error text inside MCP warnings (matches `system.py`), and a detail/summary race check (narrow).
