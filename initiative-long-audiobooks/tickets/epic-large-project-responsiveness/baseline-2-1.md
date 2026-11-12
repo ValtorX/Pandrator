@@ -791,9 +791,10 @@ matches how a retained-input run validates its own segments.
 Story 9 measured admission again at `26d18b53` (stories 2 to 8 in) and
 removed the one long writer hold it found. Timings and counts only. Fresh
 copies of `real` and `synthetic` under `work-2-9/before/` and
-`work-2-9/after/`, one root at a time, no profiler, `--skip-reads
---skip-burst --admission-sizes 1,15`, SQLAlchemy 2.0.52 under the uv
-environment. Admission is the job that prepares and queues the run; the
+`work-2-9/after/`, one root at a time, no profiler, SQLAlchemy 2.0.52 under
+the uv environment. The timing script ran with `--skip-reads --skip-burst
+--admission-sizes 1,15`; the writer-holds script with its default sizes
+(1 and 15) and `--runs 3`. Admission is the job that prepares and queues the run; the
 check is the run's opening speech plan and voice check.
 
 ### What changed
@@ -818,18 +819,28 @@ longer than the 250 ms busy timeout spools its audit event.
 |---|---|---|---|
 | Commit transaction, 1 segment | 1.51-1.52 s | 0.69 / 0.69 / (0.67, fallback) s | 0.69 s |
 | Commit transaction, 15 segments | 1.51-1.52 s | 0.68 / 0.63 / 0.62 s | 0.63 s |
+| `inherit_edit_copy_audio` inside it | 0.83-0.93 s | 0.05 s | 0.05 s |
+| Writer holds over 250 ms per admission | 1 | 1 | 1 |
+| Writer holds over 250 ms in the check | 0 | 0 | 0 |
 
 These are from the second measurement (`work-2-9/after/real-holds-2`), taken
 after review made the script certify each run. A run counts only when its
 admission job succeeded and the commit transaction's pieces were recorded. In
-about one run in six the pieces are not recorded, for a reason not found. That
-run's longest admission hold is then kept as a fallback and left out of the
-median. The first measurement (0.78 / 0.62 / 0.60 s and 0.62 / 0.68 / 0.80 s,
-medians 0.62 s and 0.68 s) had one such run, 1 segment run 3, which it counted
+about one run in six the pieces were not recorded. That run's longest
+admission hold was then kept as a fallback and left out of the median. The
+first measurement (0.78 / 0.62 / 0.60 s and 0.62 / 0.68 / 0.80 s, medians
+0.62 s and 0.68 s) had one such run, 1 segment run 3, which it counted
 without saying so.
-| `inherit_edit_copy_audio` inside it | 0.83-0.93 s | 0.05 s | 0.05 s |
-| Writer holds over 250 ms per admission | 1 | 1 | 1 |
-| Writer holds over 250 ms in the check | 0 | 0 | 0 |
+
+The code review found the cause. The script kept its hold state per thread.
+When the credentials cache reloaded through its own session during a hold,
+the reload's commit ended the recorded hold early. In admission that happens
+while `start_in_session` enqueues the check job (`jobs._event`, which redacts
+the job event through the credentials store). A probe on the seeded root saw
+it in 2 of 12 runs. The script now keys each hold on the connection that
+began it. A cut-short hold ended before `start_in_session` returned, so it
+was never a certified run, and the medians above stand. The excluded 0.67 s
+run was most likely the commit transaction cut short.
 
 Target: median at most 0.75 s. Met, with little margin: single runs in the
 first measurement reached 0.78 and 0.80 s, because the remaining pieces vary
@@ -844,8 +855,9 @@ settings receipt (0.06 s). The check's writers stay under 0.16 s.
 `--listing-interval 2 --ui-interval 10` samples the small project's listing
 every 2 s and, every 10 s, the large project's run list, plan status summary,
 generation summary and first listing page, beside `auth/status` every 2 s,
-during admission and the check. Each of the large reads decodes or lists a
-large plan, so the sampler itself slows the admission it measures.
+during admission and the check. The run list, plan status summary and first
+listing page each decode or list a large plan, so the sampler itself slows the
+admission it measures; the generation summary is light.
 
 | Run, root | Admission 1 / 15 segments | Check 1 / 15 | Audit spools |
 |---|---|---|---|
@@ -858,7 +870,8 @@ large plan, so the sampler itself slows the admission it measures.
 | Before, `synthetic`, small listing every 2 s | 16.2 / 17.1 s | 6.8 / 6.9 s | 5 |
 | After, `synthetic`, listing and UI reads sampled | 14.8 / 15.7 s | 5.5 / 5.1 s | 9 |
 
-Every admission is far inside the 60 s target. The sampled "after" rows add
+Every admission is far inside the 60 s target, and inside the 30 s the owner
+set afterwards. The sampled "after" rows add
 the four large reads, which the "before" rows did not sample, so their
 admission times and spool counts are not comparable with the "before" rows;
 a clean run is: the real copy's spools fell from 5 to 1. The remaining spools
@@ -886,20 +899,20 @@ records: 0 in every run).
 
 No writer is held while admission prepares: story 1 found none, and the writer
 holds above confirm one long hold per admission. The only long writer hold is
-the commit transaction, which this story cut from about 1.5 s to about 0.6 s
-by removing the edit-copy reconcile's full scan. Story 1's stall came from
+the commit transaction, which this story cut from about 1.5 s to a median of
+0.63-0.69 s by removing the edit-copy reconcile's full scan. Story 1's stall came from
 heavy reads sharing one interpreter with the admission, not from a lock: a
 listing or plan status read decodes the plan in Python, and the admission's own
 preparation does the same, so together they take the one core's time in turns.
 Admission itself already met its target before this story.
 
-### Left to the owner
+### Owner decisions (2026-11-12)
 
 - The web UI repeats `generation-runs?view=compact&limit=25` every 10 s while
   a run is active. On the large real project each call decodes up to 25 run
   snapshots: 2.3-2.5 s (3.1 s at worst) of one core, which is a quarter of
-  that core for as long as a tab is open. It is inside 15 s, and no story owns
-  it.
-- Admission now takes 9-11 s with nothing else running, against the adopted
-  60 s target. A tighter target (for example 20 s) would still hold under the
-  sampled load measured here (at most 17.4 s).
+  that core for as long as a tab is open. It is inside 15 s. The owner made
+  it a new story 12 in this epic.
+- Admission now takes 9-11 s with nothing else running, and at most 17.4 s
+  under the sampled load measured here. The owner tightened the admission
+  target from 60 s to 30 s.

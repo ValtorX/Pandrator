@@ -129,21 +129,33 @@ risk = "medium"
 [[entry]]
 id = 12
 type = "story"
+title = "The run list stops decoding whole run snapshots"
+description = "Makes the compact run list (generation-runs?view=compact&limit=25), which the web UI repeats every 10 s while a run is active, answer without decoding each run's full snapshot. On the large real project it costs 2.3-3.1 s of a core per call today, about a quarter of a core per open tab. The compact response keeps its fields and meaning."
+verify = "A test shows the compact view decodes no full run snapshot, and on a fresh real copy the timing script's ui_runs_compact answers well under story 9's 2.3-2.5 s median."
+covers = ["R6"]
+after = [9]
+hitl = false
+risk = "medium"
+notes = ["Raised by story 9's code review (2026-11-12); the owner chose a new story in this epic."]
+
+[[entry]]
+id = 13
+type = "story"
 title = "Refactor sweep"
 description = "Cleans up what the plans and reviews in this epic deferred, with scope set at its start and cleanup only."
 verify = "The epic's focused tests, lint and type checks pass, with no behaviour change."
 covers = []
-after = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+after = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 hitl = false
 risk = "low"
 
 [[entry]]
-id = 13
+id = 14
 type = "story"
 title = "Verified on real data in a released build"
 description = "Runs the timing script and a small regenerate against a fresh copy of the real database on a released fork build, on the stock 30-second lease, records the results against every line of this epic, and, with the owner's go-ahead, offers upstream as focused PRs any fixes not yet offered."
 verify = "The owner sees every timing inside its limit or target, a small regenerate completing on the released build, and a list showing each fix's upstream PR or why it wasn't offered."
 covers = ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8"]
-after = [12, "1.2", "1.13"] # cuts a new fork version by 1.13's procedure and installs it with 1.2's script
+after = [13, "1.2", "1.13"] # cuts a new fork version by 1.13's procedure and installs it with 1.2's script
 hitl = true # the owner provides the copy and runs the released build
 risk = "medium"

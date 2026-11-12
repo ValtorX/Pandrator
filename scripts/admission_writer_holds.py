@@ -37,8 +37,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import large_project_timing as timing  # noqa: E402
 
 
-def caller_frames() -> str:
-    """The application functions that opened the transaction, innermost first."""
+def caller_frames() -> tuple[str, bool]:
+    """The application functions that opened the transaction, innermost first.
+
+    Returns the innermost four for display, and whether the admission job is anywhere on
+    the stack: a deeper call path must not stop its transactions counting as admission's.
+    """
     frames = []
     for frame in traceback.extract_stack()[:-3]:
         name = frame.filename.replace("\\", "/")
@@ -46,7 +50,8 @@ def caller_frames() -> str:
                 and "large_project_timing" not in name and "admission_writer_holds" not in name
                 and not name.endswith("/database.py")):
             frames.append(f"{Path(name).stem}:{frame.lineno}({frame.name})")
-    return " < ".join(reversed(frames[-4:]))
+    in_admission = any(f"({ADMISSION_FUNCTION})" in frame for frame in frames)
+    return " < ".join(reversed(frames[-4:])), in_admission
 
 
 class HoldRecorder:
@@ -69,35 +74,40 @@ class HoldRecorder:
         self._undo.append(lambda: event.remove(engine, "commit", self._end))
         self._undo.append(lambda: event.remove(engine, "rollback", self._end))
 
-    def _begin(self, _conn, _cursor, statement, _parameters, _context, _many) -> None:
+    # A hold belongs to the connection that began it. Other connections on the same
+    # thread commit inside it (the credentials cache reloads through its own session
+    # while a job is enqueued), and must not end it.
+
+    def _begin(self, conn, _cursor, statement, _parameters, _context, _many) -> None:
         if statement.strip().upper().startswith("BEGIN IMMEDIATE"):
-            self._local.opening = True
-            self._local.where = caller_frames()
+            self._local.opening = id(conn)
+            self._local.where, self._local.in_admission = caller_frames()
             self._local.pieces = {}
 
-    def _acquired(self, _conn, _cursor, statement, _parameters, _context, _many) -> None:
+    def _acquired(self, conn, _cursor, statement, _parameters, _context, _many) -> None:
         # The hold starts once BEGIN IMMEDIATE returns: before that, the transaction
         # is waiting for another writer, not blocking anyone.
-        if getattr(self._local, "opening", False) and statement.strip().upper().startswith(
-            "BEGIN IMMEDIATE"
-        ):
-            self._local.opening = False
+        if getattr(self._local, "opening", None) == id(conn) and statement.strip().upper(
+        ).startswith("BEGIN IMMEDIATE"):
+            self._local.opening = None
+            self._local.conn = id(conn)
             self._local.started = time.perf_counter()
 
-    def _end(self, _conn, *_args) -> None:
+    def _end(self, conn, *_args) -> None:
         started = getattr(self._local, "started", None)
-        if started is None:
+        if started is None or id(conn) != self._local.conn:
             return
         pieces = self._local.pieces
         record = {
             "seconds": time.perf_counter() - started,
             "thread": threading.current_thread().name.split("-")[0],
             "where": self._local.where,
-            "in_admission": ADMISSION_FUNCTION in self._local.where,
-            "admission_commit": ADMISSION_FUNCTION in self._local.where and COMMIT_MARKER in pieces,
+            "in_admission": self._local.in_admission,
+            "admission_commit": self._local.in_admission and COMMIT_MARKER in pieces,
             "pieces": pieces,
         }
         self._local.started = None
+        self._local.conn = None
         with self._lock:
             self.holds.append(record)
 
@@ -198,7 +208,9 @@ def describe(holds: list[dict[str, Any]]) -> dict[str, Any]:
 def counts_toward_verdict(entry: dict[str, Any]) -> bool:
     """A run counts only when its admission job ran to success and its commit hold is certain."""
     commit = entry["admission_commit"]
-    return bool(commit) and not commit.get("fallback") and entry.get("claimed", True) is not False         and entry.get("job_status", "succeeded") == "succeeded"
+    return (bool(commit) and not commit.get("fallback")
+            and entry.get("claimed", True) is not False
+            and entry.get("job_status", "succeeded") == "succeeded")
 
 
 def summarize(runs: list[dict[str, Any]], sizes: list[int]) -> list[dict[str, Any]]:
@@ -244,6 +256,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args.root = args.root.expanduser().resolve()
     if args.runs < 1:
         parser.error("--runs must be at least 1.")
+    try:
+        args.sizes = [int(value) for value in args.sizes.split(",") if value.strip()]
+    except ValueError:
+        parser.error("--sizes must be a comma list of whole numbers.")
+    if not args.sizes or min(args.sizes) < 1:
+        parser.error("--sizes must list at least one segment count, each at least 1.")
     return args
 
 
@@ -258,7 +276,12 @@ def main(argv: list[str] | None = None) -> int:
     except timing.RootRefused as error:
         print(f"Refused: {error}", file=sys.stderr)
         return 2
-    sizes = [int(value) for value in args.sizes.split(",")]
+    sizes = args.sizes
+    if max(sizes) > len(large.first_segment_ids):
+        # A larger size would admit only the ids there are, under a misleading label.
+        print(f"Refused: --sizes goes up to {max(sizes)}, but the large plan offers "
+              f"{len(large.first_segment_ids)} segments to admit.", file=sys.stderr)
+        return 2
     label = args.label or args.root.name
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     output = args.out or args.root.parent / "results" / f"{label}-writer-holds-{stamp}.json"

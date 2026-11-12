@@ -1213,7 +1213,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--ui-interval", type=float, default=0.0,
                         help="Seconds between samples of the large project's run list, plan status "
                              "summary, generation summary and first listing page during jobs (0: "
-                             "none). These are CPU-heavy on a large plan, like the small listing.")
+                             "none). All but the generation summary are CPU-heavy on a large "
+                             "plan, like the small listing.")
     parser.add_argument("--skip-reads", action="store_true", help="Skip both read matrices.")
     parser.add_argument("--large-segments", type=int, default=5000, help="Target size of the large plan.")
     parser.add_argument("--small-segments", type=int, default=189, help="Target size of the small plan.")

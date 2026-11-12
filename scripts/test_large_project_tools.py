@@ -577,3 +577,38 @@ def test_writer_hold_summary_excludes_uncertain_and_failed_runs() -> None:
     assert holds_tool.describe([{"seconds": 0.4, "thread": "Main", "where": "x", "pieces": {},
                                  "in_admission": True, "admission_commit": False}]
                                )["admission_commit"]["fallback"] is True
+
+
+def test_writer_hold_ignores_other_connections_on_the_same_thread(tmp_path: Path) -> None:
+    from sqlalchemy import create_engine
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'holds.sqlite3'}")
+    recorder = holds_tool.HoldRecorder(engine)
+    try:
+        with engine.connect() as writer:
+            writer.exec_driver_sql("BEGIN IMMEDIATE")
+            # The credentials cache reloads through its own session inside a hold.
+            with engine.connect() as other:
+                other.exec_driver_sql("SELECT 1")
+                other.commit()
+            recorder.piece("after the other commit", 0.01)
+            writer.commit()
+    finally:
+        recorder.close()
+        engine.dispose()
+    (hold,) = recorder.take()
+    assert hold["pieces"] == {"after the other commit": [0.01, 1]}
+
+
+@pytest.mark.parametrize("sizes", ["", "0,1", "1,x"])
+def test_writer_holds_rejects_bad_sizes(sizes: str, tmp_path: Path) -> None:
+    with pytest.raises(SystemExit):
+        holds_tool.parse_args(["--root", str(tmp_path), "--sizes", sizes])
+
+
+def test_writer_holds_refuses_sizes_beyond_the_plan(seeded_root: Path, tmp_path: Path) -> None:
+    code = holds_tool.main([
+        "--root", str(seeded_root), "--sizes", "1,99", "--large-segments", "12",
+        "--small-segments", "5", "--out", str(tmp_path / "holds.json"),
+    ])
+    assert code == 2 and not (tmp_path / "holds.json").exists()

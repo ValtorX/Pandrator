@@ -3,7 +3,7 @@ title: 'Admission meets its target without stalling reads'
 type: bugfix
 ticket: '9'
 created: '2026-11-12'
-status: built
+status: done
 baseline_revision: '26d18b531c05ccc54f6a79790e2af4f3e1005818'
 route: full
 route_source: auto
@@ -124,3 +124,51 @@ The implementer said every run of the first measurement had real commit pieces. 
 - `<uv env> python -m pytest -q _bmad-output/scripts/test_large_project_tools.py` -- expected: pass
 - `<uv env> python _bmad-output/scripts/admission_writer_holds.py --root <fresh real copy> --runs 3` -- expected: admission commit hold median at most 0.75 s for 1 and 15 segments
 - `<uv env> python _bmad-output/scripts/large_project_timing.py --root <fresh copy> --skip-reads --skip-burst --admission-sizes 1,15 --listing-interval 2 --ui-interval 10` on `real` and `synthetic` -- expected: admission at most 60 s, every sampled read under 15 s
+
+## Code Review
+
+### 2026-11-12
+
+Code review: 2 `decision-needed`, 10 `patch`, 0 `defer`, 17 rejected. Lenses: blind-hunter, edge-case-hunter, verification-gap, intent-alignment; none failed.
+
+- [x] [Review][Decision] The compact run-list poll's cost is noted but owned by no story — While a run is active, each open tab repeats `generation-runs?view=compact&limit=25` every 10 s. On the real project each call costs 2.3-3.1 s of a core, about a quarter of a core per tab. That is inside R6's 15 s, but R6 also says the UI keeps responding. Options: a) new story in this epic to stop the compact run list decoding whole run snapshots; b) fix it inside story 9; c) accept it. Recommended: a — it is a different read path from admission, and this story may not change API responses.
+- [x] [Review][Decision] The admission target stays 60 s; tightening is left to the owner in prose — Admission measures 9-11 s clean and at most 17.4 s with the UI reads sampled. Options: a) tighten to 30 s; b) tighten to 20 s, as the baseline suggests; c) keep 60 s. Recommended: a — about 3x the clean figure, and still 1.7x the worst sampled run.
+- [x] [Review][Patch] The batched loading in `inherit_edit_copy_audio` is never tested past one batch: run the equivalence test with `_BATCH` patched to 2 [pandrator/web/generation_edit_audio.py:28]
+- [x] [Review][Patch] The planner hint `(AudioTake.status + "")` has no query-plan test: assert with EXPLAIN QUERY PLAN that `ix_audio_takes_status` is not used [pandrator/web/generation_edit_audio.py:205]
+- [x] [Review][Patch] HoldRecorder keys its hold state on the thread, not the connection: first probe for commit or rollback events from another connection during an open hold; key the state on the connection if any are seen, otherwise reject [_bmad-output/scripts/admission_writer_holds.py:569]
+- [x] [Review][Patch] The Writer holds table is split by a paragraph [_bmad-output/initiative-long-audiobooks/tickets/epic-large-project-responsiveness/baseline-2-1.md:403]
+- [x] [Review][Patch] `counts_toward_verdict` has two lines joined into one [_bmad-output/scripts/admission_writer_holds.py:201]
+- [x] [Review][Patch] `--sizes` is not validated against the 15 available segment ids [_bmad-output/scripts/admission_writer_holds.py:758]
+- [x] [Review][Patch] Admission detection relies on a four-frame window of the stack [_bmad-output/scripts/admission_writer_holds.py:537]
+- [x] [Review][Patch] `capture_selection_guards` still hard-codes 500 beside the new `_BATCH` [pandrator/web/generation_edit_audio.py:114]
+- [x] [Review][Patch] The baseline's intro flags and "about 0.6 s" do not match the holds measurement [_bmad-output/initiative-long-audiobooks/tickets/epic-large-project-responsiveness/baseline-2-1.md:377]
+- [x] [Review][Patch] The `--ui-interval` help and the baseline call all four large UI reads heavy [_bmad-output/scripts/large_project_timing.py:1213]
+
+Rejected:
+- No automated 60 s or 15 s verdict (false): the epic forbids wall-clock tests, and ACs 3-4 are manual timing runs recorded as planned.
+- The fix reaches only edit copies (false): the plan scopes it to the real plan, an edit copy.
+- The stall explanation is not isolated by an experiment (false): the plan asks for it from story 1's profile and these hold measurements, both cited.
+- The release note overstates (false): "over a second" is accurate at 0.63-0.69 s.
+- Doubled `_bmad-output` paths in the patch, reported twice (false): an artifact of how the review generated the diff.
+- A nested BEGIN IMMEDIATE resets pieces (false): it would fail on busy and fail the admission, and every admission succeeded.
+- Setup before the try leaks resources (low): the process exits, the tool test fails loudly, and the fix needs guarded cleanup.
+- The candidate query skips the source-ids rule, reported twice (low): performance only, and nearly unreachable because edit-copy ancestry stops at split, merge and restore; a SQL JSON comparison adds risk.
+- The commit message gives "9-14 s" for before (low): fixing it means rewriting a commit; the baseline document is right.
+- `instrument` returns None for an inherited method (false): every instrumented attribute is defined on its own class.
+- The verdict can rest on one run (low): the summary already lists the counted holds and the excluded runs.
+- The check phase records no job status (low): its figures are informational and in no AC.
+- The baseline compares unlike measurements (false): the planning before figures are labelled, and the sampled rows are declared not comparable.
+- The read-matrix additions are unchecked, `ui_jobs` is timed twice, `schema_version` is unchanged (low): rarely visible, and the added keys are compatible.
+- The release-notes header omits story 9's upstream status (false): it accurately names PRs for stories 7 and 8 only.
+
+Resolution (2026-11-12):
+- Decisions: the owner made the compact run-list poll a new story 12 in this epic; the refactor sweep and the real-data verification became 13 and 14. The owner tightened the admission target to 30 s. Both are recorded in the epic's Notes and in `baseline-2-1.md`, "Owner decisions".
+- HoldRecorder was settled before patching. A probe on the seeded root saw the credentials cache reload (`jobs._event` → `redact` → `credentials._load_values`, its own session) commit inside an open hold in 2 of 12 runs, which ends the recorded hold early. Holds are now keyed on the connection that began them. This is the cause of the "one run in six" fallback; the baseline now explains it, and its certified medians stand.
+- All 10 patches applied:
+  - The equivalence test also runs with `_BATCH = 2`; it fails if the existing-takes slice is broken.
+  - New test `test_reconcile_candidate_query_avoids_the_global_status_index`; it fails without `+ ""` (the plan then shows `IX_AUDIO_TAKES_STATUS`).
+  - New tool tests: another connection's commit does not end a hold (fails on the old code); bad `--sizes` values are rejected; a size beyond the plan is refused.
+  - Admission is detected on the full stack.
+  - `capture_selection_guards` uses `_BATCH`.
+  - Baseline and help-text wording corrected.
+- Verified (uv, Python 3.11, Windows): the four focused files, 108 passed under SQLAlchemy 2.0.52 and again under 2.1.8. `test_large_project_tools.py`, 35 passed. Ruff is clean on the repo and on `_bmad-output/scripts`. Types report only `nemo_normalizer.py:98`. The lane check passes, and `tickets.py find 2.12` resolves.
