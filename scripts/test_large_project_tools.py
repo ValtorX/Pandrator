@@ -6,6 +6,7 @@ import http.server
 import json
 import logging
 import os
+import shutil
 import sys
 import threading
 import time
@@ -14,6 +15,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import admission_writer_holds as holds_tool  # noqa: E402
 import large_project_seed as seed_tool  # noqa: E402
 import large_project_timing as timing  # noqa: E402
 
@@ -376,7 +378,7 @@ def test_timing_run_writes_the_result_schema(seeded_root: Path, tmp_path: Path) 
     code = timing.main([
         "--root", str(seeded_root), "--runs", "1", "--skip-burst", "--admission-sizes", "1",
         "--large-segments", "12", "--small-segments", "5", "--out", str(output), "--label", "tiny",
-        "--listing-interval", "1",
+        "--listing-interval", "1", "--ui-interval", "1",
     ])
     assert code == 0
     text = output.read_text(encoding="utf-8")
@@ -395,8 +397,13 @@ def test_timing_run_writes_the_result_schema(seeded_root: Path, tmp_path: Path) 
     assert admission["run"]["check_finished"] is True
     assert admission["run"]["check_seconds"] is not None
     assert admission["run"]["status"] in {"canceled", "cancelled"}
-    assert set(admission["reads_during"]) == {"auth_status", "segments_default"}
-    assert admission["sampling"] == {"auth_status_every_seconds": 2.0, "small_listing_every_seconds": 1.0}
+    assert set(admission["reads_during"]) == {
+        "auth_status", "segments_default", "large_ui_runs_compact", "large_plan_status_summary",
+        "large_ui_generation_summary", "large_segments_default",
+    }
+    assert admission["sampling"] == {"auth_status_every_seconds": 2.0,
+                                     "small_listing_every_seconds": 1.0,
+                                     "large_ui_reads_every_seconds": 1.0}
     # Timings, counts and names only: no seeded text, titles or paths.
     for forbidden in ("Synthetic large book", "Chapter", str(seeded_root), seeded_root.name, "Users"):
         assert forbidden not in text
@@ -511,3 +518,62 @@ def test_table_prints_one_wal_line() -> None:
     timing.print_table({"burst": burst}, lines.append)
     printed = [line for line in lines if line.startswith("burst WAL")]
     assert len(printed) == 1 and "settled 1.0 MiB" in printed[0] and "peak 2.0 MiB" in printed[0]
+
+
+def test_writer_holds_run_reports_the_commit_transaction(seeded_root: Path, tmp_path: Path) -> None:
+    root = tmp_path / "copy"
+    shutil.copytree(seeded_root, root)
+    output = tmp_path / "holds.json"
+    code = holds_tool.main([
+        "--root", str(root), "--runs", "2", "--sizes", "1", "--large-segments", "12",
+        "--small-segments", "5", "--out", str(output), "--label", "tiny",
+    ])
+    assert code == 0
+    text = output.read_text(encoding="utf-8")
+    result = json.loads(text)
+    admissions = [item for item in result["runs"] if item["phase"] == "admission"]
+    assert [item["run"] for item in admissions] == [1, 2]
+    for item in admissions:
+        commit = item["admission_commit"]
+        assert commit["hold_seconds"] > 0 and "start_in_session (total)" in commit["pieces"]
+        assert commit["fallback"] is False and item["claimed"] is True
+        assert item["job_status"] == "succeeded"
+        assert item["writer_holds"] >= 2
+    (summary,) = result["summary"]
+    assert summary["segments"] == 1 and summary["runs"] == 2 and summary["excluded_runs"] == 0
+    assert summary["commit_hold_median_seconds"] is not None
+    # Timings, counts and function names only: no seeded text, titles or paths.
+    for forbidden in ("Synthetic large book", "Chapter", str(seeded_root), seeded_root.name, "Users"):
+        assert forbidden not in text
+
+
+def test_writer_hold_summary_takes_the_median_per_size() -> None:
+    def run(size: int, seconds: float) -> dict:
+        return {"segments": size, "phase": "admission", "holds_over_250ms": [],
+                "admission_commit": {"hold_seconds": seconds}}
+
+    runs = [run(1, 0.8), run(1, 0.6), run(1, 0.7), run(15, 0.9), run(15, 0.8), run(15, 0.7)]
+    one, fifteen = holds_tool.summarize(runs, [1, 15])
+    assert one["commit_hold_median_seconds"] == 0.7 and one["commit_hold_within_target"]
+    assert one["excluded_runs"] == 0
+    assert fifteen["commit_hold_median_seconds"] == 0.8 and not fifteen["commit_hold_within_target"]
+
+
+def test_writer_hold_summary_excludes_uncertain_and_failed_runs() -> None:
+    def run(seconds: float, **extra) -> dict:
+        commit = {"hold_seconds": seconds, "fallback": extra.pop("fallback", False)}
+        return {"segments": 1, "phase": "admission", "holds_over_250ms": [],
+                "admission_commit": commit, "claimed": True, "job_status": "succeeded", **extra}
+
+    runs = [run(0.5), run(0.6), run(0.1, fallback=True), run(0.1, job_status="failed"),
+            run(0.1, claimed=False, job_status=None), run(0.1, admission_commit=None)]
+    (summary,) = holds_tool.summarize(runs, [1])
+    assert summary["runs"] == 6 and summary["excluded_runs"] == 4
+    assert summary["commit_hold_seconds"] == [0.5, 0.6]
+    assert summary["commit_hold_median_seconds"] == 0.55 and summary["commit_hold_within_target"]
+    # Nothing certain left: no verdict, never a pass.
+    (empty,) = holds_tool.summarize([run(0.1, fallback=True)], [1])
+    assert empty["commit_hold_median_seconds"] is None and not empty["commit_hold_within_target"]
+    assert holds_tool.describe([{"seconds": 0.4, "thread": "Main", "where": "x", "pieces": {},
+                                 "in_admission": True, "admission_commit": False}]
+                               )["admission_commit"]["fallback"] is True

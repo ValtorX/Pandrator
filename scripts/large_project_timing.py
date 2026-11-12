@@ -31,7 +31,7 @@ import sys
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -571,6 +571,12 @@ def read_matrix(project: ProjectChoice) -> list[Operation]:
             "revision_non_active", "GET",
             f"{session}/generation-plan/revisions/{project.non_active_revision_id}",
         ))
+    # What the web UI repeats while a run is active (generation-store, summary store, jobs).
+    operations += [
+        Operation("ui_runs_compact", "GET", f"{session}/generation-runs", {"view": "compact", "limit": 25}),
+        Operation("ui_generation_summary", "GET", f"{session}/generation/summary"),
+        Operation("ui_jobs", "GET", "/api/v1/jobs", {"limit": 40}),
+    ]
     return operations
 
 
@@ -785,6 +791,10 @@ def wait_for_job(
     return None
 
 
+UI_SAMPLED_READS = ("ui_runs_compact", "plan_status_summary", "ui_generation_summary",
+                    "segments_default")
+
+
 class ReadSampler:
     """Sample reads, each on its own interval, while a job runs.
 
@@ -825,15 +835,23 @@ class ReadSampler:
 def run_admission(
     client: Client, large: ProjectChoice, small: ProjectChoice, size: int, *,
     job_timeout: float, sample_interval: float, log: Callable[[str], None],
-    listing_interval: float = 0.0,
+    listing_interval: float = 0.0, ui_interval: float = 0.0,
 ) -> dict[str, Any]:
     session = f"/api/v1/sessions/{large.session_id}"
     segment_ids = large.first_segment_ids[:size]
     result: dict[str, Any] = {"segments": len(segment_ids), "operation": "regenerate"}
     reads = {operation.name: operation for operation in read_matrix(small)}
     sampling = [(reads["auth_status"], sample_interval), (reads["segments_default"], listing_interval)]
+    # What the UI reads of the large project while it waits: its run list, plan status,
+    # generation summary and first listing page.
+    large_reads = {operation.name: operation for operation in read_matrix(large)}
+    sampling += [
+        (replace(large_reads[name], name=f"large_{name}"), ui_interval)
+        for name in UI_SAMPLED_READS
+    ]
     result["sampling"] = {"auth_status_every_seconds": sample_interval,
-                          "small_listing_every_seconds": listing_interval}
+                          "small_listing_every_seconds": listing_interval,
+                          "large_ui_reads_every_seconds": ui_interval}
     with ReadSampler(client, sampling) as sampler:
         posted, body = client.call(
             "POST", f"{session}/generation-admissions",
@@ -1192,6 +1210,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--listing-interval", type=float, default=0.0,
                         help="Seconds between small-listing samples during jobs (0: none). The "
                              "listing is CPU-heavy and slows the job it is sampled against.")
+    parser.add_argument("--ui-interval", type=float, default=0.0,
+                        help="Seconds between samples of the large project's run list, plan status "
+                             "summary, generation summary and first listing page during jobs (0: "
+                             "none). These are CPU-heavy on a large plan, like the small listing.")
     parser.add_argument("--skip-reads", action="store_true", help="Skip both read matrices.")
     parser.add_argument("--large-segments", type=int, default=5000, help="Target size of the large plan.")
     parser.add_argument("--small-segments", type=int, default=189, help="Target size of the small plan.")
@@ -1305,7 +1327,8 @@ def main(argv: list[str] | None = None) -> int:
                     results["admissions"].append(run_admission(
                         client, large, small, size, job_timeout=args.job_timeout,
                         sample_interval=args.sample_interval, log=log,
-                        listing_interval=args.listing_interval))
+                        listing_interval=args.listing_interval,
+                        ui_interval=args.ui_interval))
                     save()
             if heavy is not None:
                 log(f"  read-load burst: {args.burst_operation}, {args.load_seconds:.0f}s x "
