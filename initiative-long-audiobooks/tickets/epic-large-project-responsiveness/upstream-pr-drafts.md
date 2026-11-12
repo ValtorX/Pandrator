@@ -291,3 +291,49 @@ With this PR every read after the burst matched its speed before the burst. Neit
 Listing segments, plan status and plan history now stop partway through the book once their client has given up, and a read still waiting its turn never starts. Heavy MCP reads that time out no longer stall the server. A change whose client gave up still runs. The server now requires waitress 3.0.1 or later, which fixes a request-smuggling flaw that this setting would otherwise expose.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+---
+
+## 6. `heavy-reads-stop-holding-the-wal-back`
+
+Story 8. From upstream `main` at `c2b6fe1a`: `534163ca` and `099d6a2a` picked from fork `99a0574d` and `7018e743`, then the pre-review fix `72276832`. Passes `check_pr_branch.py`; no release-notes hunk. Independent of #132. Before/after: `%USERPROFILE%\pandrator-perf\work-2-8-pr\`. Pre-review (2026-11-12): no major findings and no regressions; taken: the size-limit comment's account of when truncation happens, a race-free WAL size helper, a page-size check and size range instead of an exact byte count in the under-limit test, and a note that the search test guards a future switch to streaming. Not taken: the lane entry's position. CodeRabbit's review on the fork-internal PR ValtorX/Pandrator#2 (2026-11-12) found nothing. The pre-review fix is on the epic branch as `26d18b53`.
+
+**Title:** Shrink the WAL back to a size limit once heavy read load ends
+
+**Body:**
+
+### Summary
+After heavy read load the SQLite write-ahead log keeps its high-water size. On a 5,167-segment book a 60 s burst grew it from 0 to 40 MiB, and it stayed at 40 MiB after the load ended. A long-running install carried a 59 MB WAL.
+
+### Reproduction
+1. Serve a large project and run a read burst: 4 clients requesting `GET .../generation-plan/status` for 60 s and giving up at 15 s, plus 24 clients requesting `GET /api/v1/auth/status` every 0.5 s.
+2. Watch `pandrator.sqlite3-wal` during and after the burst. It grows while the heavy reads keep the checkpoint from completing, and never shrinks afterwards.
+
+### Root cause
+While readers hold old snapshots, SQLite's auto-checkpoint cannot complete, so the WAL keeps growing. Once they finish, SQLite reuses the log from its start but never truncates the file unless `journal_size_limit` is set, and the application does not set it.
+
+### Fix
+- `534163ca`: every engine connection sets `PRAGMA journal_size_limit` to 8 MiB (about two auto-checkpoint cycles at the default 4 KiB pages), so the first write that restarts the log after a complete checkpoint truncates it back to the limit. WAL mode, `busy_timeout`, `foreign_keys` and the default auto-checkpoint are unchanged. The segment search also reads its rows in full before matching, so no heavy read keeps a statement open across per-row work.
+- `099d6a2a`: the WAL growth loop in the new tests is bounded, and a search test gets the short Windows temp root.
+- `72276832`: the size-limit comment says exactly when truncation happens; the tests read the WAL size without a check-then-stat race and assert a size range rather than an exact byte count.
+
+### Timings
+The burst above on a synthetic 5,167-segment book, WAL size sampled every second, on upstream `main` with and without this PR:
+
+| WAL size | Upstream `main` | With this PR |
+|---|---|---|
+| Start | 0.04 MiB | 0.04 MiB |
+| Peak | 40.1 MiB | 37.5 MiB |
+| After the follow-up reads | 40.1 MiB | 8.0 MiB |
+| Settled | 40.1 MiB | 8.0 MiB |
+
+Neither run had audit spools or locked-database errors. On both sides the light requests timed out 24 times and the server stayed busy about a minute after the burst, because the abandoned heavy reads keep running; #132 addresses that.
+
+### Tests
+- New `tests/test_wal_size.py` (in `web-18-serial`): a new connection reports the limit; the WAL shrinks to the limit once its readers finish; a WAL under the limit is not truncated; and the segment search holds no statement open while matching. `test_web_database_bootstrap_lifetime.py` expects the new pragma.
+- On Windows (uv, Python 3.11): `test_wal_size.py`, `test_generation_search.py` and `test_web_database_bootstrap_lifetime.py` give 36 passed under SQLAlchemy 2.1.8 and 2.0.52, and the WAL tests passed three runs in a row. `web-18-serial` under 2.1.8: 711 passed, 2 skipped, 1 failed, an existing symlink test that needs a Windows privilege (`WinError 1314`). ruff, vulture and `test_lanes.py check` pass; basedpyright reports only the existing `nemo_normalizer.py:98` on win32.
+
+### Suggested release note
+After heavy use, the database's write-ahead log now shrinks back to a small size the next time the app saves anything, instead of staying at its largest.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
