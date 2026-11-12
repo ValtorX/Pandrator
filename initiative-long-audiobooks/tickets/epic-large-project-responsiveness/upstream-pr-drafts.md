@@ -337,3 +337,48 @@ Neither run had audit spools or locked-database errors. On both sides the light 
 After heavy use, the database's write-ahead log now shrinks back to a small size the next time the app saves anything, instead of staying at its largest.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+---
+
+## 7. `edit-copy-reconcile-finds-takes-in-sql`
+
+Story 9. From upstream `main` at `c2b6fe1a`: `bae43ede` and `f60f9736` picked from fork `09cf5616` and `0d5076fd`, then the pre-review fix `e80ee132` and `faac4fdc`, from CodeRabbit's one nitpick on the fork-internal PR ValtorX/Pandrator#3 (2026-11-12). CodeRabbit confirmed the fix and its incremental review found nothing more. `e80ee132` and `faac4fdc` wait for the epic branch until story 10 is committed in the main checkout. Passes `check_pr_branch.py`; no release-notes hunk. Independent of #132 and #134. Evidence: `%USERPROFILE%\pandrator-perf\work-2-9-pr\` (`before.log`, `after2.log`; `after.log` overlapped a test run and is not quoted). Pre-review (2026-11-12): the SQL candidate query is equivalent to the old selection; taken: ordering a target's existing takes, unpacking the candidate ids by name, capturing the candidate query by its `status ||` filter and explaining why the plan check holds on any SQLite version. Not taken: an exact statement count (could flake on pragma reads), a `created_at` tie test (ids are UUIDs, so not deterministic), renaming `_BATCH`.
+
+**Title:** Find edit-copy takes to inherit in SQL before loading any rows
+
+**Body:**
+
+### Summary
+Starting generation on an edited copy of a long speech plan holds SQLite's single writer for about 1.7 s in admission's final transaction. Every other request that needs to write in that window waits out its busy timeout, and audit events are spooled. Most of the hold is the edit-copy reconcile loading every segment and take of the revision and its ancestors, usually to find nothing to copy.
+
+### Reproduction
+1. Take a long plan (about 5,000 segments here) that is an edit copy of an earlier revision with audio.
+2. Admit a generation run of 1 or 15 segments and time admission's final write transaction (`BEGIN IMMEDIATE` to commit).
+
+### Root cause
+`inherit_edit_copy_audio` loaded every segment of the target revision with their takes, and every segment, take and artifact of its ancestors, then matched them in Python. It runs inside admission's write transaction, so the writer is held while those rows are read and hydrated.
+
+### Fix
+- `bae43ede`: one query finds the candidates (source segment, take and target segment) in SQL: completed or stale takes of the ancestors' segments, paired with the target segment at the same ordinal that is not removed and does not already hold that artifact, in the same order as before. Only those rows are loaded, in batches of 500 ids. A reconcile with nothing to copy loads no segment or take rows. The remaining checks and the copy itself are unchanged. The status filter compares `status || ''` so the planner starts from the revision's segments rather than the global status index.
+- `f60f9736`: tests across batch boundaries and a test that pins the query plan.
+- `e80ee132`: a target's existing takes are loaded in creation order, so which take counts as current never depends on row order; the candidate ids are unpacked by name.
+- `faac4fdc`: the query-plan test also rejects a full scan of `audio_takes`, which would cost as much as the status index.
+
+### Timings
+Admission's commit transaction on a copy of a real 5,167-segment edited book, median of 3 runs, on upstream `main` with and without this PR:
+
+| Segments admitted | Upstream `main` | With this PR |
+|---|---|---|
+| 1 | 1.68 s | 0.72 s |
+| 15 | 1.75 s | 0.71 s |
+
+The whole admission job went from about 10.3 s to 9.2-9.4 s.
+
+### Tests
+- `tests/test_generation_edit_audio.py`: the reconcile copies the same takes, with the same fields and segment status, as a verbatim copy of the previous algorithm across several ancestors and batch sizes; a reconcile with nothing to copy hydrates no segment or take; and the candidate query uses neither the global status indexes nor a full scan of the takes.
+- On Windows (uv, Python 3.11): `test_generation_edit_audio.py` and `test_generation_admission.py` give 60 passed under SQLAlchemy 2.1.8 and 2.0.52; `web-13-serial` 61 passed. ruff, vulture and `test_lanes.py check` pass; basedpyright reports only the existing `nemo_normalizer.py:98` on win32.
+
+### Suggested release note
+Starting generation on an edited long plan no longer blocks other requests' writes for over a second.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
