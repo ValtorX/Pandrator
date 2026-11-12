@@ -829,8 +829,11 @@ class AutomationSecurityTests(unittest.TestCase):
 
         with self.extension["database"].session() as db_session:
             record = db_session.get(SessionRecord, session_id)
-        subtitle_dir = self.extension["paths"].sessions / record.storage_key
-        published = "reviewed_transcription_r1_*.srt"
+        subtitle_directory = self.extension["paths"].sessions / record.storage_key
+
+        def review_publications():
+            # Publication names carry a per-attempt suffix for retry safety.
+            return list(subtitle_directory.glob("reviewed_transcription_r1_*.srt"))
         subtitle_body = {
             "expected_revision": 0,
             "segments": [{"start_ms": 0, "end_ms": 1000, "text": "Retry subtitle"}],
@@ -849,14 +852,14 @@ class AutomationSecurityTests(unittest.TestCase):
                 },
             )
         self.assertEqual(409, failed_subtitle.status_code, failed_subtitle.get_json())
-        self.assertEqual([], list(subtitle_dir.glob(published)))
+        self.assertEqual([], review_publications())
         retried_subtitle = self.client.post(
             f"/api/v1/sessions/{session_id}/subtitles/transcription/review",
             json=subtitle_body,
             headers={**headers, "Idempotency-Key": "rollback-subtitle-review"},
         )
         self.assertEqual(201, retried_subtitle.status_code, retried_subtitle.get_json())
-        self.assertEqual(1, len(list(subtitle_dir.glob(published))))
+        self.assertEqual(1, len(review_publications()))
 
     def test_generation_replay_reserves_before_preparation_and_abandons_failures(self):
         headers = self._automation_headers("app.read", "app.write", "app.run")
@@ -1040,16 +1043,14 @@ class AutomationSecurityTests(unittest.TestCase):
             json={"target_stage": "generate_audio"},
             headers=read_headers,
         )
-        # Planning needs the same run authority as execution, so a read-only
-        # key is refused before the missing session is looked up.
-        self.assertEqual(403, planned.status_code)
+        self.assertEqual(403, planned.status_code, planned.get_json())
         self.assertEqual("scope_denied", planned.get_json()["error"]["code"])
-        run_planned = self.client.post(
+        scoped = self.client.post(
             "/api/v1/sessions/missing/workflow-plans",
             json={"target_stage": "generate_audio"},
             headers=self._automation_headers("app.run"),
         )
-        self.assertEqual(404, run_planned.status_code)
+        self.assertEqual(404, scoped.status_code)
 
         execute_path = (
             "/api/v1/workflow-plans/00000000-0000-0000-0000-000000000000/execute"

@@ -184,15 +184,12 @@ def test_registered_copy_member_edit_play_mix_and_workspace_audio_lifetime(libra
     _purge(f, u.alice, u.ah, record["id"])
     assert audio_path.read_bytes() == expected
     assert u.bob.get(f"/api/v1/artifacts/{audio_id}/content").data == expected
-    # Bob, a Member, may trash the copy, but purge is a Manager action: his
-    # preview and his purge with the owner's valid impact token are refused.
-    _trash(u.bob, u.bh, target)
-    assert u.bob.get(f"/api/v1/sessions/{target}/purge-preview").status_code == 403
-    impact = body(u.owner.get(f"/api/v1/sessions/{target}/purge-preview"))
-    refused = u.bob.post(f"/api/v1/sessions/{target}/purge", headers=u.bh,
-        json={"expected_revision": impact["revision"], "impact_token": impact["impact_token"]})
-    assert refused.status_code == 403, refused.get_json()
-    _purge(f, u.owner, u.oh, target, trash=False)
+    # A workspace member may edit, render, and read the copy, but purge
+    # governance remains with the workspace owner.
+    denied = u.bob.get(f"/api/v1/sessions/{target}/purge-preview")
+    assert denied.status_code == 403
+    assert denied.get_json()["error"]["code"] == "scope_denied"
+    _purge(f, u.owner, u.oh, target)
     assert audio_path.read_bytes() == expected
     remaining = body(u.bob.get(f"/api/v1/sounds/candidates/{copied['variant_id']}",
         query_string={"workspace_id": u.workspace_id}))

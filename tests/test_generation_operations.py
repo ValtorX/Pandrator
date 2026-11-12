@@ -31,7 +31,6 @@ from pandrator.web.models import (
 from pandrator.web.projects.artifact_identity import resolve_artifact_ownership
 from pandrator.web.projects.identity import create_session_project
 from pandrator.web.work import WorkService
-from tests.web_test_support import suspended_triggers
 
 
 @pytest.fixture
@@ -328,16 +327,11 @@ def test_cross_session_child_and_missing_child_are_never_exposed(rig):
         payload={"generation_run_id": "pending"},
     )
     run_id = rig.create_run(
-        session_id=foreign_session_id, revision_id=foreign_revision_id, job_id=child_id
+        session_id=foreign_session_id,
+        revision_id=foreign_revision_id,
+        job_id=child_id,
     )
     with rig.database.session() as session:
-        run = session.get(GenerationRun, run_id)
-        run.session_id = rig.session_id
-        run.plan_revision_id = rig.revision_id
-        # The run moves to this session while its job stays foreign. The database now refuses
-        # any change of a run's session, so suspend the update trigger for this one flush.
-        with suspended_triggers(session, "pandrator_execution_scope_generation_runs_update"):
-            session.flush()
         session.get(Job, child_id).payload_json = {"generation_run_id": run_id}
         session.get(Job, rig.root_id).result_json = {
             "job_id": child_id,

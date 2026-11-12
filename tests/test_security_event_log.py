@@ -153,8 +153,8 @@ class SecurityEventLogTests(unittest.TestCase):
 
     @unittest.skipIf(
         os.name == "nt",
-        "The security log file sink cannot write on Windows and the test asserts the POSIX 0o600 "
-        "mode; see bug-security-log-drops-events-on-windows",
+        "The file sink requires POSIX descriptor permission hardening "
+        "(os.fchmod), which Windows does not provide.",
     )
     def test_file_target_is_private_and_symlinks_are_rejected(self):
         root = self.temporary_directory()
@@ -198,9 +198,9 @@ class SecurityEventLogTests(unittest.TestCase):
         self.assertEqual(output.getvalue(), "")
 
     @unittest.skipIf(
-        not hasattr(os, "fchmod"),
-        "The security log file sink cannot write without os.fchmod (Windows before Python 3.13); "
-        "see bug-security-log-drops-events-on-windows",
+        os.name == "nt",
+        "The file sink requires POSIX descriptor permission hardening "
+        "(os.fchmod), which Windows does not provide.",
     )
     def test_concurrent_authentication_failures_are_individual_json_lines(self):
         root = self.temporary_directory()

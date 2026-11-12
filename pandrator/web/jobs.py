@@ -15,12 +15,14 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, ClassVar, TypeGuard
 
+from flask import g, has_request_context
 from sqlalchemy import and_, delete, false, func, or_, select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
 from pandrator.logic.tts_service_identity import normalize_service_id
 
+from .access.contracts import AccessDenied
 from .accounts.administration import PRIVILEGED_JOB_SCOPES, AdministratorRequired
 from .accounts.execution_actor import (
     ExecutionActor,
@@ -73,6 +75,18 @@ def _canonical_tts_resource_key(key: str) -> str:
     if candidate.startswith(prefix):
         return prefix + normalize_service_id(candidate.removeprefix(prefix))
     return key
+
+
+def _request_principal_without_actor() -> bool:
+    """Report an authenticated HTTP request that lost its actor binding.
+
+    CLI and internal callers have no request context and legitimately enqueue
+    without an actor. Inside a request the resolved principal is authoritative:
+    when it is authenticated but no actor is bound, job provenance would be
+    silently dropped, so admission must fail closed instead.
+    """
+
+    return has_request_context() and getattr(g, "principal", None) is not None
 
 
 class JobQueue:
@@ -337,11 +351,24 @@ class JobQueue:
     @staticmethod
     def _is_generation_owner(run: GenerationRun, job: Job) -> bool:
         payload = job.payload_json if isinstance(job.payload_json, dict) else {}
-        return bool(
-            job.kind == "generation.run"
-            and job.session_id == run.session_id
-            and str(payload.get("generation_run_id") or "") == run.id
-        )
+        root_id = str(payload.get("generation_run_id") or "")
+        if job.kind == "generation.run":
+            return bool(job.session_id == run.session_id and root_id == run.id)
+        if job.kind == "generation.repair-existing":
+            snapshot = (
+                run.settings_snapshot_json
+                if isinstance(run.settings_snapshot_json, dict)
+                else {}
+            )
+            return bool(
+                job.session_id == run.session_id
+                and run.job_id == job.id
+                and root_id
+                and run.id != root_id
+                and run.source_generation_run_id is not None
+                and snapshot.get("early_repair_parent_run_id") == root_id
+            )
+        return False
 
     def _apply_generation_job_status(
         self,
@@ -353,6 +380,11 @@ class JobQueue:
         status = self.GENERATION_JOB_TERMINAL_STATUS.get(str(job.status or ""))
         if status is None or not self._is_generation_owner(run, job):
             return False
+        if job.kind == "generation.repair-existing" and status == "completed":
+            # A successful repair worker finalizes each staged child itself.
+            # A terminal queue success cannot fabricate missing audio for a
+            # child that is still queued or running; fail that orphan instead.
+            status = "failed"
         run.status = status
         run.cancel_requested = False
         run.pause_requested = False
@@ -366,6 +398,19 @@ class JobQueue:
     ) -> None:
         """Reconcile only the domain record owned by a normal job transition."""
 
+        if job.kind == "generation.repair-existing":
+            # A post-run repair job owns the children it staged, not the
+            # completed root named in its payload. Close every unfinished
+            # child so a failure or cancellation cannot leave one queued.
+            children = session.scalars(
+                select(GenerationRun).where(
+                    GenerationRun.job_id == job.id,
+                    GenerationRun.status.in_(self.GENERATION_ACTIVE_STATUSES),
+                )
+            ).all()
+            for child in children:
+                self._apply_generation_job_status(child, job)
+            return
         if job.kind != "generation.run":
             return
         run_id = str(
@@ -584,6 +629,11 @@ class JobQueue:
                 execution_options={"synchronize_session": False},
             )
             actor = current_execution_actor.get()
+            if actor is None and _request_principal_without_actor():
+                # An authenticated HTTP principal always binds an execution
+                # actor. Losing it here would create an unattributed job while
+                # authorization already succeeded, so reject before the insert.
+                raise AccessDenied()
             actor_record = None
             if actor is not None:
                 actor_record = actor_to_storage(actor)
@@ -1272,6 +1322,19 @@ class JobQueue:
         self._reconcile_agent_runs_for_jobs_locked(session, [job.id])
         reconcile_training_runs_in_session(session, [job_id])
 
+    def _finish_owned_cancellation_locked(self, session: Session, job: Job) -> None:
+        """Seal an owned cancellation in the same writer transaction as its check."""
+        now = utcnow()
+        job.status = "canceled"
+        job.lease_owner = None
+        job.lease_expires_at = None
+        job.finished_at = now
+        job.updated_at = now
+        self._event(session, job.id, "job.canceled")
+        self._reconcile_generation_run_for_job_locked(session, job)
+        self._reconcile_agent_runs_for_jobs_locked(session, [job.id])
+        reconcile_training_runs_in_session(session, [job.id])
+
     def fail(
         self,
         job_id: str,
@@ -1284,6 +1347,18 @@ class JobQueue:
     ) -> bool:
         with self.database.immediate_session() as session:
             job = session.get(Job, job_id)
+            # Cancellation can commit after Worker.should_cancel() but before
+            # its failure acknowledgement. The cancellation must win, including
+            # the linked generation run, rather than strand cancel_requested.
+            if (
+                job is not None
+                and job.status == "cancel_requested"
+                and self._owns_lease(
+                    job, worker_id, lease_generation, require_running=False
+                )
+            ):
+                self._finish_owned_cancellation_locked(session, job)
+                return True
             if not self._owns_lease(job, worker_id, lease_generation):
                 return False
             retry = job.attempts < job.max_attempts
@@ -1343,16 +1418,7 @@ class JobQueue:
                 require_running=False,
             ) or job.status not in {"running", "cancel_requested"}:
                 return False
-            job.status = "canceled"
-            job.lease_owner = None
-            job.lease_expires_at = None
-            finished_at = utcnow()
-            job.finished_at = finished_at
-            job.updated_at = finished_at
-            self._event(session, job.id, "job.canceled")
-            self._reconcile_generation_run_for_job_locked(session, job)
-            self._reconcile_agent_runs_for_jobs_locked(session, [job.id])
-            reconcile_training_runs_in_session(session, [job_id])
+            self._finish_owned_cancellation_locked(session, job)
             return True
 
     def events_after(self, event_id: int = 0, limit: int = 250) -> list[JobEvent]:

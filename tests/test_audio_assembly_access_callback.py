@@ -314,9 +314,9 @@ def test_pydub_late_denial_prevents_second_source_read(tmp_path: Path) -> None:
     source_reads: list[Path] = []
     real_load = audio_assembly.load_local_audio_segment
 
-    def tracked_load(path):
-        source_reads.append(Path(path))
-        return real_load(path)
+    def tracked_load(file, *args, **kwargs):
+        source_reads.append(Path(file))
+        return real_load(file, *args, **kwargs)
 
     def before_io() -> None:
         nonlocal calls

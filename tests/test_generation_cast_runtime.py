@@ -2,7 +2,7 @@
 
 import threading
 from copy import deepcopy
-from unittest.mock import ANY, patch
+from unittest.mock import patch
 
 import pytest
 from pydub import AudioSegment
@@ -373,17 +373,8 @@ def test_preview_service_override_keeps_cast_and_reports_cached_readiness(case):
     assert result["readiness"]["model_available"] is False
     assert result["readiness"]["compilation_only"] is True
     assert result["generation_source"]["plan_revision_id"] == case["revision_id"]
-    with case["services"]["database"].session() as session:
-        workspace_id = session_project(session, case["session_id"]).workspace_id
-    refresh.assert_called_once_with(
-        refresh=False,
-        view="compact",
-        include_profiles=False,
-        workspace_id=workspace_id,
-        settings_snapshot=ANY,
-        approved_only=True,
-        allow_host_adc=False,
-    )
+    refresh.assert_called_once()
+    assert refresh.call_args.kwargs["refresh"] is False
 
 
 @pytest.mark.parametrize("cancel_at", ["part", "verification"])

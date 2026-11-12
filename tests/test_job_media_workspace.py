@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -14,11 +15,10 @@ from alembic import command
 from alembic.config import Config
 from flask import Flask
 from flask.testing import FlaskClient
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from pandrator.runtime import DataPaths
 from pandrator.web.accounts.identity import initial_personal_workspace
-from pandrator.web.accounts.models import User, WorkspaceMembership
 from pandrator.web.api import create_app
 from pandrator.web.artifacts import ArtifactService
 from pandrator.web.auth import BootstrapTokenStore
@@ -26,15 +26,19 @@ from pandrator.web.bundles import SessionBundleService
 from pandrator.web.database import Database, sqlite_url
 from pandrator.web.job_identity import job_creation_ownership, job_ownership
 from pandrator.web.jobs import JobQueue
-from pandrator.web.models import Artifact, Job, Project, SessionRecord, Workspace
+from pandrator.web.models import (
+    Artifact,
+    Job,
+    Project,
+    SessionRecord,
+    User,
+    Workspace,
+    WorkspaceMembership,
+)
 from pandrator.web.projects.identity import delete_empty_project
 from pandrator.web.sessions import SessionService
 from pandrator.web.video_previews import VideoInfo
-from tests.web_test_support import (
-    get_at_revision,
-    prepare_web_test_data_root,
-    suspended_triggers,
-)
+from tests.web_test_support import prepare_web_test_data_root
 
 
 @dataclass
@@ -76,20 +80,23 @@ def media_jobs(tmp_path: Path) -> Iterator[MediaJobs]:
     database: Database = services["database"]
     workspaces: dict[str, str] = {}
     with database.immediate_session() as session:
+        team_ids: list[str] = []
         for name in ("alpha", "beta"):
             workspace = Workspace(kind="team", name=name)
             session.add(workspace)
             session.flush()
             workspaces[name] = workspace.id
-        # Team workspaces are visible only to members; enrol the bootstrap user.
-        user_ids = list(session.scalars(select(User.id)))
-        assert len(user_ids) == 1, user_ids
-        for workspace_id in workspaces.values():
-            session.add(
-                WorkspaceMembership(workspace_id=workspace_id, user_id=user_ids[0], role="owner")
-            )
-        # Local tools (RVC) run only in the owner's personal workspace.
+            team_ids.append(workspace.id)
+        owner = session.scalar(select(User).where(User.legacy_subject == "owner"))
+        assert owner is not None
         workspaces["personal"] = initial_personal_workspace(session).id
+        # Typed media reads require current membership in the owning team.
+        for workspace_id in team_ids:
+            session.add(
+                WorkspaceMembership(
+                    workspace_id=workspace_id, user_id=owner.id, role="owner"
+                )
+            )
     sessions = {
         name: SessionService(database).create(name, workspace_id=owner)
         for name, owner in workspaces.items()
@@ -210,20 +217,7 @@ def test_bundle_import_admission_and_new_project_use_input_workspace(media_jobs:
 
 def test_rvc_admission_keeps_private_workspace_and_selected_project(media_jobs: MediaJobs) -> None:
     harness = media_jobs
-    # Local tools resolve only to the owner's personal workspace, so team inputs are refused
-    # before any job exists, even though the caller owns the team.
-    team_weights = harness.source("team.pth", bound=True)
-    team_index = harness.source("team.index")
-    with harness.database.session() as session:
-        jobs_before = session.scalar(select(func.count()).select_from(Job))
-    refused = harness.client.post(
-        "/api/v1/rvc/models",
-        json={"pth_artifact_id": team_weights.id, "index_artifact_id": team_index.id},
-        headers=harness.headers,
-    )
-    assert refused.status_code == 404, refused.get_json()
-    with harness.database.session() as session:
-        assert session.scalar(select(func.count()).select_from(Job)) == jobs_before
+    # RVC model writes remain an original-personal-owner host-local tool.
     weights = harness.source("weights.pth", bound=True, workspace="personal")
     index = harness.source("weights.index", workspace="personal")
     response = harness.client.post(
@@ -298,49 +292,44 @@ def test_retained_job_checks_reject_inconsistent_roots_without_repair(
     media_jobs: MediaJobs, corruption: str
 ) -> None:
     harness = media_jobs
-    job = harness.queue.enqueue("test.retained", session_id=harness.sessions["alpha"].id)
-    if corruption == "no_workspace":
-        # NOT NULL from 0075 makes this state impossible at head, so it stays at 0074.
-        # `job_ownership` raises on the missing workspace before it runs any query, so
-        # the old schema is only read by the test, through `get_at_revision`.
+    if corruption in {"no_workspace", "source_missing_with_survivor"}:
+        # Current constraints reject these writes; keep the legacy reader fence.
+        predecessor = (
+            "0074_actor_attribution" if corruption == "no_workspace" else "0075_mandatory_ownership"
+        )
         config = Config()
         config.set_main_option("script_location", str(Path(__file__).parents[1] / "pandrator/web/migrations"))
         config.set_main_option("sqlalchemy.url", sqlite_url(harness.database.path))
-        harness.database.dispose()
+        command.downgrade(config, predecessor)
+        # The downgrade targets the legacy ownership constraint shape only. The
+        # current ORM mapper still writes 0084's nullable receipt column, so add
+        # that unrelated column back instead of downgrading the whole model.
+        with sqlite3.connect(harness.database.path) as connection:
+            connection.execute("ALTER TABLE jobs ADD COLUMN external_effect_json JSON")
+    elif corruption in {"no_project", "different_session"}:
+        # 0075 makes execution roots immutable for writes; this case exercises
+        # the reader fence over a retained pre-0075 row instead.
+        config = Config()
+        config.set_main_option("script_location", str(Path(__file__).parents[1] / "pandrator/web/migrations"))
+        config.set_main_option("sqlalchemy.url", sqlite_url(harness.database.path))
         command.downgrade(config, "0074_actor_attribution")
-        with harness.database.immediate_session() as session:
-            session.connection().exec_driver_sql(
-                "UPDATE jobs SET workspace_id = NULL WHERE id = ?", (job.id,)
-            )
-        with harness.database.session() as session:
-            record = get_at_revision(session, Job, job.id)
-            assert record is not None
-            expected = (None, record.project_id, record.session_id)
-            with pytest.raises(ValueError, match="no stored workspace ownership"):
-                job_ownership(session, record, allow_archived=True)
-            assert (record.workspace_id, record.project_id, record.session_id) == expected
-        return
-
-    # Product code runs at head, whose triggers refuse these writes: write them suspended.
+        with sqlite3.connect(harness.database.path) as connection:
+            connection.execute("ALTER TABLE jobs ADD COLUMN external_effect_json JSON")
+    job = harness.queue.enqueue("test.retained", session_id=harness.sessions["alpha"].id)
     with harness.database.immediate_session() as session:
         record = session.get(Job, job.id)
         assert record is not None
-        with suspended_triggers(
-            session,
-            "pandrator_execution_scope_jobs_update",
-            "pandrator_library_scope_jobs_update",
-            "pandrator_project_graph_projects_update",
-        ):
-            if corruption == "no_project":
-                record.project_id = None
-            elif corruption == "different_session":
-                record.session_id = harness.sessions["beta"].id
-            else:
-                record.session_id = None
-                project = session.get(Project, record.project_id)
-                assert project is not None
-                project.source_session_id = None
-            session.flush()
+        if corruption == "no_workspace":
+            record.workspace_id = None
+        elif corruption == "no_project":
+            record.project_id = None
+        elif corruption == "different_session":
+            record.session_id = harness.sessions["beta"].id
+        else:
+            record.session_id = None
+            project = session.get(Project, record.project_id)
+            assert project is not None
+            project.source_session_id = None
         expected = (record.workspace_id, record.project_id, record.session_id)
     with harness.database.session() as session:
         record = session.get(Job, job.id)

@@ -7,7 +7,7 @@ import shutil
 import socket
 import threading
 from contextlib import contextmanager
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -362,9 +362,18 @@ def test_transcription_processing_loss_cleans_only_owned_attempt_without_publica
 
     f.hook["during"] = change
     run(f)
-    # A worker that lost its lease is fenced from failing the job (see
-    # test_job_terminal_lease_fencing); the job stays running until it is reclaimed.
-    assert job(f, queued.id).status == ("running" if loss == "lease" else "failed")
+    lost = job(f, queued.id)
+    if loss == "lease":
+        # Once the lease expires the fenced worker may not write a terminal
+        # state, so the claim remains recoverable rather than marked failed.
+        assert lost.status == "running"
+        expiry = lost.lease_expires_at
+        assert expiry is not None
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=UTC)
+        assert expiry <= datetime.now(UTC)
+    else:
+        assert lost.status == "failed"
     assert (
         f.attempts
         and not f.attempts[0].exists()

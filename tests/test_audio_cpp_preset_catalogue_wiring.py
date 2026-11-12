@@ -100,20 +100,25 @@ class AudioCppPresetCatalogueWiringTests(unittest.TestCase):
                 else ["us_male", "us_female", "uk_male", "uk_female"]
             )
             self.assertEqual(expected, AUDIO_CPP_MODEL_PRESETS[model])
-        catalogue_by_id = {item["id"]: item for item in AUDIO_CPP_MODEL_CATALOG}
         for family in ("kitten_tts2", "kugelaudio"):
+            family_voices = _voice_id_values(family)
             for model in models_by_family[family]:
                 self.assertIn(model, AUDIO_CPP_MODEL_PRESETS)
-                family_voices = _voice_id_values(family)
-                curated = catalogue_by_id[model].get("preset_voices")
-                if family == "kitten_tts2" and isinstance(curated, list):
-                    # Older Kitten packages keep their curated 48 voices; packages
-                    # without a curated list carry the family's full voice list.
-                    self.assertEqual(curated, AUDIO_CPP_MODEL_PRESETS[model])
-                    self.assertEqual(48, len(curated))
-                    self.assertLessEqual(set(curated), set(family_voices))
-                else:
+                declared = next(
+                    (
+                        item.get("preset_voices")
+                        for item in AUDIO_CPP_MODEL_CATALOG
+                        if item["id"] == model
+                    ),
+                    None,
+                )
+                if declared is None:
                     self.assertEqual(family_voices, AUDIO_CPP_MODEL_PRESETS[model])
+                else:
+                    # Package variants advertise their own shipped voice set,
+                    # which is a subset of the family catalogue.
+                    self.assertEqual(list(declared), AUDIO_CPP_MODEL_PRESETS[model])
+                    self.assertLessEqual(set(declared), set(family_voices))
         for model, family in model_families.items():
             if family == "qwen3_tts" and "customvoice" not in model:
                 self.assertNotIn(model, AUDIO_CPP_MODEL_PRESETS)

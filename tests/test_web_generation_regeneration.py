@@ -4,20 +4,27 @@ import threading
 import unittest
 from contextlib import contextmanager
 from copy import deepcopy
+from datetime import timedelta
 from unittest.mock import patch
 
-import pytest
 from pydub import AudioSegment
 from sqlalchemy import select
 
+from pandrator.web.accounts.execution_actor import (
+    actor_from_storage,
+    execution_actor_scope,
+)
 from pandrator.web.api import create_app
 from pandrator.web.auth import BootstrapTokenStore
+from pandrator.web.job_execution import current_job_lease
+from pandrator.web.model_base import utcnow
 from pandrator.web.models import (
     Artifact,
     AudioTake,
     GenerationPlanRevision,
     GenerationRun,
     Job,
+    JobActorRecord,
 )
 from pandrator.web.tts_providers import (
     TtsBatchResult,
@@ -219,14 +226,95 @@ class GenerationRegenerationTests(unittest.TestCase):
     def _progress(_value, _detail=None):
         return None
 
-    def _run_job(self, handlers, payload):
-        return handlers.run_generation(
-            payload,
-            self._progress,
-            threading.Event(),
-        )
+    @contextmanager
+    def _worker_authority(self, payload):
+        """Run a handler exactly as the durable worker would.
 
-    @pytest.mark.usefixtures("host_execution_actor")
+        The queue claims the job (running + live lease), the worker decodes the
+        job's own recorded actor, and the payload it executes is the stored one
+        plus the fenced ``_job_id``/``_lease_generation`` injections. Tests may
+        describe a scenario the enqueue route did not persist (for example a
+        partial segment selection); in that case the stored payload is updated
+        first so the fixture still submits the job's own payload, never an
+        unrecorded one.
+        """
+        run_id = payload.get("generation_run_id")
+        self.assertTrue(run_id, "Generation worker payload needs a run id")
+        supplied = {
+            key: value
+            for key, value in payload.items()
+            if key not in {"_job_id", "_lease_generation"}
+        }
+        owner_id = "generation-test-worker"
+        with self.database.immediate_session() as session:
+            run = session.get(GenerationRun, run_id)
+            self.assertIsNotNone(run)
+            job = session.get(Job, run.job_id)
+            self.assertIsNotNone(job)
+            stored = dict(job.payload_json or {})
+            executed = {**stored, **supplied}
+            if executed != stored:
+                job.payload_json = executed
+            lease_generation = int(job.lease_generation or 0) + 1
+            job.status = "running"
+            job.lease_owner = owner_id
+            job.lease_generation = lease_generation
+            job.lease_expires_at = utcnow() + timedelta(minutes=5)
+            record = session.get(JobActorRecord, job.id)
+            self.assertIsNotNone(record, "The job must record its creating actor")
+            actor = actor_from_storage(
+                record.user_id, record.auth_revision, record.context_json
+            )
+            self.assertIsNotNone(actor)
+            job_id = job.id
+        lease_token = current_job_lease.set(
+            {
+                "job_id": job_id,
+                "owner_id": owner_id,
+                "lease_generation": lease_generation,
+            }
+        )
+        try:
+            with execution_actor_scope(actor):
+                yield {
+                    **executed,
+                    "_job_id": job_id,
+                    "_lease_generation": lease_generation,
+                }
+        finally:
+            current_job_lease.reset(lease_token)
+
+    def _run_job(self, handlers, payload):
+        with self._worker_authority(payload) as worker_payload:
+            return handlers.run_generation(
+                worker_payload,
+                self._progress,
+                threading.Event(),
+            )
+
+    @contextmanager
+    def _recorded_actor_scope(self, job_id):
+        """Re-enter the caller's captured credential, as an HTTP route does."""
+        with self.database.session() as session:
+            record = session.get(JobActorRecord, job_id)
+            self.assertIsNotNone(record, "The job must record its creating actor")
+            actor = actor_from_storage(
+                record.user_id, record.auth_revision, record.context_json
+            )
+            self.assertIsNotNone(actor)
+        with execution_actor_scope(actor):
+            yield
+
+    def _resume_run(self, run_id):
+        """Resume a run under the authenticated caller, like the resume route."""
+        generation = self.app.extensions["pandrator"]["generation"]
+        with self.database.session() as session:
+            run = session.get(GenerationRun, run_id)
+            self.assertIsNotNone(run)
+            job_id = run.job_id
+        with self._recorded_actor_scope(job_id):
+            return generation.resume(run_id)
+
     def test_cloud_pause_saves_current_wave_and_resume_keeps_its_takes(self):
         root = self._start(
             run_override={"tts": {"service": "openai", "tts_concurrent_requests": 2}}
@@ -285,7 +373,6 @@ class GenerationRegenerationTests(unittest.TestCase):
                 ),
             )
 
-    @pytest.mark.usefixtures("host_execution_actor")
     def test_cloud_failure_saves_other_wave_results_without_extra_retry(self):
         root = self._start(
             run_override={"tts": {"service": "openai", "tts_concurrent_requests": 2}}
@@ -586,9 +673,13 @@ class GenerationRegenerationTests(unittest.TestCase):
 
     def _run_checkpoint_matrix(self, session_id, segment_ids, *, batch_size):
         handlers = self.app.extensions["pandrator"]["workflow_handlers"]
+        # A cloud service keeps this matrix about run-local checkpoint takes:
+        # the native audio_cpp path binds project speech references, and a
+        # later selected voice override would (correctly) be refused for
+        # disagreeing with that retained binding.
         root_a = self._start(
             session_id,
-            run_override={"tts": {"tts_batch_size": batch_size}},
+            run_override={"tts": {"service": "openai", "tts_batch_size": batch_size}},
         )
         calls: list[str] = []
         batch_calls: list[list[str]] = []
@@ -610,6 +701,7 @@ class GenerationRegenerationTests(unittest.TestCase):
             session_id,
             run_override={
                 "tts": {
+                    "service": "openai",
                     "tts_batch_size": batch_size,
                     "model": "root-model",
                     "voice": "root-voice",
@@ -723,12 +815,6 @@ class GenerationRegenerationTests(unittest.TestCase):
         self.assertEqual(2, len(calls))
         return batch_calls
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="backlog bug-alternate-take-model-refused-on-audio-cpp: 409 on a model override",
-    )
-    @pytest.mark.usefixtures("host_execution_actor")
     def test_grouped_regeneration_checkpoint_uses_output_run_local_takes(self):
         session_id, segment_ids = self._create_session_with_plan("Checkpoint matrix")
         batch_calls = self._run_checkpoint_matrix(
@@ -738,12 +824,6 @@ class GenerationRegenerationTests(unittest.TestCase):
         )
         self.assertEqual([], batch_calls)
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="backlog bug-alternate-take-model-refused-on-audio-cpp: 409 on a model override",
-    )
-    @pytest.mark.usefixtures("host_execution_actor")
     def test_resume_checkpoint_filtering_uses_streaming_batch_path(self):
         session_id, segment_ids = self._create_session_with_plan("Batch checkpoint")
         batch_calls = self._run_checkpoint_matrix(
@@ -755,7 +835,6 @@ class GenerationRegenerationTests(unittest.TestCase):
         self.assertEqual(2, len(batch_calls[-1]))
         self.assertNotIn(segment_ids[0], batch_calls[-1])
 
-    @pytest.mark.usefixtures("host_execution_actor")
     def test_stale_or_missing_artifact_takes_do_not_satisfy_resume_checkpoint(self):
         root = self._start(run_override={"tts": {"tts_batch_size": 1}})
         handlers = self.app.extensions["pandrator"]["workflow_handlers"]
@@ -802,7 +881,6 @@ class GenerationRegenerationTests(unittest.TestCase):
         self.assertEqual(3, result["generated"])
         self.assertEqual({"One", "Two", "Three"}, set(calls))
 
-    @pytest.mark.usefixtures("host_execution_actor")
     def test_failed_replacement_keeps_previous_active_take_and_wav(self):
         root = self._start(run_override={"tts": {"tts_batch_size": 1}})
         handlers = self.app.extensions["pandrator"]["workflow_handlers"]
@@ -863,7 +941,6 @@ class GenerationRegenerationTests(unittest.TestCase):
             self.assertIsNone(takes[0].parent_take_id)
         self.assertTrue(old_path.is_file())
 
-    @pytest.mark.usefixtures("host_execution_actor")
     def test_terminal_parent_filled_by_grouped_regeneration_becomes_completed(self):
         root = self._start(run_override={"tts": {"tts_batch_size": 1}})
         with self.database.session() as session:

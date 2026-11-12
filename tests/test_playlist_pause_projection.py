@@ -16,19 +16,6 @@ from pandrator_mcp.tools.generation import _segment_projection
 pytest_plugins = ("tests.test_performance_plans",)
 
 
-def _generation_take_artifact(session, case, metadata: dict) -> m.Artifact:
-    ownership = resolve_artifact_ownership(session, session_id=case["session_id"])
-    return m.Artifact(
-        workspace_id=ownership.workspace_id,
-        project_id=ownership.project_id,
-        session_id=case["session_id"],
-        kind="audio",
-        role="generation_take",
-        relative_path=f"test/{uuid.uuid4().hex}.wav",
-        metadata_json=metadata,
-    )
-
-
 def _add_run(case, snapshot: dict, *, sequence_number: int) -> str:
     with case["services"]["database"].session() as session:
         run = m.GenerationRun(
@@ -249,7 +236,18 @@ def test_page_terminal_pause_uses_next_voice_floor_and_is_not_suppressed(case):
         ]
     }
     with case["services"]["database"].session() as session:
-        artifact = _generation_take_artifact(session, case, metadata)
+        ownership = resolve_artifact_ownership(
+            session, session_id=case["session_id"]
+        )
+        artifact = m.Artifact(
+            workspace_id=ownership.workspace_id,
+            project_id=ownership.project_id,
+            session_id=case["session_id"],
+            kind="audio",
+            role="generation_take",
+            relative_path=f"test/{uuid.uuid4().hex}.wav",
+            metadata_json=metadata,
+        )
         session.add(artifact)
         session.flush()
         session.add(
@@ -331,7 +329,18 @@ def test_marked_take_silences_are_safe_and_legacy_parts_add_no_silence(case):
 
     for index, parts in enumerate((marked_parts, legacy_parts)):
         with case["services"]["database"].session() as session:
-            artifact = _generation_take_artifact(session, case, {"render_parts": parts})
+            ownership = resolve_artifact_ownership(
+                session, session_id=case["session_id"]
+            )
+            artifact = m.Artifact(
+                workspace_id=ownership.workspace_id,
+                project_id=ownership.project_id,
+                session_id=case["session_id"],
+                kind="audio",
+                role="generation_take",
+                relative_path=f"test/{uuid.uuid4().hex}.wav",
+                metadata_json={"render_parts": parts},
+            )
             session.add(artifact)
             session.flush()
             take = m.AudioTake(

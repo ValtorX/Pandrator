@@ -259,32 +259,59 @@ def test_mcp_voice_and_session_lifecycle_reaches_native_http_routes():
                     },
                 )
                 session_id = session["id"]
-                # Saving a cast refuses a voice that is not published or linked to the
-                # session's provider (generation_cast_runtime), so register it as ready.
                 extension = app.extensions["pandrator"]
                 with extension["database"].immediate_session() as db_session:
-                    db_voice = db_session.get(Voice, voice["id"])
-                    assert db_voice is not None
-                    db_voice.metadata_json = {
-                        **(db_voice.metadata_json or {}),
-                        "providers": {
-                            "fixture_tts": {
-                                "status": "ready",
-                                "provider_voice_id": "scrooge-fixture",
-                            }
-                        },
+                    record = db_session.get(Voice, voice["id"])
+                    metadata = dict(record.metadata_json or {})
+                    metadata["providers"] = {
+                        "audio_cpp": {
+                            "status": "ready",
+                            "resource_kind": "linked_reference",
+                            "voice_id": "scrooge-reference",
+                        }
                     }
-                await _call(
+                    record.metadata_json = metadata
+                reference_path = paths.artifacts / "scrooge-reference.wav"
+                reference_path.write_bytes(_silent_wav())
+                reference = extension["artifacts"].register(
+                    reference_path,
+                    kind="audio",
+                    role="voice_reference",
+                )
+                imported = await _call(
                     client,
-                    "pandrator_patch_session_settings",
+                    "pandrator_import_voice_reference",
                     {
-                        "session_id": session_id,
-                        "section": "tts",
-                        "expected_revision": 0,
-                        "value": {"service": "fixture_tts", "model": "fixture-model"},
-                        "idempotency_key": "settings-tts-fixture",
+                        "voice_id": voice["id"],
+                        "artifact_id": reference.id,
+                        "transcript": "Unreviewed reference words.",
+                        "transcript_reviewed": False,
+                        "language": "en",
+                        "expected_voice_revision": voice["revision"],
+                        "idempotency_key": "voice-import-scrooge",
                     },
                 )
+                assert imported["status"] in {"queued", "running"}
+                worker = Worker(
+                    extension["jobs"],
+                    "mcp-voice-integration",
+                    extension["workflow_handlers"].handlers(),
+                )
+                assert worker.run_once()
+                samples = await _call(
+                    client,
+                    "pandrator_get_voice_samples",
+                    {"voice_id": voice["id"]},
+                )
+                sample = next(
+                    item
+                    for item in samples["items"]
+                    if item["artifact_id"] != reference.id
+                )
+                assert sample["available"] is True
+                assert sample["file_status"] == "ready"
+                assert sample["transcript"] == "Unreviewed reference words."
+                assert sample["transcript_reviewed"] is False
                 controls = await _call(
                     client,
                     "pandrator_get_generation_controls",
@@ -420,48 +447,6 @@ def test_mcp_voice_and_session_lifecycle_reaches_native_http_routes():
                 )
                 assert _error_code(protected_source) == "revision_conflict"
                 assert source_path.exists()
-
-                reference_path = paths.artifacts / "scrooge-reference.wav"
-                reference_path.write_bytes(_silent_wav())
-                reference = extension["artifacts"].register(
-                    reference_path,
-                    kind="audio",
-                    role="voice_reference",
-                )
-                imported = await _call(
-                    client,
-                    "pandrator_import_voice_reference",
-                    {
-                        "voice_id": voice["id"],
-                        "artifact_id": reference.id,
-                        "transcript": "Unreviewed reference words.",
-                        "transcript_reviewed": False,
-                        "language": "en",
-                        "expected_voice_revision": voice["revision"],
-                        "idempotency_key": "voice-import-scrooge",
-                    },
-                )
-                assert imported["status"] in {"queued", "running"}
-                worker = Worker(
-                    extension["jobs"],
-                    "mcp-voice-integration",
-                    extension["workflow_handlers"].handlers(),
-                )
-                assert worker.run_once()
-                samples = await _call(
-                    client,
-                    "pandrator_get_voice_samples",
-                    {"voice_id": voice["id"]},
-                )
-                sample = next(
-                    item
-                    for item in samples["items"]
-                    if item["artifact_id"] != reference.id
-                )
-                assert sample["available"] is True
-                assert sample["file_status"] == "ready"
-                assert sample["transcript"] == "Unreviewed reference words."
-                assert sample["transcript_reviewed"] is False
 
         with patch(
             "pandrator.web.tts_providers.TtsCatalogueService.snapshot",

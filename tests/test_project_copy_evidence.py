@@ -611,6 +611,7 @@ def test_unreferenced_active_evidence_and_files_are_omitted_and_active_reference
     assert unreferenced.ready
     assert unreferenced_rows["rows"]["subtitle_evidence"] == []
     assert not {inactive[1], inactive[2], active[1], active[2]} & copied_artifacts
+    destination_connections = snapshot_destination_connections(unreferenced)
 
     with case.database.immediate_session() as session:
         segment = session.get(m.Segment, segment_id)
@@ -622,12 +623,9 @@ def test_unreferenced_active_evidence_and_files_are_omitted_and_active_reference
         if normalized.lstrip().startswith("select") and "subtitle_evidence" in normalized:
             evidence_sql.append(normalized)
 
-    # Reuse the reviewed choices so the counted read is one capture, not the
-    # helper's requirement-discovery capture plus a bound one.
-    choices = snapshot_destination_connections(unreferenced)
     event.listen(case.database.engine, "before_cursor_execute", record)
     try:
-        blocked = _capture_for(case, destination_connections=choices)
+        blocked = _capture_for(case, destination_connections=destination_connections)
     finally:
         event.remove(case.database.engine, "before_cursor_execute", record)
 

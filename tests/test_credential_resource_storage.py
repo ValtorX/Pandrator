@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy.engine import Connection
+from sqlalchemy.engine import URL, Connection
 
 from pandrator.web.accounts.resource_grant_models import (
     ApiTokenProjectGrant,
@@ -21,7 +21,6 @@ from pandrator.web.accounts.resource_grant_models import (
     BrowserAuthProjectGrant,
     BrowserAuthWorkspaceGrant,
 )
-from pandrator.web.database import sqlite_url
 
 MIGRATIONS = Path(__file__).parents[1] / "pandrator" / "web" / "migrations"
 PREDECESSOR_REVISION = "0080_configuration_scope_consistency"
@@ -160,8 +159,12 @@ IDS = {
 
 def _config(path: Path) -> Config:
     config = Config()
-    config.set_main_option("script_location", str(MIGRATIONS))
-    config.set_main_option("sqlalchemy.url", sqlite_url(path))
+    # Alembic uses ConfigParser interpolation, so escape SQLAlchemy 2.1 URL %.
+    config.set_main_option("script_location", str(MIGRATIONS).replace("%", "%%"))
+    config.set_main_option(
+        "sqlalchemy.url",
+        str(URL.create("sqlite", database=str(path))).replace("%", "%%"),
+    )
     return config
 
 

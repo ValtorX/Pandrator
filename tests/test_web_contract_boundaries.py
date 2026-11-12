@@ -230,7 +230,7 @@ def test_native_cleanup_row_counts_remove_only_expired_records(tmp_path):
         database.dispose()
 
 
-def test_bundle_import_rolls_back_in_one_transaction_when_registration_fails(tmp_path, monkeypatch):
+def test_bundle_artifact_registration_failure_aborts_and_cleans_import(tmp_path, monkeypatch):
     paths = prepare_web_test_data_root(tmp_path)
     database = Database(paths.database)
     sessions = SessionService(database)
@@ -252,10 +252,13 @@ def test_bundle_import_rolls_back_in_one_transaction_when_registration_fails(tmp
         def register_then_fail(unit, *args, **kwargs):
             record = native_register(unit, *args, **kwargs)
             imported_ids.append(record.session_id)
-            raise RuntimeError("injected registration failure")
+            # Import registers artifacts inside one immediate transaction, so a
+            # vanished row is not representable. Fail the same atomic unit after
+            # registration instead of weakening the rollback contract.
+            raise RuntimeError("Imported artifact is no longer available")
 
         monkeypatch.setattr(bundles.artifacts, "register_in_session", register_then_fail)
-        with pytest.raises(RuntimeError, match="injected registration failure"):
+        with pytest.raises(RuntimeError, match="Imported artifact is no longer available"):
             bundles.import_bundle(bundle)
         assert len(imported_ids) == 1
         with database.session() as session:

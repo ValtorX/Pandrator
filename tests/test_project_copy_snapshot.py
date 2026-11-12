@@ -34,7 +34,6 @@ from pandrator.web.sound_project_models import ProjectSoundPlan
 from tests.project_copy_test_support import (
     capture_with_connections,
     seed_copy_model,
-    snapshot_destination_connections,
 )
 from tests.test_project_export_bundles import bundle_case as _bundle_case
 from tests.test_project_operation_access import _person, _remove
@@ -693,6 +692,8 @@ def test_unsupported_dependencies_and_lifecycle_never_look_ready(copy_case, kind
         elif kind == "trashed_language_versions":
             session.get(m.SessionRecord, case.branches[1]["session_id"]).trashed_at = m.utcnow()
         else:
+            # Copy supports subtitles, media_edit, and voiceover. Audiobook
+            # remains outside the current copy contract and must not look ready.
             session.get(m.SessionRecord, case.branches[1]["session_id"]).workflow_kind = "audiobook"
     snapshot = _capture(case)
     assert ("unsupported_state", kind) in snapshot.blockers
@@ -770,10 +771,6 @@ def test_artifact_scope_and_in_predicates_are_chunked_at_500(copy_case):
             )
             for index in range(520)
         )
-    # Bind the destination models first, so the counted read is one capture.
-    bound = _capture(case)
-    assert bound.ready, bound.blockers
-    choices = snapshot_destination_connections(bound)
     statements = []
 
     def record(_conn, _cursor, statement, _params, _context, _many):
@@ -786,8 +783,10 @@ def test_artifact_scope_and_in_predicates_are_chunked_at_500(copy_case):
             "visible_artifact_ids_statement",
             wraps=capture_module.visible_artifact_ids_statement,
         ) as scoped:
-            snapshot = _capture(case, destination_connections=choices)
-            assert scoped.call_count <= 3
+            snapshot = _capture(case)
+            # Capture authorizes the artifact closure once per convergence pass;
+            # this fixture needs two passes, and each pass must chunk at 500.
+            assert scoped.call_count == 2 * -(-len(snapshot.files) // 500)
     finally:
         event.remove(case.database.engine, "before_cursor_execute", record)
     assert len(snapshot.files) >= 520

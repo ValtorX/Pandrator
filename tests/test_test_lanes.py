@@ -35,6 +35,29 @@ class TestLaneManifestTests(unittest.TestCase):
             message,
         )
 
+    def test_ci_workflows_reference_the_split_web07_lanes(self):
+        root = Path(__file__).resolve().parents[1]
+        preview = (root / ".github/workflows/web-preview.yml").read_text()
+        windows = (root / ".github/workflows/windows-serial-lanes.yml").read_text()
+        for index in range(1, 13):
+            lane = f"web-07-{index:02d}-serial"
+            self.assertIn(lane, test_lanes.TEST_LANES)
+            self.assertIn(f"lanes: {lane}", preview)
+            self.assertIn(f"          - {lane}\n", windows)
+        self.assertNotIn("lanes: web-07-serial", preview)
+        self.assertNotIn("          - web-07-serial\n", windows)
+
+    def test_serial_web_lane_size_is_bounded(self):
+        paths = tuple(f"tests/test_many_{i:03d}.py" for i in range(61))
+        with self.assertRaises(test_lanes.TestLaneManifestError) as raised:
+            test_lanes.validate_manifest(
+                {"web-overgrown-serial": paths}, discovered=set(paths)
+            )
+        self.assertIn(
+            "oversized serial web lanes (>60 files): web-overgrown-serial (61)",
+            str(raised.exception),
+        )
+
     def test_payload_is_manifest_ordered_and_json_serializable(self):
         manifest = {
             "second": ("tests/test_second.py",),
@@ -152,12 +175,15 @@ class TestLaneMatrixTests(unittest.TestCase):
         lanes = _manual_windows_lanes(_workflow_text("windows-serial-lanes.yml"))
         self.assertEqual([], sorted(set(lanes) - set(test_lanes.TEST_LANES)))
 
-    def test_windows_jobs_install_ffmpeg_through_the_checked_action(self):
-        for name, jobs in (("web-preview.yml", 2), ("windows-serial-lanes.yml", 1)):
-            with self.subTest(workflow=name):
-                text = _workflow_text(name)
-                self.assertEqual(jobs, text.count("uses: ./.github/actions/install-windows-ffmpeg"))
-                self.assertNotIn("choco install", text)
+    def test_windows_jobs_fail_when_ffmpeg_is_not_installed(self):
+        # web-preview.yml installs FFmpeg inline as upstream wrote it; every
+        # Windows install must still fail when ffprobe is missing.
+        preview = _workflow_text("web-preview.yml")
+        self.assertEqual(2, preview.count("- name: Install Windows FFmpeg"))
+        self.assertEqual(2, preview.count("Get-Command ffprobe"))
+        windows = _workflow_text("windows-serial-lanes.yml")
+        self.assertEqual(1, windows.count("uses: ./.github/actions/install-windows-ffmpeg"))
+        self.assertNotIn("choco install", windows)
 
     def test_matrix_check_names_a_missing_lane_and_an_unknown_lane(self):
         manifest_lanes = {"fast-xdist", "web-01-serial", "web-02-serial"}

@@ -29,25 +29,23 @@ opens Pandrator in your browser. Older workspace data can still be imported.
 For the retired Qt desktop interface, use an
 [older release](https://github.com/lukaszliniewicz/Pandrator/releases).
 
-[![Download for Windows (.exe)](https://img.shields.io/badge/Download_for_Windows-.exe-2563eb?style=for-the-badge)](https://github.com/lukaszliniewicz/Pandrator/releases/download/v.0.14.2/PandratorManager-0.9.31-windows-x86_64.exe)
-[![Download for Linux (.AppImage)](https://img.shields.io/badge/Download_for_Linux-.AppImage-168572?style=for-the-badge)](https://github.com/lukaszliniewicz/Pandrator/releases/download/v.0.14.2/PandratorManager-0.9.31-x86_64.AppImage)
+[![Download for Windows (.exe)](https://img.shields.io/badge/Download_for_Windows-.exe-2563eb?style=for-the-badge)](https://github.com/lukaszliniewicz/Pandrator/releases/download/v.0.14.3/PandratorManager-0.9.31-windows-x86_64.exe)
+[![Download for Linux (.AppImage)](https://img.shields.io/badge/Download_for_Linux-.AppImage-168572?style=for-the-badge)](https://github.com/lukaszliniewicz/Pandrator/releases/download/v.0.14.3/PandratorManager-0.9.31-x86_64.AppImage)
 
-Windows 10/11 and Linux desktop · x86-64 · Pandrator 0.14.2 / Manager 0.9.31
+Windows 10/11 and Linux desktop · x86-64 · Pandrator 0.14.3 / Manager 0.9.31
 
 [All downloads & release notes](https://github.com/lukaszliniewicz/Pandrator/releases/latest)
 · [Installation help](docs/getting-started/installation.md)
 · [User guides](docs/README.md)
 
-## New in 0.14.2
+## New in 0.14.3
 
-- **Find timing problems before export.** Subtitle and recording review flag overlapping cues, overlapping word times and backwards word times without changing text or timestamps.
-- **Check transcription files first.** A new **Local model files** panel checks the recognizer, speech detector, aligner and language detector separately. Administrators can reuse an existing VAD file.
-- **Keep captions intact.** Media-edit rendering preserves whole captions with incomplete word timing, refuses cuts that would split a caption, and checks subtitle text before publishing.
-- **Preview the edit you will export.** The 12-second mix preview follows the reviewed media-edit timeline, and exports require that exact render.
-- **Refresh narration length automatically.** Generation resegments untouched automatic plans when the effective target changes; edited plans keep their boundaries. Breeze and VoxCPM2 targets are shorter.
-- **More reliable automation and long jobs.** Translation branch creation is atomic and idempotent, job logs are bounded and redacted, and completed assemblies survive later progress failures.
+- **Reliable generation jobs.** Identity checks keep heartbeats alive and avoid unnecessary database queries on large projects; late cancellations remain authoritative.
+- **Consistent browser builds.** Generated web assets use LF line endings across Windows and Linux, with extra checks for unexpected CRLF or mixed endings.
+- **Safer Windows test runs.** Short private pytest temp roots avoid deep-path failures, with verified ownership, locking and cleanup.
+- **Workflow polish.** Correct ElevenLabs WebSocket timeout bounds and wait for language workflow settings before reporting readiness.
 
-See the [0.14.2 release notes](https://github.com/lukaszliniewicz/Pandrator/releases/tag/v.0.14.2) and [detailed changes](docs/release-changes-0.14.2.md).
+See the [0.14.3 release notes](https://github.com/lukaszliniewicz/Pandrator/releases/tag/v.0.14.3) and [detailed changes](docs/release-changes-0.14.3.md).
 
 ## Try your first workflow
 

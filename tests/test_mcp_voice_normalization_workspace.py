@@ -512,9 +512,10 @@ def test_queued_voice_normalization_jobs_keep_work_id_and_scope_fallback(
     assert "secret-sentinel" not in str(outcome.result)
 
 
-def test_raw_binary_voice_reference_query_and_sound_scope_forwarding():
+def test_raw_binary_voice_reference_query_and_scoped_sound_forwarding():
     application = RecordingSoundApplication(
-        {"artifact_id": "artifact-1", "sha256": "b" * 64, "size_bytes": 11}
+        {"artifact_id": "artifact-1", "sha256": "b" * 64, "size_bytes": 11},
+        {"id": "candidate-1", "status": "queued"},
     )
     application.import_audio_reference(
         target="voice_reference",
@@ -544,9 +545,9 @@ def test_raw_binary_voice_reference_query_and_sound_scope_forwarding():
         filename="sound.wav",
         body=b"raw-audio",
         idempotency_key="audio:sound:1",
-        workspace_id="workspace-1",
+        workspace_id=" workspace-1 ",
     )
-    assert application.binary_calls[1] == (
+    assert application.binary_calls[-1] == (
         "/api/v1/sounds/import",
         {
             "method": "PUT",
@@ -599,22 +600,52 @@ def test_direct_raw_audio_client_keeps_sound_route_unqualified():
     ]
 
 
-def test_sound_target_workspace_is_forwarded_as_query_after_approved_file_read(monkeypatch):
+def test_scoped_sound_target_forwards_workspace_before_candidate_projection(monkeypatch):
     import pandrator_mcp.tools.sound_audio_import as tool_module
 
-    application = RecordingSoundApplication({"id": "candidate-1", "status": "queued"})
-    reads = []
+    reads: list[tuple[str, str]] = []
 
-    def read_approved(*_args, **_kwargs):
-        assert application.binary_calls == []
-        reads.append("read")
-        return (b"raw-audio", "sample.wav")
+    def read_approved_audio(*_args: Any, **kwargs: Any) -> tuple[bytes, str]:
+        reads.append((kwargs["root_name"], kwargs["relative_path"]))
+        return b"raw-audio", "sound.wav"
 
-    monkeypatch.setattr(tool_module, "_read_approved_audio", read_approved)
-    import_audio_reference(_runtime(application), _audio_input("sound", "workspace-1"))
-    assert reads == ["read"]
-    assert application.binary_calls[0][0] == "/api/v1/sounds/import"
-    assert application.binary_calls[0][1]["parameters"] == {"workspace_id": "workspace-1"}
+    monkeypatch.setattr(tool_module, "_read_approved_audio", read_approved_audio)
+    application = RecordingSoundApplication(
+        {
+            "id": "candidate-1",
+            "status": "queued",
+            "artifact_id": "artifact-1",
+            "workspace_id": "private-scope",
+        }
+    )
+    outcome = import_audio_reference(
+        _runtime(application), _audio_input("sound", "workspace-1")
+    )
+    assert reads == [("approved-audio", "sample.wav")]
+    assert application.binary_calls == [
+        (
+            "/api/v1/sounds/import",
+            {
+                "method": "PUT",
+                "body": b"raw-audio",
+                "content_type": "application/octet-stream",
+                "extra_headers": {
+                    "X-Audio-Filename": "sound.wav",
+                    "Idempotency-Key": "audio:import:1",
+                },
+                "parameters": {"workspace_id": "workspace-1"},
+            },
+        )
+    ]
+    assert outcome.result == {
+        "candidate": {
+            "id": "candidate-1",
+            "status": "queued",
+            "artifact_id": "artifact-1",
+        }
+    }
+    assert "workspace-1" not in str(outcome.result)
+    assert "private-scope" not in str(outcome.result)
 
 
 def test_raw_voice_reference_result_uses_only_backend_scope(monkeypatch):

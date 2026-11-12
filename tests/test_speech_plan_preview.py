@@ -13,7 +13,7 @@ from pandrator.web.generation_controls import (
     get_generation_controls,
     save_generation_controls,
 )
-from pandrator.web.projects.identity import session_project
+from pandrator.web.projects.artifact_identity import resolve_artifact_ownership
 from pandrator.web.speech_plan_preview import preview_speech_segment
 from pandrator.web.speech_plan_workspace import freeze_generation_performance_snapshot
 from tests.test_performance_plans import adopt, create, edit
@@ -160,13 +160,14 @@ def _segment_read_scope_parity(
 
 @pytest.mark.parametrize(
     ("casting_enabled", "performance_enabled", "context_mode", "query_budget"),
-    # Full reads include effective assembly boundaries as well as annotations, and fixed
-    # workspace access reads (workspace, project, translation root and settings). Each
-    # budget is the count measured on 2026-11-09 plus 2 (34, 46 and 47). The count was
-    # identical per table at 3 and at 12 segments. With this 3-segment fixture, a read added
-    # per segment adds 3, which exceeds the 2 of headroom, so the budget itself fails on such
-    # growth.
-    [(False, False, "off", 36), (False, True, "both", 48), (True, False, "both", 49)],
+    # Full reads include effective assembly boundaries as well as annotations.
+    # Scoped reads also resolve persisted session/project authorization for the
+    # scoped section snapshot, which is fixed overhead. A directed-context sweep
+    # of the reader over 3, 6 and 12 segments stayed at a constant 86 SELECTs,
+    # so this budget still catches per-segment N+1 growth. Measured scoped
+    # counts after request-scoped read deduplication are 29/41/42; the budgets
+    # include only a small fixed-query margin, not a per-segment allowance.
+    [(False, False, "off", 32), (False, True, "both", 44), (True, False, "both", 45)],
     ids=["strict-single", "directed-context", "named-cast-context"],
 )
 def test_segment_reader_scoped_settings_preserve_rich_payload(
@@ -335,10 +336,11 @@ def test_strict_single_preview_ignores_inactive_block_binding_and_keeps_language
     sid = case["segment_ids"][0]
     text = "A block voice is inactive in strict single mode."
     with case["services"]["database"].session() as session:
+        workspace_id = resolve_artifact_ownership(
+            session, session_id=case["session_id"]
+        ).workspace_id
         voice = m.Voice(
-            workspace_id=session_project(session, case["session_id"]).workspace_id,
-            name="Unpublished voice",
-            metadata_json={},
+            workspace_id=workspace_id, name="Unpublished voice", metadata_json={}
         )
         session.add(voice)
         session.flush()

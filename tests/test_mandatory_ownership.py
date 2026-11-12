@@ -43,6 +43,7 @@ from pandrator.web.models import (
     WorkspaceSettingHistory,
 )
 from pandrator.web.projects.identity import session_project
+from tests.legacy_schema_support import insert_job, insert_upload_session
 from tests.web_test_support import get_at_revision, insert_at_revision, present_columns
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -211,14 +212,6 @@ def _populate_valid_graph(path: Path) -> dict[str, str]:
                 relative_path="migration-test/checkpoint.json",
                 metadata_json={"retained": True},
             )
-            job = Job(
-                id=ids["job"],
-                workspace_id=workspace.id,
-                project_id=project.id,
-                session_id=project_session.id,
-                kind="migration.test",
-                payload_json={"retained": True},
-            )
             folder = ProjectFolder(
                 id=ids["folder"],
                 workspace_id=workspace.id,
@@ -239,7 +232,15 @@ def _populate_valid_graph(path: Path) -> dict[str, str]:
             )
             session.add_all([artifact, folder, source_asset, provider])
             session.flush()
-            insert_at_revision(session, job)
+            job_id = insert_job(
+                session,
+                job_id=ids["job"],
+                kind="migration.test",
+                workspace_id=workspace.id,
+                project_id=project.id,
+                session_id=project_session.id,
+                payload_json={"retained": True},
+            )
 
             voice = Voice(
                 id=ids["voice"],
@@ -262,21 +263,20 @@ def _populate_valid_graph(path: Path) -> dict[str, str]:
             session.add_all([voice, sound_item, collection])
             session.flush()
 
-            insert_at_revision(
+            insert_upload_session(
                 session,
-                UploadSessionRecord(
-                    id=ids["upload"],
-                    workspace_id=workspace.id,
-                    project_id=project.id,
-                    session_id=project_session.id,
-                    filename="retained.wav",
-                    size_bytes=3,
-                    chunk_size=3,
-                    chunk_count=1,
-                    temporary_relative_path="uploads/retained.wav",
-                    expires_at=now + timedelta(hours=1),
-                ),
+                upload_id=ids["upload"],
+                workspace_id=workspace.id,
+                project_id=project.id,
+                session_id=project_session.id,
+                filename="retained.wav",
+                size_bytes=3,
+                chunk_size=3,
+                chunk_count=1,
+                temporary_relative_path="uploads/retained.wav",
+                expires_at=now + timedelta(hours=1),
             )
+
             session.add_all(
                 [
                     ProjectFolderMembership(
@@ -313,7 +313,7 @@ def _populate_valid_graph(path: Path) -> dict[str, str]:
                         id=ids["training"],
                         workspace_id=workspace.id,
                         voice_id=voice.id,
-                        job_id=job.id,
+                        job_id=job_id,
                         model_name="fixture-model",
                         settings_json={"retained": True},
                     ),
@@ -322,7 +322,7 @@ def _populate_valid_graph(path: Path) -> dict[str, str]:
                         workspace_id=workspace.id,
                         project_id=project.id,
                         session_id=project_session.id,
-                        job_id=job.id,
+                        job_id=job_id,
                         artifact_id=artifact.id,
                         provider_key="fixture-provider",
                         model_id="fixture-model",
@@ -340,7 +340,7 @@ def _populate_valid_graph(path: Path) -> dict[str, str]:
                         id=ids["sound_variant"],
                         workspace_id=workspace.id,
                         item_id=sound_item.id,
-                        job_id=job.id,
+                        job_id=job_id,
                         artifact_id=artifact.id,
                         state="ready",
                         provenance_json={"retained": True},

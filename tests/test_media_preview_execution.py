@@ -15,22 +15,16 @@ from pandrator.web.accounts.execution_actor import (
     current_execution_actor,
     execution_actor_scope,
 )
+from pandrator.web.accounts.models import WorkspaceMembership
 from pandrator.web.job_execution import current_job_lease
 from pandrator.web.jobs import Worker
 from pandrator.web.media_process import MediaProcessResult
-from pandrator.web.models import (
-    ApiToken,
-    Artifact,
-    ArtifactEdge,
-    Job,
-    WorkspaceMembership,
-    new_id,
-    utcnow,
-)
+from pandrator.web.models import ApiToken, Artifact, ArtifactEdge, Job, new_id, utcnow
+from pandrator.web.projects.models import ProjectMembership
 from pandrator.web.video_previews import PREVIEW_VERSION, VideoInfo
 from pandrator.web.waveform import WaveformPeaks
 from tests.test_job_access_routes import case as case
-from tests.test_job_access_routes import credential
+from tests.test_job_access_routes import credential, grant_workspace_content_access
 from tests.test_job_access_routes import no_network as no_network
 
 KINDS = ("audio.preview", "audio.waveform", "video.preview")
@@ -98,7 +92,7 @@ def fake_media(case, monkeypatch, after_media=None):
 
     def check():
         actor = current_execution_actor.get()
-        assert type(actor) is UserActor and actor.user_id == case.users["member"]
+        assert type(actor) is UserActor and actor.user_id == case.users["editor"]
         assert current_job_lease.get() is not None
         calls.append(actor.user_id)
         if after_media is not None:
@@ -147,7 +141,8 @@ def test_current_user_worker_publishes_distinct_output_and_keeps_natural_expiry(
     kind,
     expired_transport,
 ):
-    caller = credential(case, "member")
+    grant_workspace_content_access(case, "editor")
+    caller = credential(case, "editor")
     source, previous, previous_path = inputs(case, kind)
     identifier = enqueue(case, caller, source, kind)
     if expired_transport:
@@ -155,7 +150,7 @@ def test_current_user_worker_publishes_distinct_output_and_keeps_natural_expiry(
             session.get(ApiToken, caller.token.id).expires_at = utcnow() - timedelta(seconds=1)
     calls = fake_media(case, monkeypatch)
     assert worker(case).run_once()
-    assert calls == [case.users["member"]]
+    assert calls == [case.users["editor"]]
     assert_previous(case, previous, previous_path)
     with case.database.snapshot_session() as session:
         job = session.get(Job, identifier)
@@ -185,14 +180,14 @@ def test_current_user_worker_publishes_distinct_output_and_keeps_natural_expiry(
 
 @pytest.mark.parametrize("kind", KINDS)
 def test_revoked_membership_blocks_worker_before_media_effects(case, monkeypatch, kind):
-    caller = credential(case, "member")
+    caller = credential(case, "editor")
     source, previous, previous_path = inputs(case, kind)
     identifier = enqueue(case, caller, source, kind)
     with case.database.immediate_session() as session:
         session.execute(
-            delete(WorkspaceMembership).where(
-                WorkspaceMembership.workspace_id == case.team,
-                WorkspaceMembership.user_id == case.users["member"],
+            delete(ProjectMembership).where(
+                ProjectMembership.project_id == case.a.project_id,
+                ProjectMembership.user_id == case.users["editor"],
             )
         )
     before = media_files(case)
@@ -213,7 +208,8 @@ def test_postmedia_authority_loss_prevents_publication_and_preserves_old_files(
     kind,
     loss,
 ):
-    caller = credential(case, "member")
+    grant_workspace_content_access(case, "editor")
+    caller = credential(case, "editor")
     source, previous, previous_path = inputs(case, kind)
     identifier = enqueue(case, caller, source, kind)
     with case.database.snapshot_session() as session:
@@ -224,9 +220,15 @@ def test_postmedia_authority_loss_prevents_publication_and_preserves_old_files(
         with case.database.immediate_session(busy_timeout_ms=0) as session:
             if loss == "membership":
                 session.execute(
+                    delete(ProjectMembership).where(
+                        ProjectMembership.project_id == case.a.project_id,
+                        ProjectMembership.user_id == case.users["editor"],
+                    )
+                )
+                session.execute(
                     delete(WorkspaceMembership).where(
                         WorkspaceMembership.workspace_id == case.team,
-                        WorkspaceMembership.user_id == case.users["member"],
+                        WorkspaceMembership.user_id == case.users["editor"],
                     )
                 )
             else:
@@ -242,7 +244,7 @@ def test_postmedia_authority_loss_prevents_publication_and_preserves_old_files(
 
     calls = fake_media(case, monkeypatch, revoke)
     assert worker(case).run_once()
-    assert calls == [case.users["member"]]
+    assert calls == [case.users["editor"]]
     assert_previous(case, previous, previous_path)
     assert media_files(case) == before
     with case.database.snapshot_session() as session:

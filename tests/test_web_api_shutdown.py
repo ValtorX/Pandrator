@@ -242,7 +242,12 @@ raise SystemExit(code)
             receipt = reservation.response_json
         self._start_api()
         status, body, replayed = self._post()
-        self.assertEqual((status, body, replayed), (202, public_project_settings(receipt), "true"))
+        # Stored receipts keep the full reproduction snapshot; the public DTO
+        # omits connection bindings from every generation response, replays
+        # included.
+        self.assertEqual(
+            (status, body, replayed), (202, public_project_settings(receipt), "true")
+        )
         with self.database.snapshot_session() as db:
             self.assertEqual(len(list(db.scalars(select(GenerationRun)))), 1)
             self.assertEqual(len(list(db.scalars(select(Job)))), 1)

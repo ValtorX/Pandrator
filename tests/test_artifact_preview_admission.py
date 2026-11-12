@@ -20,7 +20,7 @@ from pandrator.web.models import Artifact, ArtifactEdge, Job, new_id
 from pandrator.web.projects.models import ProjectMembership
 from pandrator.web.video_previews import PREVIEW_ROLE, PREVIEW_VERSION
 from tests.test_job_access_routes import case as case
-from tests.test_job_access_routes import credential, error
+from tests.test_job_access_routes import credential, error, grant_workspace_content_access
 from tests.test_job_access_routes import no_network as no_network
 
 PREVIEWS = (
@@ -270,7 +270,7 @@ def test_unknown_hidden_and_deleted_sources_deny_before_preview_effects(
 @pytest.mark.parametrize("preview", PREVIEWS, ids=lambda row: row["name"])
 @pytest.mark.parametrize(
     ("actor_name", "scopes"),
-    [("viewer", None), ("editor", None), ("member", frozenset({"app.read"}))],
+    [("viewer", None), ("editor", frozenset({"app.read"}))],
 )
 def test_cache_miss_requires_current_run_before_inline_or_queue(
     case, monkeypatch, media_mocks, preview, actor_name, scopes
@@ -291,11 +291,12 @@ def test_cache_miss_requires_current_run_before_inline_or_queue(
 
 
 @pytest.mark.parametrize("preview", PREVIEWS, ids=lambda row: row["name"])
-def test_member_cache_miss_enqueues_with_actual_roots_payload_and_actor(case, media_mocks, preview):
-    member = credential(case, "member")
+def test_editor_cache_miss_enqueues_with_actual_roots_payload_and_actor(case, media_mocks, preview):
+    grant_workspace_content_access(case, "editor")
+    editor = credential(case, "editor")
     source, _ = _source(case, preview)
 
-    response = member.client.post(_url(preview, source.id), headers=member.headers)
+    response = editor.client.post(_url(preview, source.id), headers=editor.headers)
 
     assert response.status_code == 202, response.get_json()
     identifier = response.get_json()["job_id"]
@@ -307,7 +308,7 @@ def test_member_cache_miss_enqueues_with_actual_roots_payload_and_actor(case, me
         assert job.session_id == (None if preview["name"] == "audio" else source.session_id)
         assert job.payload_json == _payload(preview, source)
         assert job.resource_keys_json == _resource_keys(preview, source)
-        assert actor.user_id == case.users["member"]
+        assert actor.user_id == case.users["editor"]
     assert response.get_json()["status"] == "queued"
     media_mocks.inline.assert_not_called()
 
@@ -513,7 +514,8 @@ def test_team_rootless_artifact_is_hidden_from_members_and_instance_admins(
 
 
 def test_bounded_waveform_inline_runs_after_writer_closes_with_actual_user(case, monkeypatch):
-    member = credential(case, "member")
+    grant_workspace_content_access(case, "editor")
+    editor = credential(case, "editor")
     source, _ = _source(case, PREVIEWS[2])
     actors = []
     handlers = case.services.workflow_handlers
@@ -521,7 +523,7 @@ def test_bounded_waveform_inline_runs_after_writer_closes_with_actual_user(case,
     def generate(payload, _progress, _cancel_event):
         actor = current_execution_actor.get()
         assert isinstance(actor, UserActor)
-        assert actor.user_id == case.users["member"]
+        assert actor.user_id == case.users["editor"]
         actors.append(actor)
         path = case.services.paths.artifacts / f"{new_id()}.json"
         path.write_text(
@@ -553,8 +555,8 @@ def test_bounded_waveform_inline_runs_after_writer_closes_with_actual_user(case,
 
     monkeypatch.setattr(handlers, "generate_waveform", generate)
 
-    response = member.client.post(
-        _url(PREVIEWS[2], source.id, bounded=True), headers=member.headers
+    response = editor.client.post(
+        _url(PREVIEWS[2], source.id, bounded=True), headers=editor.headers
     )
 
     assert response.status_code == 200, response.get_json()
@@ -567,7 +569,8 @@ def test_bounded_waveform_inline_runs_after_writer_closes_with_actual_user(case,
 def test_waveform_inline_authorization_error_is_not_converted_to_queued_work(
     case, monkeypatch, denial
 ):
-    member = credential(case, "member")
+    grant_workspace_content_access(case, "editor")
+    editor = credential(case, "editor")
     source, _ = _source(case, PREVIEWS[2])
     denied = (
         AccessDenied()
@@ -577,8 +580,8 @@ def test_waveform_inline_authorization_error_is_not_converted_to_queued_work(
     inline = Mock(side_effect=denied)
     monkeypatch.setattr(case.services.workflow_handlers, "generate_waveform", inline)
 
-    response = member.client.post(
-        _url(PREVIEWS[2], source.id, bounded=True), headers=member.headers
+    response = editor.client.post(
+        _url(PREVIEWS[2], source.id, bounded=True), headers=editor.headers
     )
 
     assert response.status_code == 403, response.get_json()
@@ -586,10 +589,12 @@ def test_waveform_inline_authorization_error_is_not_converted_to_queued_work(
     assert _job_count(case) == 0
 
 
-@pytest.mark.parametrize("actor_name,can_prepare", [("viewer", False), ("member", True)])
+@pytest.mark.parametrize("actor_name,can_prepare", [("viewer", False), ("editor", True)])
 def test_missing_waveform_cache_falls_through_without_sending_missing_file(
     case, monkeypatch, media_mocks, actor_name, can_prepare
 ):
+    if actor_name == "editor":
+        grant_workspace_content_access(case, "editor")
     actor = credential(case, actor_name)
     source, _ = _source(case, PREVIEWS[2])
     missing_cache, cache_path = _cached_child(case, PREVIEWS[2], source)

@@ -1,4 +1,5 @@
 import inspect
+import json
 import re
 import subprocess
 import sys
@@ -117,9 +118,9 @@ class BackendArchitectureTests(unittest.TestCase):
 
     def test_route_contract_is_partitioned_without_losing_rules(self):
         rules = list(self.app.url_map.iter_rules())
-        self.assertEqual(413, len(rules))
+        self.assertEqual(414, len(rules))
         self.assertEqual(
-            406,
+            407,
             sum(rule.rule.startswith("/api/") for rule in rules),
         )
         self.assertTrue({
@@ -186,6 +187,46 @@ class BackendArchitectureTests(unittest.TestCase):
                     (normalized_path, method.lower()),
                     runtime_operations,
                 )
+
+    def test_timing_repair_operation_matches_the_runtime_mutation_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        document = json.loads((root / "openapi.json").read_text(encoding="utf-8"))
+        operation = document["paths"][
+            "/api/v1/generation-runs/{runId}/repair-timing"
+        ]["post"]
+        self.assertEqual("repairGenerationTiming", operation["operationId"])
+        self.assertEqual(["app.read", "app.run"], operation["x-required-scopes"])
+        self.assertIn(
+            {"nativeOAuth": ["app.read", "app.run"]}, operation["security"]
+        )
+        parameters = {item["name"]: item for item in operation["parameters"]}
+        self.assertEqual(
+            ("path", True),
+            (parameters["runId"]["in"], parameters["runId"]["required"]),
+        )
+        self.assertFalse(parameters["Idempotency-Key"]["required"])
+        body = operation["requestBody"]
+        self.assertFalse(body["required"])
+        schema = body["content"]["application/json"]["schema"]
+        self.assertFalse(schema["additionalProperties"])
+        self.assertEqual(0, schema["maxProperties"])
+        for status in ("200", "202"):
+            reference = operation["responses"][status]["content"][
+                "application/json"
+            ]["schema"]["$ref"]
+            self.assertEqual(
+                "#/components/schemas/GenerationTimingRepairReceipt", reference
+            )
+        receipt = document["components"]["schemas"]["GenerationTimingRepairReceipt"]
+        self.assertEqual(
+            ["job_id", "generation_run_id", "session_id", "status", "reused_job"],
+            receipt["required"],
+        )
+        client = (root / "web/src/lib/api.generated.ts").read_text(encoding="utf-8")
+        self.assertIn(
+            '"/api/v1/generation-runs/{runId}/repair-timing": {', client
+        )
+        self.assertIn("repairGenerationTiming", client)
 
     def test_generation_start_facade_forwards_arguments_and_recaptures_all_ports(self):
         from dataclasses import FrozenInstanceError, fields
@@ -275,12 +316,9 @@ class BackendArchitectureTests(unittest.TestCase):
             "_logger",
             "_repair_early_generation_blocks",
             "_regroup_generation_blocks",
+            "secret_redactor",
         )
-        # secret_redactor comes from the job queue rather than a patched port.
-        self.assertEqual(
-            (*names, "secret_redactor"),
-            tuple(field.name for field in fields(GenerationExecutionContext)),
-        )
+        self.assertEqual(names, tuple(field.name for field in fields(GenerationExecutionContext)))
         global_names = {
             "_hydrate_tts_settings": "hydrate_tts_settings",
             "_apply_segment_tts_overrides": "_apply_segment_tts_overrides",
@@ -289,6 +327,8 @@ class BackendArchitectureTests(unittest.TestCase):
             "_voiceover_second_pass": "_voiceover_second_pass",
             "_logger": "logger",
         }
+        # The facade reads the redactor from the job queue rather than the handler.
+        job_names = {"secret_redactor"}
         progress, cancel = lambda *_args: None, threading.Event()
         expected = {"result": []}
         contexts = []
@@ -296,11 +336,18 @@ class BackendArchitectureTests(unittest.TestCase):
         arguments = (payload, progress, cancel)
         for _invocation in range(2):
             ports = {name: object() for name in names}
-            instance_values = {name: value for name, value in ports.items() if name not in global_names}
+            instance_values = {
+                name: value
+                for name, value in ports.items()
+                if name not in global_names and name not in job_names
+            }
             helper_values = {global_names[name]: ports[name] for name in global_names}
+            queue_values = {name: ports[name] for name in job_names}
             with patch.multiple(handlers, **instance_values), patch.multiple(
                 workflow_handlers, **helper_values
-            ), patch.object(workflow_handlers, "_execution_run_generation") as owner:
+            ), patch.multiple(handlers.jobs, **queue_values), patch.object(
+                workflow_handlers, "_execution_run_generation"
+            ) as owner:
                 owner.return_value = expected
                 self.assertIs(expected, handlers._run_generation(*arguments))
                 self.assertEqual({}, owner.call_args.kwargs)
@@ -312,7 +359,6 @@ class BackendArchitectureTests(unittest.TestCase):
                     self.assertIs(original, sent)
                 for name, value in ports.items():
                     self.assertIs(value, getattr(context, name))
-                self.assertIs(handlers.jobs.secret_redactor, context.secret_redactor)
                 self.assertFalse(hasattr(context, "__dict__"))
                 with self.assertRaises(FrozenInstanceError):
                     context.database = object()
@@ -427,7 +473,7 @@ class BackendArchitectureTests(unittest.TestCase):
     def test_workflow_job_registry_has_domain_ownership_and_late_binding(self):
         handlers = self.app.extensions["pandrator"]["workflow_handlers"]
         registry = handlers.handler_registry
-        self.assertEqual(48, len(registry))
+        self.assertEqual(49, len(registry))
         self.assertIn("generation.admit", registry)
         self.assertIn("voice.google_design", registry)
         self.assertEqual(

@@ -11,8 +11,9 @@ from typing import Any
 import pytest
 from alembic import command
 from alembic.config import Config
+from sqlalchemy.engine import URL
 
-from pandrator.web.database import SCHEMA_HEAD, sqlite_url
+from pandrator.web.database import SCHEMA_HEAD
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS = ROOT / "pandrator" / "web" / "migrations"
@@ -31,7 +32,10 @@ def _quote(identifier: str) -> str:
 def _config(path: Path) -> Config:
     config = Config()
     config.set_main_option("script_location", str(MIGRATIONS))
-    config.set_main_option("sqlalchemy.url", sqlite_url(path))
+    url = str(URL.create("sqlite", database=str(path)))
+    # Config.set_main_option routes through ConfigParser, which treats "%" as
+    # interpolation syntax. Windows absolute paths are percent-encoded here.
+    config.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
     return config
 
 

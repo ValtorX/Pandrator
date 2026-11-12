@@ -49,6 +49,17 @@ def test_bounded_actual_hash_and_identity(tmp_path: Path) -> None:
     with pytest.raises(SpeechInputError, match="hash"):
         read_verified_file(paths, "uploads/source.wav", limit=len(data), expected_hash="0" * 64)
     path.write_bytes(wav_bytes(2))
+    # A content digest catches same-size rewrites even if Windows has not yet
+    # updated filesystem timestamps or inode identity.
+    with pytest.raises(SpeechInputError, match="hash"):
+        read_verified_file(
+            paths, "uploads/source.wav", limit=len(data),
+            expected_hash=hashlib.sha256(data).hexdigest(),
+        )
+    # On Windows a same-size rewrite can retain the previous mtime within a
+    # filesystem timestamp tick; force a distinct identity for this test.
+    os.utime(path, ns=(identity.mtime_ns, identity.mtime_ns + 2_000_000_000))
+    assert file_identity(paths, "uploads/source.wav") != identity
     with pytest.raises(SpeechInputError, match="changed"):
         read_verified_file(paths, "uploads/source.wav", limit=len(data), expected_identity=identity)
 
@@ -144,6 +155,10 @@ def test_invalid_or_truncated_wav(data: bytes) -> None:
         validate_wav(data)
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="Windows refuses to replace a file while it is open for reading",
+)
 def test_path_replacement_during_open_is_detected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

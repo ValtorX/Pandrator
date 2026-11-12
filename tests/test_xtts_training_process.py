@@ -15,7 +15,6 @@ import psutil
 import pytest
 
 from pandrator.logic import xtts_trainer_handler as trainer
-from pandrator.logic.model_acquisition import host_model_acquisition_scope
 
 
 def running(pid: int) -> bool:
@@ -70,13 +69,16 @@ def test_silent_training_cancellation_reaps_parent_and_child_and_preserves_unrel
         return process
 
     def train():
+        # Acquisition authority is a context variable; the training thread
+        # starts with a fresh context, so bind the explicit host fixture here
+        # instead of relying on the caller thread's scope.
+        from pandrator.logic.model_acquisition import host_model_acquisition_scope
+
         try:
-            # This thread has no model acquisition authority of its own.
             with host_model_acquisition_scope():
                 results.append(
                     trainer.start_training(
-                        {"model_name": "narrator", "source_audio_path": str(audio)},
-                        stop_event=cancel,
+                        {"model_name": "narrator", "source_audio_path": str(audio)}, stop_event=cancel
                     )
                 )
         except BaseException as error:

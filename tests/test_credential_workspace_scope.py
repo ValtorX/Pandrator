@@ -404,7 +404,8 @@ def test_initial_workspace_retains_explicit_host_backends(
     case.paths.secrets_file.chmod(0o600)
     references = {
         "environment": "env:PANDRATOR_SYNTHETIC_KEY",
-        "file-path": f"file-path:{Path(Path.cwd().anchor, 'synthetic', 'fixture')}",
+        # Portable absolute path: POSIX roots and Windows drive paths differ.
+        "file-path": f"file-path:{(case.paths.root / 'synthetic-fixture').as_posix()}",
         "file": "file:fixture",
         "keyring": "keyring:synthetic/fixture",
     }

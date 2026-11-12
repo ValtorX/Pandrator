@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import sqlite3
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,17 +11,18 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 
 from pandrator.logic import audio_cpp_sfx
 from pandrator.runtime import DataPaths
-from pandrator.web import google_voice_design_routes, voice_queries
+from pandrator.web import google_voice_design_routes
 from pandrator.web import jobs as jobs_module
-from pandrator.web.accounts.execution_actor import HostActor, execution_actor_scope
 from pandrator.web.accounts.models import User, Workspace, WorkspaceMembership
 from pandrator.web.api import create_app
 from pandrator.web.auth import BootstrapTokenStore
+from pandrator.web.database import sqlite_url
 from pandrator.web.jobs import JobQueue
 from pandrator.web.models import (
     Artifact,
@@ -35,7 +37,7 @@ from pandrator.web.projects.models import Project
 from pandrator.web.schemas import TrainingCreateRequest
 from pandrator.web.sound_service import SoundService
 from pandrator.web.training_lifecycle import TrainingService
-from tests.web_test_support import prepare_web_test_data_root, suspended_triggers
+from tests.web_test_support import prepare_web_test_data_root
 
 
 def _wav_bytes() -> bytes:
@@ -93,43 +95,22 @@ def library_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         session.flush()
         workspace_id, other_workspace_id = workspace.id, other_workspace.id
 
-    def selected_team_workspace(session, *, workspace_id: str | None = None):
-        return session.get(Workspace, workspace_id or selected_id)
-
-    selected_id = workspace_id
-    monkeypatch.setattr(voice_queries, "voice_creation_workspace", selected_team_workspace)
-    monkeypatch.setattr(jobs_module, "ensure_app_job_allowed", lambda _path: None)
-
     client = app.test_client()
     bootstrap_response = client.post("/api/v1/auth/bootstrap", json={"token": token})
     assert bootstrap_response.status_code == 200
-    with database.session() as session:
-        user_ids = list(session.scalars(select(User.id)))
-    assert len(user_ids) == 1, user_ids
     with database.immediate_session() as session:
-        for team_id in (workspace_id, other_workspace_id):
+        owner = session.scalar(select(User).where(User.legacy_subject == "owner"))
+        assert owner is not None
+        # Typed workspace admission requires current membership, so the selected
+        # team is reached through the real owner membership and request scope.
+        for identifier in (workspace_id, other_workspace_id):
             session.add(
-                WorkspaceMembership(workspace_id=team_id, user_id=user_ids[0], role="owner")
-            )
-            # Team workspaces see only providers they configured themselves.
-            session.add(
-                WorkspaceSetting(
-                    workspace_id=team_id,
-                    key="services.tts",
-                    value_json={
-                        "provider_configs": [
-                            {
-                                "id": "kobold_qwen",
-                                "adapter": "kobold_qwen",
-                                "connection_mode": "external",
-                                "api_base": "http://kobold.invalid:5001",
-                                "supports_voice_cloning": True,
-                            }
-                        ]
-                    },
-                    revision=1,
+                WorkspaceMembership(
+                    workspace_id=identifier, user_id=owner.id, role="owner"
                 )
             )
+    monkeypatch.setattr(jobs_module, "ensure_app_job_allowed", lambda _path: None)
+
     case = LibraryCase(
         app=app,
         client=client,
@@ -203,6 +184,8 @@ def _assert_job_response(
     assert response.status_code == 202, response.get_json()
     body = response.get_json()
     assert body["kind"] == kind
+    # Every pinning voice admission echoes its proved workspace directly in
+    # the public job response, not only in the persisted job row.
     assert body["workspace_id"] == case.workspace_id
     with case.database.session() as session:
         job = session.get(Job, body["id"])
@@ -214,19 +197,18 @@ def _assert_job_response(
         return dict(job.payload_json)
 
 
-def test_training_admission_uses_training_run_workspace(library_case):
+def test_training_admission_uses_training_run_workspace(library_case, host_execution_actor):
     case = library_case
     source = _register_audio(case, role="training_source")
     training = TrainingService(case.database, case.paths, JobQueue(case.database))
-    with execution_actor_scope(HostActor("pandrator-cli")):
-        run, job = training.start(
-            TrainingCreateRequest(
-                model_name="job-library-fixture",
-                source_artifact_id=source.id,
-                settings={"epochs": 1},
-            ),
-            workspace_id=case.workspace_id,
-        )
+    run, job = training.start(
+        TrainingCreateRequest(
+            model_name="job-library-fixture",
+            source_artifact_id=source.id,
+            settings={"epochs": 1},
+        ),
+        workspace_id=case.workspace_id,
+    )
 
     assert run.workspace_id == case.workspace_id
     with case.database.session() as session:
@@ -256,7 +238,8 @@ def test_google_design_job_uses_created_voice_workspace(library_case, monkeypatc
     )
 
     response = library_case.client.post(
-        f"/api/v1/voices/design/google?workspace_id={library_case.workspace_id}",
+        "/api/v1/voices/design/google",
+        query_string={"workspace_id": library_case.workspace_id},
         json={
             "service_id": "gemini",
             "model": "gemini-3.8-flash-tts",
@@ -285,8 +268,18 @@ def test_google_design_job_uses_created_voice_workspace(library_case, monkeypatc
         assert body["payload_json"] == job.payload_json
 
 
-# "unscoped" asserts that NOT NULL (0075) refuses a NULL workspace even with the update triggers
-# suspended, so the sound cache can never see that state at head.
+def _legacy_job_roots(database) -> None:
+    """Reach the pre-0075 root shape, then keep the current ORM column."""
+    config = Config()
+    config.set_main_option(
+        "script_location", str(Path(__file__).parents[1] / "pandrator/web/migrations")
+    )
+    config.set_main_option("sqlalchemy.url", sqlite_url(database.path))
+    command.downgrade(config, "0074_actor_attribution")
+    with sqlite3.connect(database.path) as connection:
+        connection.execute("ALTER TABLE jobs ADD COLUMN external_effect_json JSON")
+
+
 @pytest.mark.parametrize("bad_scope", ["foreign", "unscoped", "project"])
 @pytest.mark.parametrize("candidate_state", ["queued", "ready"])
 def test_sound_cache_skips_job_with_wrong_workspace(
@@ -354,41 +347,22 @@ def test_sound_cache_skips_job_with_wrong_workspace(
     assert matching_cache["candidate_id"] == original["candidate_id"]
     assert matching_cache["job_id"] == original["job_id"]
 
-    if bad_scope == "unscoped":
-        with pytest.raises(IntegrityError, match="NOT NULL constraint failed: jobs.workspace_id"):
-            with case.database.immediate_session() as session:
-                old_job = session.get(Job, original["job_id"])
-                assert old_job is not None
-                with suspended_triggers(
-                    session,
-                    "pandrator_execution_scope_jobs_update",
-                    "pandrator_library_scope_jobs_update",
-                ):
-                    old_job.workspace_id = None
-                    session.flush()
-        return
-
+    # Root immutability rejects these writes at head; the cache must still not
+    # reuse a retained legacy job whose stored roots disagree with the request.
+    _legacy_job_roots(case.database)
     with case.database.immediate_session() as session:
         old_job = session.get(Job, original["job_id"])
         assert old_job is not None
-        # Product triggers now refuse these writes; seed the historical bad scope suspended.
-        with suspended_triggers(
-            session,
-            "pandrator_execution_scope_jobs_update",
-            "pandrator_library_scope_jobs_update",
-            "pandrator_project_graph_projects_update",
-        ):
-            if bad_scope == "project":
-                project = Project(
-                    workspace_id=case.workspace_id,
-                    name="A project-scoped sound job",
-                )
-                session.add(project)
-                session.flush()
-                old_job.project_id = project.id
-            else:
-                old_job.workspace_id = case.other_workspace_id
+        if bad_scope == "project":
+            project = Project(
+                workspace_id=case.workspace_id,
+                name="A project-scoped sound job",
+            )
+            session.add(project)
             session.flush()
+            old_job.project_id = project.id
+        else:
+            old_job.workspace_id = case.other_workspace_id if bad_scope == "foreign" else None
 
     with case.database.immediate_session() as session:
         replacement = sounds.generate_in_session(
@@ -413,6 +387,20 @@ def test_sound_cache_skips_job_with_wrong_workspace(
 
 def test_voice_library_admissions_keep_team_owner_and_public_job_shape(library_case):
     case = library_case
+    with case.database.immediate_session() as session:
+        # Provider publication reads the selected workspace's own service list.
+        session.add(
+            WorkspaceSetting(
+                workspace_id=case.workspace_id,
+                key="services.tts",
+                value_json={
+                    "provider_configs": [
+                        {"id": "kobold_qwen", "enabled": True, "connection_mode": "external"}
+                    ]
+                },
+                revision=1,
+            )
+        )
     voice_id, revision = _create_voice(
         case,
         metadata={
@@ -428,6 +416,7 @@ def test_voice_library_admissions_keep_team_owner_and_public_job_shape(library_c
     )
     sample_id = _create_sample(case, voice_id)
     headers = {"X-CSRF-Token": case.csrf}
+    scope = {"workspace_id": case.workspace_id}
 
     preview_text = "A reviewed preview transcript."
     preview = _register_audio(
@@ -443,6 +432,7 @@ def test_voice_library_admissions_keep_team_owner_and_public_job_shape(library_c
     )
     preview_response = case.client.post(
         f"/api/v1/voices/{voice_id}/samples/from-preview",
+        query_string=scope,
         json={
             "artifact_id": preview.id,
             "transcript": preview_text,
@@ -457,6 +447,7 @@ def test_voice_library_admissions_keep_team_owner_and_public_job_shape(library_c
     imported = _register_audio(case, role="upload")
     import_response = case.client.post(
         f"/api/v1/voices/{voice_id}/samples/from-artifact",
+        query_string=scope,
         json={
             "artifact_id": imported.id,
             "transcript": "An imported reference.",
@@ -471,6 +462,7 @@ def test_voice_library_admissions_keep_team_owner_and_public_job_shape(library_c
 
     upload_response = case.client.post(
         f"/api/v1/voices/{voice_id}/samples",
+        query_string=scope,
         data={
             "file": (io.BytesIO(_wav_bytes()), "capture.wav"),
             "expected_revision": str(revision),
@@ -483,6 +475,7 @@ def test_voice_library_admissions_keep_team_owner_and_public_job_shape(library_c
 
     publish_response = case.client.post(
         f"/api/v1/voices/{voice_id}/providers/kobold_qwen",
+        query_string=scope,
         headers={**headers, "If-Match": f'"{revision}"'},
     )
     publish_payload = _assert_job_response(case, publish_response, kind="voice.publish")
@@ -491,6 +484,7 @@ def test_voice_library_admissions_keep_team_owner_and_public_job_shape(library_c
 
     unpublish_response = case.client.delete(
         f"/api/v1/voices/{voice_id}/providers/kobold_qwen",
+        query_string=scope,
         headers={**headers, "If-Match": f'"{revision}"'},
     )
     unpublish_payload = _assert_job_response(case, unpublish_response, kind="voice.unpublish")
@@ -498,6 +492,7 @@ def test_voice_library_admissions_keep_team_owner_and_public_job_shape(library_c
 
     transcribe_response = case.client.post(
         f"/api/v1/voices/{voice_id}/samples/{sample_id}/transcribe",
+        query_string=scope,
         json={"stt_language": "en"},
         headers=headers,
     )

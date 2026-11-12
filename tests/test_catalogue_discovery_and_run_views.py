@@ -43,15 +43,19 @@ def app_case(tmp_path, monkeypatch):
     services["database"].dispose()
 
 
-def configure_old_native(services):
+def configure_old_native(services, model="old_model", *, voices=()):
+    config = {
+        "id": "audio_cpp", "adapter": "audio_cpp", "connection_mode": "external",
+        "api_base": "http://native.invalid:8060", "models": [model],
+        "model_catalog": [{"id": model}], "default_model": model,
+    }
+    if voices:
+        config["voices"] = list(voices)
+        config["voice_catalogues"] = {model: list(voices)}
     with services["database"].session() as session:
         workspace_id = initial_personal_workspace(session).id
         row = session.get(WorkspaceSetting, (workspace_id, "services.tts"))
-        value = {"provider_configs": [{
-            "id": "audio_cpp", "adapter": "audio_cpp", "connection_mode": "external",
-            "api_base": "http://native.invalid:8060", "models": ["old_model"],
-            "model_catalog": [{"id": "old_model"}], "default_model": "old_model",
-        }]}
+        value = {"provider_configs": [config]}
         if row is None:
             session.add(WorkspaceSetting(
                 workspace_id=workspace_id,
@@ -310,26 +314,25 @@ def test_managed_absent_model_requires_complete_discovery(provenance, available,
 
 def test_scoped_mcp_configuration_reaches_backend_without_unrelated_discovery(app_case, monkeypatch):
     from pandrator_mcp.clients.application_voices import ApplicationVoiceMethods
-    from pandrator_mcp.schemas.e2e import ConfigureTtsInput, TtsCatalogRefreshInput
-    from pandrator_mcp.tools.e2e import configure_tts, refresh_tts_catalog
+    from pandrator_mcp.schemas.e2e import ConfigureTtsInput
+    from pandrator_mcp.tools.e2e import configure_tts
 
     client, headers, services = app_case
-    configure_old_native(services)
+    configure_old_native(services, model=BREEZE, voices=("native",))
     catalogue = services["tts_catalogue"]
+    requests = []
     created = client.post(
-        "/api/v1/sessions", json={"name": "Scoped", "workflow_kind": "audiobook"}, headers=headers
+        "/api/v1/sessions",
+        json={"name": "Scoped configuration", "workflow_kind": "audiobook"},
+        headers=headers,
     )
     assert created.status_code == 201, created.get_json()
     session_id = created.get_json()["id"]
-    requests = []
 
     class Application(ApplicationVoiceMethods):
-        def _request_json(self, path, *, method="GET", parameters=None, **kwargs):
-            requests.append((method, parameters))
-            if method == "POST":
-                response = client.post(path, query_string=parameters, headers=headers)
-            else:
-                response = client.get(path, query_string=parameters)
+        def _request_json(self, path, *, parameters=None, **kwargs):
+            requests.append(parameters)
+            response = client.get(path, query_string=parameters)
             assert response.status_code == 200, response.get_json()
             return response.get_json()
 
@@ -359,19 +362,12 @@ def test_scoped_mcp_configuration_reaches_backend_without_unrelated_discovery(ap
     monkeypatch.setattr(catalogue.providers, "enrich_catalog", discover)
     application = Application()
     runtime = SimpleNamespace(require_application=lambda: application)
-    # Catalogue reads are passive: discovery of the new model runs only through the
-    # explicit, scoped refresh, which the configuration then reads back.
-    refresh_tts_catalog(runtime, TtsCatalogRefreshInput(service_id="AUDIO-CPP"))
-    assert health_probe.call_count == discover.call_count == 1
     result = configure_tts(runtime, ConfigureTtsInput(
-        session_id=session_id, service_id="AUDIO-CPP", model=BREEZE, voice="native",
+        session_id=session_id, service_id="AUDIO-CPP", model=BREEZE,
         expected_revision=4, idempotency_key="scoped-configuration",
     ))
-    assert requests == [
-        ("POST", {"service_id": "AUDIO-CPP", "view": "summary"}),
-        ("GET", {"session_id": session_id, "model": BREEZE}),
-    ]
-    assert health_probe.call_count == discover.call_count == 1
+    assert requests == [{"session_id": session_id, "model": BREEZE}]
+    assert health_probe.call_count == discover.call_count == 0
     assert result.result["selection"]["model"] == BREEZE
     saved = application.update_session_settings.call_args.kwargs
     assert saved["expected_revision"] == 4

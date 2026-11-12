@@ -14,7 +14,7 @@ from pandrator.web.auth import BootstrapTokenStore
 from pandrator.web.models import Artifact, Job, new_id
 from pandrator.web.video_previews import PREVIEW_ROLE, PREVIEW_VERSION
 from tests.test_job_access_routes import case as case
-from tests.test_job_access_routes import credential, error
+from tests.test_job_access_routes import credential, error, grant_workspace_content_access
 from tests.test_job_access_routes import no_network as no_network
 from tests.web_test_support import prepare_web_test_data_root
 
@@ -24,10 +24,9 @@ PREVIEWS = (
     {"name": "waveform", "path": "waveform", "kind": "audio", "suffix": ".wav"},
 )
 READERS = (
-    ("member", None, True),
-    ("editor", None, False),
+    ("editor", None, True),
     ("viewer", None, False),
-    ("member", frozenset({"app.read"}), False),
+    ("editor", frozenset({"app.read"}), False),
 )
 
 
@@ -126,6 +125,8 @@ def _block_paths(case, monkeypatch):
 def test_get_and_head_misses_are_read_only_with_fresh_prepare_hint(
     case, monkeypatch, media_mocks, preview, actor_name, scopes, can_prepare, method
 ):
+    if actor_name == "editor" and scopes is None:
+        grant_workspace_content_access(case, "editor")
     actor = _reader(case, actor_name, scopes)
     source = _source(case, preview)
     enqueue = _block_enqueue(case, monkeypatch)
@@ -183,7 +184,7 @@ def test_hidden_missing_and_deleted_source_reads_stay_404_before_effects(
 def test_post_with_read_only_scope_is_denied_before_media_or_job_effects(
     case, monkeypatch, media_mocks, preview
 ):
-    reader = credential(case, "member", scopes=frozenset({"app.read"}))
+    reader = credential(case, "editor", scopes=frozenset({"app.read"}))
     source = _source(case, preview)
     paths = _block_paths(case, monkeypatch)
     enqueue = _block_enqueue(case, monkeypatch)
@@ -221,12 +222,13 @@ def test_viewer_cannot_post_even_when_a_current_cache_exists(
 
 
 @pytest.mark.parametrize("preview", PREVIEWS, ids=lambda row: row["name"])
-def test_member_can_post_and_observe_a_cached_preview(case, media_mocks, preview):
-    member = credential(case, "member")
+def test_editor_can_post_and_observe_a_cached_preview(case, media_mocks, preview):
+    grant_workspace_content_access(case, "editor")
+    editor = credential(case, "editor")
     source = _source(case, preview)
     cached = _cached_child(case, preview, source)
 
-    response = member.client.post(_url(preview, source.id), headers=member.headers)
+    response = editor.client.post(_url(preview, source.id), headers=editor.headers)
 
     assert response.status_code == 200, response.get_json()
     if preview["name"] == "waveform":
