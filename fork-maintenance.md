@@ -79,8 +79,10 @@ Upstream PRs follow the owner's rule: built with the owner, from upstream, picke
 
 What upstream's PR history shows (read 2026-11-10; upstream has no CONTRIBUTING file):
 
-- The maintainer usually re-implements a contributed fix in a release commit and closes the PR as
-  superseded, with thanks. Count that as success: the PR's value is its evidence.
+- The maintainer often re-implements a contributed fix in a release commit and closes the PR as
+  superseded, with thanks. Count that as success: the PR's value is its evidence. Our #121 to #123
+  were instead merged as written through the maintainer's integration PR #125, then hardened
+  (2026-11-11).
 - The PRs merged were small (1–5 files), one bug each, with a body of Summary, Reproduction, Root
   cause, Fix and Tests, and a test.
 - Upstream lands large release batches, so a branch goes stale within days. Build each branch
@@ -99,12 +101,39 @@ What upstream's PR history shows (read 2026-11-10; upstream has no CONTRIBUTING 
 3. Run `uv run --no-project python _bmad-output/scripts/check_pr_branch.py` (base defaults to
    `upstream/main`; pass another ref as an argument). It reports fork-only paths (any top-level
    folder starting `_bmad`, `.agents/` and `.claude/` at the root, `skills-lock.json` at the root,
-   and `CLAUDE.md` or `AGENTS.md` at any depth), added lines containing
-   `+fork`, and added lines containing a Windows user path. Exit 1 means fix the branch; exit 2 means the check could not run (for example no
-   `upstream` remote or an unfetched ref) and prints the git error on stderr.
+   and `CLAUDE.md` or `AGENTS.md` at any depth), any change to `docs/release-notes-next.md`, added
+   lines containing `+fork`, and added lines containing a Windows user path. Exit 1 means fix the
+   branch; exit 2 means the check could not run (for example no `upstream` remote or an unfetched
+   ref) and prints the git error on stderr.
 4. Product changes need the usual generated files regenerated on that branch. The procedure, the
    check and any fork-only file never go on a code branch.
-5. Pushing the branch and opening the PR are **[owner]** steps.
+5. **Pre-review.** Have an independent reviewer (a subagent given the diff and the story's plan,
+   not our conclusions) look for what CodeRabbit flags: missed authorization or cache inputs,
+   concurrency, error handling, clock and time handling, docstrings that no longer match, and tests
+   that would pass with the fix reverted. Fix every finding that is a regression against upstream,
+   even when the fix is real work: on #129 a dismissed "new machinery" finding came back from
+   CodeRabbit as Major. Record each dismissed finding and its reason in the epic's
+   `upstream-pr-drafts.md`.
+6. **Evidence on the branch itself.** Run the PR's focused test files under SQLAlchemy 2.1.8 and
+   2.0.52 and the lanes that hold them, on the branch, not only on the epic branch. A PR that
+   claims speed gets a before and after run on upstream `main` with the same harness and data.
+   Note failures that are upstream's own (Windows symlink tests, the stale contract check).
+7. **Optional: local CodeRabbit.** From `C:\Users\Valtor\Source\Pandrator-pr` on the PR branch,
+   `coderabbit review --agent --deep --committed --base upstream/main`, in the background (5 to 10
+   minutes, one of 10 reviews per rolling hour). It is an extra pass, not a gate: on 2026-11-12 it
+   found nothing on #129 at `0d300f9a`, where the PR review found two issues. It sends the diff to
+   CodeRabbit's service, so never run it from `_bmad-output/` or with `--include-untracked`.
+8. **Draft, push and open** **[owner]**. The body has Summary, Reproduction, Root cause, Fix (one
+   bullet per commit), Timings when relevant, Tests and a suggested release note, and goes in the
+   epic's `upstream-pr-drafts.md` first. A PR's base must be upstream `main`: a fork branch cannot
+   be a base there, so a PR that builds on another opens with "Depends on #N" and names the
+   commits to review.
+9. **Answer review** **[owner]** for pushes and replies. Reply to each CodeRabbit finding inside
+   its own review thread, not as a PR comment; CodeRabbit checks the fix and resolves the thread
+   itself. For each fix: commit on the PR branch, rebase any PR stacked on it and push that one
+   with `--force-with-lease`, rerun step 3, update the PR body's commit list, and add the round to
+   `upstream-pr-drafts.md`. Cherry-pick the fix onto the epic branch too, but only when no other
+   session is working in the main checkout.
 
 ## Rehearsal
 
