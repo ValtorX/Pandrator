@@ -10,9 +10,9 @@ below show `#IDENTITY` where the opened ones say #126.
 
 | Order | Branch | Head | Picked from | Size against `upstream/main` |
 |---|---|---|---|---|
-| 1 | `identity-pass-builds-shared-work-once` | `bfd43a5e` | `7f2b631d`, `c5c0dcfb`, `24c1dd36`, then review fixes `dec600c5`, `bf246115`, `bfd43a5e` (fork `b2300cc1`, `cffc0728`, `dd462b8f`) | sizes: see the PRs |
-| 2 | `mcp-plan-reads-use-revision-summaries` | `a2d978f2` | `35e82ff9`, then review fix `a2d978f2` (fork `4d6559a0`) | 6 files, +330 / -14 |
-| 3 | `segment-listing-cost-follows-the-page` | `a3328a21` | branch 1, then `bd700684`, `51848d06` (rebased), then `a3328a21` (fork `b807b4cd`) | 16 files, +1,605 / -42 |
+| 1 | `identity-pass-builds-shared-work-once` | `89abef28` | `7f2b631d`, `c5c0dcfb`, `24c1dd36`, then review fixes `dec600c5`, `bf246115`, `bfd43a5e`, `89abef28` (fork `b2300cc1`, `cffc0728`, `dd462b8f`, `349d9073`) | sizes: see the PRs |
+| 2 | `mcp-plan-reads-use-revision-summaries` | `970bbaf9` | `35e82ff9`, then review fixes `a2d978f2`, `970bbaf9` (fork `4d6559a0`, `8051c406`) | sizes: see the PRs |
+| 3 | `segment-listing-cost-follows-the-page` | `b169fec1` | branch 1, then `bd700684`, `51848d06` (rebased), then `a3328a21` (rebased as `b169fec1`; fork `b807b4cd`) | sizes: see the PRs |
 
 Differences from the epic's commits, all deliberate:
 
@@ -187,3 +187,5 @@ A page of segments now costs what it shows: a page that leaves out the audio reu
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
 Review rounds (2026-11-12): CodeRabbit's two Mapping findings are fixed and answered on their threads. Two pre-emptive reviews (identity and listing; MCP) found nothing major; the fixes taken are `bfd43a5e`, `a3328a21` and `a2d978f2`. Not taken: a lazy `shared_controls` copy and skipping unused `reuse_inputs` (small wins, more risk), widening `resolve_capabilities` to `Mapping` (upstream's signature, cascades into typed callees), the error text inside MCP warnings (matches `system.py`), and a detail/summary race check (narrow).
+
+Third CodeRabbit round (2026-11-12): it resolved all three Mapping threads after checking the fixes against the code. It then raised two small points, both fixed, tested and answered: `copy_record` kept mutable keys as the original objects where `deepcopy` copies them through the memo (#128 thread, fixed in #126 as `89abef28`); and `test_incomplete_detail_merges_nothing_and_warns` did not assert which revision was requested (#127 review nitpick, fixed in `970bbaf9`, answered with a PR comment because it had no thread). #128 was rebased onto `89abef28` and force-pushed with lease; its own commits are now `4224255b`, `5d1ae9db` and `b169fec1`.
