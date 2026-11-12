@@ -67,6 +67,7 @@ covers = ["R5"]
 after = [1]
 hitl = false
 risk = "high"
+notes = ["Starts after the upstream 0.14.3 merge lands in fork main and this epic's branch (epic Notes, 2026-11-11); upstream dd38e331 reshaped http_lifecycle.py."]
 
 [[entry]]
 id = 7
@@ -112,7 +113,7 @@ covers = ["R7"]
 after = [3, 9] # both can change the opening-check path
 hitl = false
 risk = "medium"
-notes = ["Starts after upstream #125 is merged into fork main and this epic's branch (epic Notes, 2026-11-11); #125 changes prepare_segment_reference in workflow_generation_execution.py."]
+notes = ["Starts after the upstream 0.14.3 merge (which includes #125) lands in fork main and this epic's branch (epic Notes, 2026-11-11); #125 changes prepare_segment_reference in workflow_generation_execution.py."]
 
 [[entry]]
 id = 11

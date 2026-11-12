@@ -31,7 +31,7 @@ pixi run before release; say so in the hand-off.
    | Conflict | Rule |
    | --- | --- |
    | `pyproject.toml` version | Resolve to `<upstream X.Y.Z>+fork.1` in the merge itself. Without the segment `test_fork_build_identifies_itself` fails. |
-   | `docs/release-notes-next.md` | Take upstream's. The fork adds no lines. |
+   | `docs/release-notes-next.md` | Take upstream's. Code branches never edit it (`AGENTS.md`, Documentation); move any fork line it held into `fork-release-notes.md`. |
    | `openapi.json`, `web/src/lib/api.generated.ts`, `pandrator/web/static/` | Take upstream's copy, then regenerate. Never hand-merge. |
    | Anything else | Resolve by hand, reading both sides. Before taking a side in tests, check whether the epic fixed the same failure. |
 

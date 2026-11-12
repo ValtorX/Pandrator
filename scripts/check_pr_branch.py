@@ -3,8 +3,9 @@
 Run with: uv run --no-project python _bmad-output/scripts/check_pr_branch.py [base]
 
 Reads ``git diff <base>...HEAD`` (base defaults to ``upstream/main``) and reports:
-fork-only paths, added lines carrying a ``+fork`` version segment, and added lines
-containing a Windows user path. Exits 1 on any finding, 0 if clean, 2 if git failed.
+fork-only paths, changes to files upstream's maintainer writes in release commits
+(``docs/release-notes-next.md``), added lines carrying a ``+fork`` version segment, and
+added lines containing a Windows user path. Exits 1 on any finding, 0 if clean, 2 if git failed.
 It sees paths and markers only; it cannot recognise a fork-only behaviour change,
 so read each picked commit as well. Standard library only.
 """
@@ -21,6 +22,8 @@ DEFAULT_BASE = "upstream/main"
 FORK_ONLY_DIRS = (".agents", ".claude")
 FORK_ONLY_NAMES = ("CLAUDE.md", "AGENTS.md")
 FORK_ONLY_FILES = ("skills-lock.json",)
+# Upstream's maintainer writes these in release commits; a PR carries the text in its description.
+MAINTAINER_ONLY_FILES = ("docs/release-notes-next.md",)
 FORK_MARKER = "+fork"
 SEP = "[" + chr(92) * 2 + "/]"
 USER_PATH = re.compile(
@@ -76,6 +79,8 @@ def check(repo: Path, base: str) -> list[str]:
     for path in paths.splitlines():
         if is_fork_only(path):
             findings.append(f"{path}: fork-only path")
+        elif path in MAINTAINER_ONLY_FILES:
+            findings.append(f"{path}: upstream's maintainer writes this file in release commits")
     current = ""
     lineno = 0
     in_header = False

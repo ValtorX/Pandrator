@@ -72,6 +72,13 @@ def test_fork_only_path_is_named(repo: Path, capsys, path: str) -> None:
     assert f"{path}: fork-only path" in out
 
 
+def test_release_notes_edit_is_named(repo: Path, capsys) -> None:
+    commit(repo, {"docs/release-notes-next.md": "- A fix.\n"})
+    code, out = run(repo, capsys)
+    assert code == 1
+    assert "docs/release-notes-next.md: upstream's maintainer writes this file" in out
+
+
 def test_fork_version_names_file_and_line(repo: Path, capsys) -> None:
     commit(repo, {"pyproject.toml": 'name = "x"\nversion = "1.0.0+fork.1"\n'})
     code, out = run(repo, capsys)
