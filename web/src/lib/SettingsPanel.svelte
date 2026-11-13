@@ -26,6 +26,7 @@
   import AudioCppModelSettings from './AudioCppModelSettings.svelte';
   import {
     mergeModelTuningMaps,
+    promoteToDefaults,
     modelTuningMap
   } from './audio-cpp-model-settings';
   import ElevenLabsModelSettings from './ElevenLabsModelSettings.svelte';
@@ -59,6 +60,7 @@
     onpersisted?: (payload: SettingsPayload) => void | Promise<void>;
   } = $props();
   let payload = $state<SettingsPayload | null>(null);
+  let loadError = $state('');
   const canManageDefaults = $derived(
     appState.canManageWorkspace(payload?.workspace_id)
   );
@@ -285,6 +287,8 @@
   const set = (key: string, next: unknown) =>
     (override = { ...override, [key]: next });
   let ttsServices = $state<TtsService[]>([]);
+  // The voice and model controls appear only once the service catalogue loads.
+  let ttsCatalogueLoading = $state(false);
   let localVoices = $state<VoiceRecord[]>([]);
   const effectiveTts: Record<string, unknown> = $derived({
     ...payload?.effective,
@@ -773,7 +777,13 @@
       })
   );
   async function load() {
-    payload = await sessionApi.settings(sessionId, section);
+    loadError = '';
+    try {
+      payload = await sessionApi.settings(sessionId, section);
+    } catch (caught) {
+      loadError = errorMessage(caught);
+      return;
+    }
     override = { ...(payload.override ?? {}), ...initialOverride };
     if (
       section === 'text' &&
@@ -854,10 +864,7 @@
       await sessionApi.saveDefaults(
         section,
         defaults.revision,
-        {
-          ...(defaults.value ?? {}),
-          ...promoted
-        },
+        promoteToDefaults(defaults.value ?? {}, promoted),
         defaults.workspace_id
       );
       payload = await sessionApi.saveSettings(
@@ -939,10 +946,16 @@
   >
 {/snippet}
 
+<!-- Busy while content that changes the panel's height is still loading. -->
 <svelte:element
   this={collapsible ? 'details' : 'section'}
   class="surface settings-panel rounded-2xl p-5"
   open={collapsible && initiallyOpen ? true : undefined}
+  aria-busy={(!payload && !loadError) ||
+  ttsCatalogueLoading ||
+  modelDetailLoading
+    ? 'true'
+    : undefined}
 >
   {#if collapsible}
     <summary class="flex cursor-pointer list-none items-start gap-4">
@@ -1230,6 +1243,9 @@
                 onloaded={(services) => {
                   ttsServices = services;
                 }}
+                onloading={(loading) => {
+                  ttsCatalogueLoading = loading;
+                }}
                 onchange={(next, resetSelection) => {
                   const changed = next !== String(value(key, fallback));
                   set(key, next);
@@ -1367,6 +1383,15 @@
           />{advanced ? 'Hide' : 'Show'} advanced settings</button
         >{/if}
     {/if}
+  {:else if loadError}
+    <div class="mt-4 text-sm text-red-600" role="alert">
+      Could not load these settings: {loadError}
+      <button type="button" class="tool ml-2" onclick={() => void load()}>
+        Retry
+      </button>
+    </div>
+  {:else}
+    <p class="muted mt-4 text-sm" role="status">Loading settings…</p>
   {/if}
   {#if modelTuningError}<p class="mt-4 text-sm text-red-500" role="alert">
       {modelTuningError}

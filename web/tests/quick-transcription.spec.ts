@@ -87,6 +87,45 @@ async function mockTranscription(page: Page) {
   };
 }
 
+// Holds the saved STT defaults until the test releases them, as a slow server
+// would. The saved vocal isolation model shows whether defaults were applied.
+async function holdSttDefaults(page: Page) {
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route('**/api/v1/defaults/stt*', async (route) => {
+    const response = await route.fetch();
+    const payload = await response.json();
+    await held;
+    await route.fulfill({
+      response,
+      json: {
+        ...payload,
+        effective: {
+          ...payload.effective,
+          qwen_asr_model: 'qwen3_asr_0_6b',
+          qwen_asr_backend: 'auto',
+          transcription_vocal_isolation: 'htdemucs'
+        }
+      }
+    });
+  });
+  return release;
+}
+
+async function chooseQwenSample(page: Page) {
+  await page.getByLabel('Audio or video file', { exact: true }).setInputFiles({
+    name: 'qwen-sample.wav',
+    mimeType: 'audio/wav',
+    buffer: Buffer.from('fixture audio')
+  });
+  await page
+    .getByRole('combobox', { name: 'Transcription service', exact: true })
+    .selectOption('qwen3');
+  return page.getByRole('region', { name: 'Qwen3 transcription options' });
+}
+
 test('Qwen quick transcription explains timing limits and submits local model and isolation choices', async ({
   page
 }, testInfo) => {
@@ -170,6 +209,204 @@ test('Qwen quick transcription explains timing limits and submits local model an
   expect(mock.uploadedBodies[0]).toContain(
     '"transcription_vocal_isolation":"mel_band_roformer"'
   );
+});
+
+test('late saved defaults keep Qwen choices made while they load', async ({
+  page
+}) => {
+  const mock = await mockTranscription(page);
+  const releaseDefaults = await holdSttDefaults(page);
+  await signIn(page);
+  const qwen = await chooseQwenSample(page);
+  await qwen.getByLabel('Qwen model size').selectOption('qwen3_asr_1_7b');
+  await qwen.getByText('Local processing settings', { exact: true }).click();
+  await qwen.getByLabel('Compute backend').selectOption('cpu');
+  releaseDefaults();
+  // The untouched vocal isolation setting still takes the saved default.
+  await expect(
+    page.getByText('Audio preprocessing · vocal isolation enabled', {
+      exact: true
+    })
+  ).toBeVisible();
+  await expect(qwen.getByLabel('Qwen model size')).toHaveValue(
+    'qwen3_asr_1_7b'
+  );
+  await expect(qwen.getByLabel('Compute backend')).toHaveValue('cpu');
+  await page.getByRole('button', { name: 'Transcribe', exact: true }).click();
+  await expect(page.getByLabel('Transcript', { exact: true })).toHaveValue(
+    'Hello from a temporary transcription.'
+  );
+  expect(mock.starts()).toBe(1);
+  expect(mock.uploadedBodies[0]).toContain('"qwen_asr_model":"qwen3_asr_1_7b"');
+  expect(mock.uploadedBodies[0]).toContain('"compute_backend":"cpu"');
+  expect(mock.uploadedBodies[0]).toContain(
+    '"transcription_vocal_isolation":"htdemucs"'
+  );
+});
+
+test('an upload before saved defaults load leaves untouched options to the server', async ({
+  page
+}) => {
+  const mock = await mockTranscription(page);
+  const releaseDefaults = await holdSttDefaults(page);
+  await signIn(page);
+  const qwen = await chooseQwenSample(page);
+  // Untouched controls claim no setting until the saved defaults arrive.
+  await expect(qwen.getByLabel('Qwen model size')).toHaveValue('');
+  await expect(qwen.getByLabel('Compute backend')).toHaveValue('');
+  await page
+    .getByText('Audio preprocessing · optional', { exact: true })
+    .click();
+  await expect(
+    page.getByRole('combobox', { name: 'Vocal isolation', exact: true })
+  ).toHaveValue('');
+  await qwen.getByLabel('Qwen model size').selectOption('qwen3_asr_1_7b');
+  await page.getByRole('button', { name: 'Transcribe', exact: true }).click();
+  await expect(page.getByLabel('Transcript', { exact: true })).toHaveValue(
+    'Hello from a temporary transcription.'
+  );
+  expect(mock.starts()).toBe(1);
+  expect(mock.uploadedBodies[0]).toContain('"qwen_asr_model":"qwen3_asr_1_7b"');
+  expect(mock.uploadedBodies[0]).not.toContain('compute_backend');
+  expect(mock.uploadedBodies[0]).not.toContain('transcription_vocal_isolation');
+  releaseDefaults();
+  await expect(
+    page.getByText('Audio preprocessing · vocal isolation enabled', {
+      exact: true
+    })
+  ).toBeVisible();
+  await expect(qwen.getByLabel('Qwen model size')).toHaveValue(
+    'qwen3_asr_1_7b'
+  );
+});
+
+test('a retry resends the failed attempt unchanged when saved defaults arrive meanwhile', async ({
+  page
+}) => {
+  const mock = await mockTranscription(page);
+  const releaseDefaults = await holdSttDefaults(page);
+  const attempts: { key: string; options: string }[] = [];
+  let failNext = true;
+  await page.route('**/api/v1/transcriptions**', async (route) => {
+    const request = route.request();
+    if (request.method() !== 'POST') return route.fallback();
+    attempts.push({
+      key: request.headers()['idempotency-key'] ?? '',
+      options: /\{"format"[^}]*\}/.exec(request.postData() || '')?.[0] ?? ''
+    });
+    if (!failNext) return route.fallback();
+    failNext = false;
+    return route.abort('failed');
+  });
+  await signIn(page);
+  await chooseQwenSample(page);
+  await page.getByRole('button', { name: 'Transcribe', exact: true }).click();
+  await expect(
+    page.getByText(/Retry with the same file and options/)
+  ).toBeVisible();
+  // The controls now show the saved values; the retry must not send them.
+  releaseDefaults();
+  await expect(
+    page.getByText('Audio preprocessing · vocal isolation enabled', {
+      exact: true
+    })
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Transcribe', exact: true }).click();
+  await expect(page.getByLabel('Transcript', { exact: true })).toHaveValue(
+    'Hello from a temporary transcription.'
+  );
+  expect(mock.starts()).toBe(1);
+  expect(attempts).toHaveLength(2);
+  expect(attempts[1]).toEqual(attempts[0]);
+  expect(attempts[0].key).toBeTruthy();
+  expect(attempts[0].options).toContain('"engine":"qwen3"');
+  expect(attempts[0].options).not.toContain('transcription_vocal_isolation');
+});
+
+test('changing the format after a result starts a new transcription request', async ({
+  page
+}) => {
+  const mock = await mockTranscription(page);
+  const keys: string[] = [];
+  await page.route('**/api/v1/transcriptions**', async (route) => {
+    const request = route.request();
+    if (request.method() === 'POST')
+      keys.push(request.headers()['idempotency-key'] ?? '');
+    return route.fallback();
+  });
+  await signIn(page);
+  await page.getByLabel('Audio or video file', { exact: true }).setInputFiles({
+    name: 'sample.wav',
+    mimeType: 'audio/wav',
+    buffer: Buffer.from('fixture audio')
+  });
+  const transcribe = page.getByRole('button', {
+    name: 'Transcribe',
+    exact: true
+  });
+  const transcript = page.getByLabel('Transcript', { exact: true });
+  await transcribe.click();
+  await expect(transcript).toHaveValue('Hello from a temporary transcription.');
+  await page.getByLabel('Output format').selectOption('json');
+  await expect(transcript).toHaveValue(/pandrator.transcript.v1/);
+  await transcribe.click();
+  await expect.poll(() => mock.starts()).toBe(2);
+  expect(keys).toHaveLength(2);
+  expect(keys[1]).not.toBe(keys[0]);
+  expect(mock.uploadedBodies[0]).toContain('"format":"txt"');
+  expect(mock.uploadedBodies[1]).toContain('"format":"json"');
+});
+
+test('a failed upload still supersedes restoring an earlier transcription', async ({
+  page
+}) => {
+  await mockTranscription(page);
+  await signIn(page);
+  let releaseRestore = () => {};
+  const restoreHeld = new Promise<void>((resolve) => {
+    releaseRestore = resolve;
+  });
+  await page.route('**/api/v1/transcriptions/earlier-job**', async (route) => {
+    await restoreHeld;
+    await route.fulfill({
+      json: {
+        id: 'earlier-job',
+        job_id: 'earlier',
+        status: 'running',
+        progress: 0.4,
+        progress_detail: 'Earlier transcription running',
+        expires_at: new Date(Date.now() + 3600000).toISOString(),
+        format: 'txt',
+        result_available: false
+      }
+    });
+  });
+  await page.route('**/api/v1/transcriptions', (route) =>
+    route.request().method() === 'POST'
+      ? route.abort('failed')
+      : route.fallback()
+  );
+  await page.goto('/transcribe?id=earlier-job');
+  await page.getByLabel('Audio or video file', { exact: true }).setInputFiles({
+    name: 'sample.wav',
+    mimeType: 'audio/wav',
+    buffer: Buffer.from('fixture audio')
+  });
+  await page.getByRole('button', { name: 'Transcribe', exact: true }).click();
+  await expect(
+    page.getByText(/Retry with the same file and options/)
+  ).toBeVisible();
+  const restored = page.waitForResponse((response) =>
+    response.url().includes('/api/v1/transcriptions/earlier-job')
+  );
+  releaseRestore();
+  await restored;
+  // Allow a stale restore time to apply before checking that it did not.
+  await page.waitForTimeout(500);
+  await expect(page.getByText('Earlier transcription running')).toHaveCount(0);
+  await expect(
+    page.getByRole('button', { name: 'Transcribe', exact: true })
+  ).toBeEnabled();
 });
 
 test('upload, switch formats, reload result and delete without a project', async ({

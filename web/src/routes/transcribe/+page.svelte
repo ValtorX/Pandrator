@@ -38,9 +38,13 @@
   let format = $state<TranscriptFormat>('txt');
   let language = $state('auto');
   let engine = $state('');
-  let qwenModel = $state('qwen3_asr_0_6b');
-  let qwenBackend = $state('auto');
-  let vocalIsolation = $state('off');
+  // Saved defaults arrive after these controls are usable. Until then an
+  // untouched option is '' and its control shows a "Saved default"
+  // placeholder; the upload leaves it out so the server applies the saved
+  // value. A late response never replaces a choice the user has made.
+  let qwenModel = $state('');
+  let qwenBackend = $state('');
+  let vocalIsolation = $state('');
   const effectiveEngine = $derived(
     engine || configuredEngine || capabilities.stt?.default_engine || ''
   );
@@ -63,14 +67,14 @@
   let loadingResult = $state(false);
   let error = $state('');
   let notice = $state('');
-  let retryKey = '';
-  $effect(() => {
-    void qwenModel;
-    void qwenBackend;
-    void vocalIsolation;
-    void language;
-    retryKey = '';
-  });
+  // A retry resends exactly what the failed attempt sent, under the same
+  // key, so an upload the server committed before its response was lost
+  // resolves to that job rather than a conflict or a second job. Choosing a
+  // file or changing an option starts a new attempt; saved defaults arriving
+  // meanwhile do not.
+  let attempt: { key: string; options: Record<string, string> } | null = null;
+  // Set once an upload starts, so restoring an earlier job never replaces it.
+  let uploadStarted = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let destroyed = false;
   let resultGeneration = 0;
@@ -93,7 +97,7 @@
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     file = source;
     previewUrl = URL.createObjectURL(source);
-    retryKey = '';
+    attempt = null;
   }
 
   function remember(id: string | null) {
@@ -132,7 +136,7 @@
       if (destroyed || job?.id !== id) return;
       job = result;
       if (['failed', 'canceled', 'interrupted'].includes(result.status))
-        retryKey = '';
+        attempt = null;
       if (result.error) error = result.error.message;
       if (
         ['queued', 'running', 'cancel_requested', 'deleting'].includes(
@@ -151,26 +155,32 @@
     error = '';
     notice = '';
     uploading = true;
+    uploadStarted = true;
     uploadPercent = 0;
     preview = '';
-    retryKey ||=
-      crypto.randomUUID?.() ??
-      Array.from(crypto.getRandomValues(new Uint8Array(16)), (value) =>
-        value.toString(16).padStart(2, '0')
-      ).join('');
+    attempt ??= {
+      key:
+        crypto.randomUUID?.() ??
+        Array.from(crypto.getRandomValues(new Uint8Array(16)), (value) =>
+          value.toString(16).padStart(2, '0')
+        ).join(''),
+      // Options whose saved value is not known yet are left out.
+      options: {
+        format,
+        language,
+        ...(engine ? { engine } : {}),
+        ...(vocalIsolation
+          ? { transcription_vocal_isolation: vocalIsolation }
+          : {}),
+        ...(isQwen && qwenModel ? { qwen_asr_model: qwenModel } : {}),
+        ...(isQwen && qwenBackend ? { compute_backend: qwenBackend } : {})
+      }
+    };
     try {
       const result = await api.upload(
         file,
-        {
-          format,
-          language,
-          ...(engine ? { engine } : {}),
-          transcription_vocal_isolation: vocalIsolation,
-          ...(isQwen
-            ? { qwen_asr_model: qwenModel, compute_backend: qwenBackend }
-            : {})
-        },
-        retryKey,
+        attempt.options,
+        attempt.key,
         (percent) => {
           uploadPercent = percent;
         }
@@ -207,7 +217,7 @@
       resultGeneration += 1;
       job = null;
       preview = '';
-      retryKey = '';
+      attempt = null;
       remember(null);
       notice = 'Temporary transcription deleted.';
     } catch (caught) {
@@ -231,18 +241,13 @@
     void sessionApi
       .defaults('stt')
       .then((payload) => {
-        configuredEngine = String(payload.effective?.stt_engine || '');
-        qwenModel = String(
-          payload.effective?.qwen_asr_model || 'qwen3_asr_0_6b'
+        const saved = payload.effective ?? {};
+        configuredEngine = String(saved.stt_engine || '');
+        qwenModel ||= String(saved.qwen_asr_model || 'qwen3_asr_0_6b');
+        qwenBackend ||= String(
+          saved.qwen_asr_backend || saved.stt_compute_backend || 'auto'
         );
-        qwenBackend = String(
-          payload.effective?.qwen_asr_backend ||
-            payload.effective?.stt_compute_backend ||
-            'auto'
-        );
-        vocalIsolation = String(
-          payload.effective?.transcription_vocal_isolation || 'off'
-        );
+        vocalIsolation ||= String(saved.transcription_vocal_isolation || 'off');
       })
       .catch(() => {});
     void diagnosticsApi
@@ -259,15 +264,18 @@
       .catch(() => {});
     const id = page.url.searchParams.get('id');
     if (id) {
+      // A transcription started meanwhile replaces the one being restored,
+      // even if its upload has already failed.
+      const superseded = () => destroyed || uploadStarted || job !== null;
       void api
         .get(id, format)
         .then((result) => {
-          if (destroyed) return;
+          if (superseded()) return;
           job = result;
           void refresh(id);
         })
         .catch((caught) => {
-          error = errorMessage(caught);
+          if (!superseded()) error = errorMessage(caught);
         });
     }
   });
@@ -378,7 +386,7 @@
           resultGeneration += 1;
           job = null;
           remember(null);
-          retryKey = '';
+          attempt = null;
           preview = '';
           format = 'srt';
           notice =
@@ -395,8 +403,10 @@
           disabled={busy || loadingResult}
           onchange={(event) => {
             format = event.currentTarget.value as TranscriptFormat;
+            // The format is part of the request, so a later Transcribe is a
+            // new attempt even when this change only switches the preview.
+            attempt = null;
             if (job?.result_available) void loadResult();
-            else retryKey = '';
           }}
         >
           <option value="txt">Plain text (.txt)</option><option
@@ -418,7 +428,7 @@
           allowAuto
           allowCustom
           disabled={busy}
-          onchange={() => (retryKey = '')}
+          onchange={() => (attempt = null)}
         />{/if}
       <label class="text-sm"
         >Transcription service
@@ -426,7 +436,7 @@
           class="mt-2 w-full"
           bind:value={engine}
           disabled={busy}
-          onchange={() => (retryKey = '')}
+          onchange={() => (attempt = null)}
         >
           <option
             value=""
@@ -459,9 +469,27 @@
     <fieldset disabled={busy} class="mt-4 space-y-3">
       {#if isQwen}
         <QwenTranscriptionControls
-          bind:model={qwenModel}
-          bind:language
-          bind:backend={qwenBackend}
+          bind:model={
+            () => qwenModel,
+            (value) => {
+              qwenModel = value;
+              attempt = null;
+            }
+          }
+          bind:language={
+            () => language,
+            (value) => {
+              language = value;
+              attempt = null;
+            }
+          }
+          bind:backend={
+            () => qwenBackend,
+            (value) => {
+              qwenBackend = value;
+              attempt = null;
+            }
+          }
           {capabilities}
           requireWordTimestamps={format !== 'txt'}
         />
@@ -472,7 +500,15 @@
           when you start the job.
         </p>
       {/if}
-      <VocalIsolationControl bind:value={vocalIsolation} />
+      <VocalIsolationControl
+        bind:value={
+          () => vocalIsolation,
+          (value) => {
+            vocalIsolation = value;
+            attempt = null;
+          }
+        }
+      />
     </fieldset>
     {#if languageProblem}<p class="mt-3 text-sm text-red-600" role="alert">
         {languageProblem}
