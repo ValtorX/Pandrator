@@ -522,3 +522,5 @@ On the owner's go-ahead (2026-11-13) we timed it on fresh copies of `real`, alte
 | `revision_non_active`, median of 10 | 6.55 s (6.45-6.71 s) | 5.89 s (5.76-6.05 s) | -10.1% |
 
 Response bodies were not compared; #146's own tests check that identities and reuse are unchanged. #146 reaches the fork with whichever upstream merge follows its merge.
+
+The maintainer merged #146 unchanged on 2026-11-13 (`5997edb5`, merged as `f449f03f`; `git range-diff` shows it identical to the `a7190f98` we timed, only rebased onto 0.14.4) and closed #145 as completed, quoting our timing (6.55 s to 5.85 s, -10.7%) and saying it ships in 0.14.5. It reaches the fork with the 0.14.5 merge.
