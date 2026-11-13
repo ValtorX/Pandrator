@@ -3,7 +3,7 @@ title: 'The run list stops decoding whole run snapshots'
 type: bugfix
 ticket: '11'
 created: '2026-11-12'
-status: built
+status: done
 baseline_revision: 'cd3c647303fae2720c12f72270f56363d13cfaac'
 route: full
 route_source: auto
@@ -117,5 +117,49 @@ Reverified (uv, Python 3.11, Windows):
 - The five focused files: 81 passed under SQLAlchemy 2.0.52 and again under 2.1.8.
 - `web-12-serial`: 78 passed, 2 skipped. `web-04-serial`: 297 passed.
 - Ruff is clean on the repo and on `_bmad-output/scripts`.
+- Types report only `nemo_normalizer.py:98`.
+- The lane check and vulture are clean.
+
+## Code Review
+
+### 2026-11-12
+
+**Code review complete.** 0 `decision-needed`, 7 `patch`, 0 `defer`, 9 rejected (pass 2: blind-hunter, edge-case-hunter, verification-gap and intent-alignment; no lens failed).
+
+- [x] [Review][Patch] The compact route's narrowing is untested at the HTTP surface: removing `view=view` brings the slow poll back and nothing fails [pandrator/web/generation_routes.py:575]
+- [x] [Review][Patch] No test shows a compact read leaves stored snapshots and assembly settings unchanged, even though the no-limit branch commits [pandrator/web/generation_history_reads.py:1380]
+- [x] [Review][Patch] The no-limit compact poll, which the UI uses once history is complete, is not measured on the real copy [baseline-2-1.md]
+- [x] [Review][Patch] The load test does not assert at the SQL level that no whole column is selected, so a lazy whole load would pass [tests/test_session_view_performance.py:505]
+- [x] [Review][Patch] The docstrings say narrowed values stay in a read session, but the no-limit branch uses a committing session [pandrator/web/generation_history_reads.py:51]
+- [x] [Review][Patch] The code does not say why the narrowed run snapshot may treat a null key as absent [pandrator/web/generation_history_reads.py:51]
+- [x] [Review][Patch] The snapshot key constant and its consumers do not point at each other [pandrator/web/generation_history_reads.py:41]
+
+Rejected:
+- R1 (false): the `generation_run_id` and per-run compact reads are outside the frozen scope, and they read one run.
+- R2 (false): extracting in SQL is the approach the intent chose; SQLite's extract is not the Python decode the ticket targets.
+- R3 (false): the ticket's verify asks for a fresh real copy, not one under admission; R6 under load is story 13's check.
+- R5 (false): the ticket's verify is a wall-clock median.
+- R8 (low): `view: str` takes any string, but the only caller validates `view` first, and a `Literal` type would need a cast.
+- R12 (false): no writer stores a null `audio_version_side` (all are `Literal["before", "after"]`), and the behaviour predates this story in both views.
+- R15 (low): a breakdown of the remaining 0.56 s is beyond the ticket; the target is met with headroom.
+- R16 (false): no writer stores a boolean `audio_version_side`.
+- R4: merged into the route-test patch (same gap as R6).
+
+All seven patches applied:
+- New `test_compact_run_list_route_never_loads_whole_snapshots_or_settings` drives `?view=compact&limit=25` and `?view=compact` through the Flask client.
+- The reader test and the route test now also check the SQL: a statement listener fails on any whole `settings_snapshot_json` or `settings_json` select-list column, and a positive control on the full view shows the pattern does match.
+- Both tests re-read the stored columns afterwards and assert they are unchanged.
+- Shown by mutation:
+  - Passing `view="full"` in the route fails the route test.
+  - Assigning the narrowed dict instead of `set_committed_value` fails both persistence checks, while the equivalence test still passes.
+  - Dropping `raiseload` and `set_committed_value` fails the statement check.
+- Docstrings now state that narrowed values are never dirty, so the committing no-limit session writes nothing, and why merging null with absent is safe.
+- The key constant names its readers, and `_repair_marker` and `select_second_pass` point back to it.
+- `baseline-2-1.md` adds the no-limit compact read on the same real copy: 0.30 s median, against 1.62 s for the full no-limit read.
+
+Reverified (uv, Python 3.11, Windows):
+- The five focused files: 82 passed under SQLAlchemy 2.0.52 and again under 2.1.8.
+- `web-12-serial`: 79 passed, 2 skipped. `web-04-serial`: 297 passed.
+- Ruff is clean.
 - Types report only `nemo_normalizer.py:98`.
 - The lane check and vulture are clean.

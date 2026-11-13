@@ -991,3 +991,19 @@ view. The full view is unchanged by this story.
 
 The target (median at most 0.8 s) is met. The other operations are unchanged by this
 story (`plan_status` 16.6 s and `revisions` 16.4 s remain slow).
+
+Once its history is fully loaded, the UI drops `limit=25` and polls the compact list
+with no limit. Code review timed both branches on the same copy, through the app's
+test client with a bearer token (in process, HTTP routing included). The session is
+the one with the largest snapshots: 10 runs, 150 MB of snapshots. Five calls each
+after one warm-up:
+
+| Request | Median | Range |
+| --- | --- | --- |
+| `view=compact&limit=25` | 0.61 s | 0.56-0.62 s |
+| `view=compact` (no limit) | 0.30 s | 0.30-0.36 s |
+| `limit=25` (full) | 1.88 s | 1.87-1.95 s |
+| full, no limit | 1.62 s | 1.51-1.71 s |
+
+The no-limit compact read meets the same target. It is faster than the limited one
+because it skips the history index the `limit` branch builds.
