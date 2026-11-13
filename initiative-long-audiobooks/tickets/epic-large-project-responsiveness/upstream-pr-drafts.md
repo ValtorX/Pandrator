@@ -461,3 +461,51 @@ Keyset pages of 128, fetched in full, would close the statement before each page
 Nothing to change; we're recording it so the next person looking at WAL growth doesn't have to re-measure it.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+---
+
+## 11. Story 13: profile of a revision's detail, as an upstream issue
+
+Posted 2026-11-13 on the owner's go-ahead as upstream issue #145: https://github.com/lukaszliniewicz/Pandrator/issues/145. Story 13 changed no code (owner decision 2026-11-13, option C, in its plan). Its profile is offered as an issue, not a PR: upstream's maintainer is changing the identity and cast code it covers (#125, #131), and the one finding that matters to that work, each segment rendered twice per request, only shows when profiling a long cast book. Figures come from `baseline-2-1.md`, "After story 12: single revision detail (story 13)", measured at fork `f590322c`. The profiled files (`generation_review.py`, `generation_audio_identity.py`, `generation_cast_runtime.py`, `generation_rendering.py`, `speech_markup.py`) are identical on upstream `main` `769c9c7d`. Posting needs the owner's go-ahead.
+
+**Title:** Performance note: a revision's detail renders each segment twice (6.6 s on a 5,167-segment cast book)
+
+**Body:**
+
+Not a bug, and nothing here needs action now. We profiled this read while working on large-project responsiveness and decided against changing it ourselves, so we're recording what we found for whoever next restructures the identity or cast-freeze code.
+
+### What we measured
+`GET /api/v1/sessions/<id>/generation-plan/revisions/<revision_id>` for the active revision of a real 5,167-segment cast book takes 6.6 s (6.48-6.69 s over three calls, in process through the app's test client). Since #127, every MCP plan-status and history call makes this read for the active revision, and the web UI makes it when a revision is opened in the speech plan history. SQL is 0.05 s of it (1,386 statements); 6.3 s is the audio identity pass behind the reuse counts. The cost grows with the number of segments.
+
+| Phase | Wall | Calls |
+|---|---|---|
+| Whole-revision cast freeze (`freeze_cast_snapshot`) | 2.45 s | 1 |
+| of which `remap_markup` (two markup parses each) | 0.90 s | 5,167 |
+| of which `build_render_parts` | about 1.3 s | 5,167 |
+| Per-segment render again (`segment_render_parts`) | 2.15 s | 5,167 |
+| of which `validate_retained_cast_resolution` | 0.88 s | 6,424 |
+| of which markup parse | 0.42 s | 5,167 |
+| `apply_resolved_binding` (both renders) | 0.68 s | 17,978 |
+| `compile_performance` | 0.42 s | 6,400 |
+
+So each segment's markup is parsed four times and its parts are rendered twice per request: once in the cast freeze and once in the identity pass.
+
+### What we tried
+Crude in-request memos, as upper bounds rather than designs (the reuse counts were identical in each):
+
+| Memoized within the request | Median |
+|---|---|
+| nothing | 6.62 s |
+| markup parse | 6.35 s |
+| retained-pin re-validation (keyed by binding only, which is not a safe key, since the check reads per-segment settings) | 5.80 s |
+| parse, remap and re-validation together | 5.78 s |
+
+Trimming the repeats inside the current structure gets about 6.0-6.3 s safely.
+
+### What would make a real difference
+Rendering each segment once per request: the identity pass would reuse the cast freeze's parse and binding resolution instead of rendering again. That likely means splitting `build_render_parts` into a part that doesn't depend on the segment's settings and a part that applies them. We estimate 3-4 s for this read, but didn't show it's feasible. A cache across requests would only be safe with every input in its key: the settings snapshot, segment rows, cast controls, performance plans, speech references, the voice library and its files, retained inputs and the provider catalogue.
+
+### Why we stopped
+At 6.6 s the read is well inside the MCP client's 15 s timeout, and if a longer book pushed it past that, the MCP status tool already returns the summary with a warning instead of failing. The restructure is a large change in code you're actively editing, so it seemed better to describe it than to send it.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
