@@ -8,7 +8,7 @@ once an upstream release ships it.
 
 ## Unreleased
 
-From `epic-large-project-responsiveness`, stories 7, 8, 9 and 10 (upstream PRs #132, #134 and #136 for stories 7, 8 and 9; story 10's fix is upstream's own open #131, so its line moves to "Merged upstream" when #131 merges).
+From `epic-large-project-responsiveness`, stories 7, 8, 9, 10 and 11 (upstream PRs #132, #134 and #136 for stories 7, 8 and 9; story 10's fix is upstream's own open #131, so its line moves to "Merged upstream" when #131 merges; story 11, the run-history Fixes line, is not yet offered upstream).
 
 ### Fixes
 
@@ -16,6 +16,7 @@ From `epic-large-project-responsiveness`, stories 7, 8, 9 and 10 (upstream PRs #
 - After heavy use, the database's write-ahead log now shrinks back to a small size the next time the app saves anything, instead of staying at its largest.
 - Starting generation on an edited long plan no longer blocks other requests' writes for over a second.
 - Starting generation from the workflow on a long plan no longer blocks other requests' writes while it checks the plan and voices.
+- The run history the app polls during generation no longer costs seconds of CPU per refresh on long projects.
 
 ## Merged upstream, not yet released
 

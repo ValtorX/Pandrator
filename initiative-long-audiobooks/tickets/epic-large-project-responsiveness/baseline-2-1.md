@@ -964,3 +964,30 @@ baseline was 328-452 s):
 The opening check is run by `run_generation` after admission and was not
 changed here; the route's own change does not alter it, so these figures
 confirm it still meets the target.
+
+## After story 10: compact run list (story 11)
+
+`GET .../generation-runs?view=compact&limit=25` used to hydrate every selected run
+with its whole `settings_snapshot_json` and every latest assembly with its whole
+`settings_json`, then deep-copy the manifests, only for the compact projection to
+discard them. A compact read now loads only the six snapshot keys the payload reads
+and the assembly's `audio_version_side`, extracted in SQL. The full view and
+single-run reads are unchanged.
+
+`large_project_timing.py --skip-burst --skip-admission --runs 5` on a fresh copy of
+`real` (`work-2-11/after/real`), in the uv environment with SQLAlchemy 2.0.52, no
+profiler. The in-process rows time `list_runs(limit=25)` on the session with the
+largest snapshots, three calls each.
+
+| Operation | Before | After |
+| --- | --- | --- |
+| `ui_runs_compact` (large) median | 2.3-2.5 s (story 9) | 0.65 s (max 0.68 s) |
+| `list_runs(limit=25, view=compact)` in process | 1.56-1.62 s | 0.56 s (0.558, 0.571, 0.557) |
+| `list_runs(limit=25)` full view in process | 1.56-1.62 s | 1.5-1.65 s (1.652, 1.498, 1.597) |
+
+The in-process before figure is the planning profile on the old code: two
+uninstrumented runs of `list_runs(limit=25)`, which decoded everything for either
+view. The full view is unchanged by this story.
+
+The target (median at most 0.8 s) is met. The other operations are unchanged by this
+story (`plan_status` 16.6 s and `revisions` 16.4 s remain slow).
