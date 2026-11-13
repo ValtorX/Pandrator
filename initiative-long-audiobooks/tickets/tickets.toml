@@ -21,7 +21,7 @@ slug = "epic-speaker-plan-carry-over"
 title = "The speaker plan survives edits"
 description = "Editing a segment keeps the rest of the book's reuse status and adopted speaker plan, across edit-copied and restored revisions. Settles the edit-copy handling Epic 4 relies on and the pause rules Epic 5 relies on."
 covers = ["R9", "R10", "R11", "R12"]
-after = [{ epic = 2, needs = "the reworked audio identity path in generation_audio_identity.py and the synthetic project" }]
+after = [{ epic = 2, needs = "the reworked audio identity path in generation_audio_identity.py and the synthetic project" }, { epic = 1, needs = "the release procedure (1.13) and install script (1.2) for story 3.7's check on a released build" }]
 
 [[epic]]
 id = 4
@@ -29,7 +29,7 @@ slug = "epic-export-and-regenerate"
 title = "Partial regenerates reach a clean export"
 description = "A partly regenerated book can be assembled and exported from the intended version, and the default plan and source replacement no longer threaten existing takes. Settles the partial-assembly path Epic 5 relies on."
 covers = ["R13", "R14", "R15", "R16"]
-after = [{ epic = 3, needs = "the settled edit-copy and compatibility handling in speech_plan_workspace.py and generation_topology.py" }]
+after = [{ epic = 3, needs = "the settled edit-copy and compatibility handling in speech_plan_workspace.py and generation_topology.py (story 3.3)" }]
 
 [[epic]]
 id = 5
@@ -37,4 +37,4 @@ slug = "epic-chapter-pauses"
 title = "Chapter breaks have their own pauses"
 description = "Chapter breaks use their own pause settings at assembly, with no post-processing, and per-segment pauses are available through MCP."
 covers = ["R18", "R19"]
-after = [{ epic = 3, needs = "the settled pause rules in speech_boundaries.py" }, { epic = 4, needs = "the settled partial-assembly path in workflow_output_assembly.py" }]
+after = [{ epic = 3, needs = "the settled pause rules in speech_boundaries.py and the run-start guard (story 3.5)" }, { epic = 4, needs = "the settled partial-assembly path in workflow_output_assembly.py" }]

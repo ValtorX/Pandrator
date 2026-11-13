@@ -1,0 +1,81 @@
+# Stories of epic-speaker-plan-carry-over, in build order.
+
+[[entry]]
+id = 1
+type = "story"
+title = "Reproduce the lost speaker plan and record a baseline"
+description = "Adds a fork-files script that drives the real server and MCP paths on the synthetic 5,000-segment root (built or reused by large_project_seed.py) and on a throwaway copy of the real data, and records what each R9-R12 path does on current upstream code: reuse-status counts before and after an in-place edit and a forced edit copy, whether a restore keeps an adopted speaker plan, the annotations copy_from_id copies in manual and llm modes from fresh and stale sources, and the pause frozen at each dialogue boundary of a run started with no adopted plan, cancelled before TTS. Results and each requirement's root cause go to baseline-3-1.md, and the upstream issue is drafted from them in upstream-pr-drafts.md and posted once the owner approves. Measures only and changes no application code; stories 2-5 and 7 rerun the script as their check."
+verify = "Running the script on both datasets prints the counts for each path and exits 0, baseline-3-1.md names each requirement's reproduction and root cause, and the upstream issue is posted with the owner's go-ahead."
+covers = ["R1", "R2", "R3", "R4"] # the reproduction part of each; stories 2-5 deliver the fixes
+after = ["2.1"] # the synthetic project and seed script
+hitl = true # the owner approves posting the upstream issue
+risk = "medium"
+notes = ["Runs on the epic branch once it is cut from fork main after upstream 0.14.4 is merged there; if story 1 is next before then, ask the owner.", "If the synthetic project does not reproduce what the real copy shows, such as zero copied annotations, make the seed more realistic before moving on.", "Also record whether a run with no adopted plan loses the cast voices of dialogue parts, not only their pauses."]
+
+[[entry]]
+id = 2
+type = "story"
+title = "An edit makes only the edited segment's speaker plan entry stale"
+description = "Replaces the whole-revision staleness gate on an adopted speaker plan (plan_signature in freeze_performance_snapshot, and the identity pass's per-revision error) with per-segment validity, so an in-place edit to one segment's spoken text leaves every other segment's identity, and so its reuse status, unchanged. The edited segment keeps its markup while it still parses against the new text; otherwise that segment alone needs review, and a run including it is refused naming it. Plan status reports how many segments changed since adoption as a new field, which means regenerating openapi.json, api.generated.ts and the static bundle, and the speaker plan panel's stale wording follows it. Delivers R1's in-place part; story 3 builds carry-over on this rule and story 4 reuses it for stale sources."
+verify = "A test on a cast fixture with an adopted plan edits one segment and shows every other segment's identity and reuse reason unchanged, the edited segment kept or flagged by the fit rule, and a run including a flagged segment refused naming it, with work counted rather than timed; the story 1 script shows the in-place edit leaving every other synthetic segment's reuse status as before."
+covers = ["R1"] # the in-place edit; story 3 delivers the forked edit
+after = [1, "2.3"] # story 1's reproduction; epic 2's reworked identity pass
+hitl = false
+risk = "high"
+notes = ["Run the identity and reuse tests under SQLAlchemy 2.0.52 and 2.1.8.", "A neighbour whose own request includes the edited text (TTS context mode) really changes and may lose reuse (epic Notes, assumption)."]
+
+[[entry]]
+id = 3
+type = "story"
+title = "Edit copies and restores keep the adopted speaker plan"
+description = "Makes a restore, and so an edit copy, give the new revision an adopted speaker plan holding every unchanged segment's entry, mapped through the restore's lineage, with no adopt step. With story 2's per-segment rule, an edit forked into a copy then leaves every other segment reusable. Split, merge and re-segment revisions are unchanged. Delivers R2 and R1's forked part; stories 4 and 5 reuse its lineage mapping."
+verify = "A test forks an edit copy and restores an earlier revision on a cast fixture with an adopted plan, and shows the new revision's plan adopted with every unchanged segment's entry and every other segment reusable; the story 1 script shows the same on the synthetic project."
+covers = ["R2", "R1"] # all of R2; R1's forked-edit part
+after = [2] # the per-segment validity rule
+hitl = false
+risk = "high"
+
+[[entry]]
+id = 4
+type = "story"
+title = "copy_from_id copies across restored and edit-copied revisions"
+description = "Makes create_performance_plan(copy_from_id=...) reach its source plan through restore and edit-copy lineage (story 3's mapping), accept a stale source by copying only units whose segment is still valid (story 2's rule), and report copied and skipped counts as new fields in the API and MCP responses, regenerating openapi.json, api.generated.ts and the static bundle. Manual copies keep every valid annotation; llm and passive copies keep their existing locked-only rule, and the counts show it."
+verify = "Tests copy from a fresh and a stale source across a restore and an edit copy, in manual and llm mode, and assert the annotations and the copied and skipped counts; an MCP test shows the counts; the story 1 script shows annotations copied where it found none."
+covers = ["R3"]
+after = [2, 3] # the per-segment rule and the lineage mapping
+hitl = false
+risk = "medium"
+notes = ["If story 1 shows the owner's zero copies came from llm mode's locked-only rule, ask the owner whether that rule should change."]
+
+[[entry]]
+id = 5
+type = "story"
+title = "A run with no adopted speaker plan is refused unless acknowledged"
+description = "When casting or performance is on, the revision has no adopted speaker plan and its lineage has one (story 3's mapping), the generation start, its preview, resume and the workflow stage run refuse with a 409 naming that plan, unless the request carries an explicit acknowledgement. MCP's start tool takes the acknowledgement and shows the refusal, and the UI's start shows it with the choice to start anyway. The input goes into the hand-written OpenAPI, followed by regenerating openapi.json, api.generated.ts and the static bundle. The guard reads without taking the writer, keeping epic 2's start routes free of write locks."
+verify = "Tests show each start route refusing with the plan named and starting when acknowledged, an MCP test shows the acknowledgement passed and the refusal shown, a web test shows the UI's refusal and start-anyway choice, and the story 1 script shows the refusal where it found 700 ms dialogue pauses."
+covers = ["R4"]
+after = [3, 4] # the lineage lookup; 4 also regenerates the contract and static bundle (epic Notes)
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 6
+type = "story"
+title = "Refactor sweep"
+description = "Cleanup only, scoped at its start from the findings stories 2-5 left in their plans and reviews; responses and behaviour stay the same. Scope pushed out of another story is a new story, not part of this one."
+verify = "The plan lists each item taken up and its outcome, and the epic's focused tests, lint and type checks pass with no behaviour change."
+covers = []
+after = [2, 3, 4, 5]
+hitl = false
+risk = "low"
+
+[[entry]]
+id = 7
+type = "story"
+title = "Verified on real data in a released build"
+description = "On a released fork build carrying stories 2-5, reruns the story 1 script on a fresh throwaway copy of the real data and records each result against R1-R4 next to story 1's baseline: an in-place edit and an edit copy leave every other segment reusable, a restore keeps the adopted plan, copy_from_id copies with its counts, and a run without a plan is refused naming it. Lists each fix's upstream issue or PR, or why it was not offered, and offers any not yet offered with the owner's go-ahead. The owner provides the fresh copy and runs the released build."
+verify = "The owner sees every R1-R4 result on the released build beside story 1's baseline, a one-line edit then a small regenerate on the real copy reusing every other take, and the list of upstream issues and PRs."
+covers = ["R1", "R2", "R3", "R4"] # verification on real data
+after = [6, "1.2", "1.13"] # cuts a fork version by 1.13's procedure and installs it with 1.2's script
+hitl = true # the owner provides the copy and runs the released build
+risk = "medium"

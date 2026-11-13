@@ -87,4 +87,4 @@ Someone producing a very long audiobook can list, edit, regenerate, assemble and
 - Decision (2026-11-08): Problem 4 is not a software defect and R17 is retired. The owner confirmed the "1." was generated; they expected "Chapter 1", which the source text doesn't say. This overrides the brief's "swallowed".
 - Decision (2026-11-08): "Delivered" means in a fork release and verified here. Upstream PRs are still offered, but nothing waits on them. This replaces the same-day decision that an open upstream PR counted as delivered.
 - Decision (2026-11-08): Windows dev setup and fork releases share a new opening epic as the platform baseline, because they have a distinct outcome, a CRLF build would fail the release's asset gate, and the lease fix can ship through it first.
-- Open question: What should R12 do: carry the plan over, warn, or refuse? Epic 3 settles this when refined.
+- Decision (2026-11-13): R12 refuses a run that has no adopted speaker plan when the revision's lineage has one, unless the caller acknowledges it. The owner decided this while refining Epic 3, and it replaces the open question "carry the plan over, warn, or refuse".
