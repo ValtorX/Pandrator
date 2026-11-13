@@ -142,11 +142,23 @@ notes = ["Scoped by the owner (2026-11-12) to story 8's unaudited callers (story
 [[entry]]
 id = 13
 type = "story"
+title = "A single revision's detail answers in a few seconds"
+description = "Makes the read of one speech plan revision (generation-plan/revisions/<id>) answer well inside 15 s on long books. Every MCP plan-status and history call makes it for the active revision, and the web UI makes it when a revision is opened in the speech plan history. On the real 5,167-segment plan it takes 6.5 s (revision_active 6.61 s, revision_non_active 6.44 s, story 4), most of it the per-segment identity and markup work behind the revision's audio reuse counts (story 3's profile). That cost grows with book length, so a book about twice this size would push the MCP status call (0.4 s summary plus this read) past the 15 s client timeout. The response keeps its fields and meaning, and the reuse counts and guards stay identical. Nothing is cached across requests unless the plan shows why that is safe."
+verify = "A test shows a revision's detail, reuse counts and guards included, is unchanged across a varied fixture (cast, edit copies, missing voices, removed segments) while the work it does falls, counted rather than timed; and on a fresh real copy the timing script's revision_active and revision_non_active answer in at most 3 s median, against 6.5 s."
+covers = ["R3"]
+after = [4, 12]
+hitl = false
+risk = "medium"
+notes = ["Added by the owner (2026-11-13) while the epic waits for upstream 0.14.4: with the full plan reads unused by the UI and MCP, this read is the heaviest one people hit and has only about 2x headroom on R3. The 3 s target is proposed from story 4's figures; the story may re-propose it with evidence. The real-data story became 14 by the numbering rule."]
+
+[[entry]]
+id = 14
+type = "story"
 title = "Verified on real data in a released build"
 description = "Runs the timing script, a small regenerate and a cancel during the opening check against a fresh copy of the real database on a released fork build, on the stock 30-second lease, records the results against every line of this epic, and, with the owner's go-ahead, offers upstream as focused PRs any fixes not yet offered. The cancel is timed from the request to the worker taking its next job, which verifies R8 now that the opening check takes about 4 s. The build carries upstream #131, so regroup and early repair no longer hold the writer through the check (R7)."
 verify = "The owner sees every timing inside its limit or target, a small regenerate completing on the released build, a cancel during the opening check freeing the worker within seconds with the job and run closed as cancelled, and a list showing each fix's upstream PR or why it wasn't offered."
 covers = ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8"]
-after = [12, "1.2", "1.13"] # cuts a new fork version by 1.13's procedure and installs it with 1.2's script
+after = [13, "1.2", "1.13"] # cuts a new fork version by 1.13's procedure and installs it with 1.2's script
 hitl = true # the owner provides the copy and runs the released build
 risk = "medium"
-notes = ["Waits for upstream #131 to merge and reach fork main and this epic's branch (epic Notes, 2026-11-12). Numbered 14 until story 11 was dropped."]
+notes = ["Waited for upstream #131 to merge and reach fork main and this epic's branch (epic Notes, 2026-11-12); it did in 3b7b490e. Runs on the 0.14.4+fork.1 build once upstream releases 0.14.4. Numbered 14 until story 11 was dropped, then 13, and 14 again once the revision-detail story was added (2026-11-13)."]
