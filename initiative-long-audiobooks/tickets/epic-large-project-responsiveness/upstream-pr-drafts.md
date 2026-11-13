@@ -388,3 +388,76 @@ Starting generation on an edited long plan no longer blocks other requests' writ
 ## 8. Story 10: not offered, delivered upstream by #131
 
 Story 10 (`999f1571` on the epic branch) moves the workflow start's freeze and identity pass out of the writer. Upstream's own #131, opened by the maintainer 2026-11-12, makes the same change to `run_reviewable_generation` and also covers regroup, early repair and a cancel during the pass, so no PR is built. On the owner's go-ahead, a comment on #131 (2026-11-12, https://github.com/lukaszliniewicz/Pandrator/pull/131#issuecomment-6840942439) gave story 10's writer-hold timings from `baseline-2-1.md` (9.475 s to 0.170 s median, 3 runs) as supporting evidence, said we would not open a competing PR, and offered the stored-run equivalence test (`test_reviewable_start_stores_what_the_single_writer_order_stored`) as a follow-up once #131 merges. Story 10's other tests (writer free through the check, changed inputs refused, revision replaced during the check) overlap #131's. When #131 reaches fork `main`, take upstream's side in `workflow_generation_start.py`, `test_web_workflow_handlers.py` and `test_workflow_generation_language_preflight.py`, then keep story 10's extra tests only where they still pass.
+
+---
+
+## 9. `compact-run-list-reads-only-its-keys`
+
+Story 11. From upstream `main` at `769c9c7d`: `0c7d0e6f` and `037bb583` picked from the epic branch's `a32ea0d0` and `f7d1e865`, then the pre-review fix `5164d564`. Passes `check_pr_branch.py`; no release-notes hunk. Offered while upstream's 0.14.4 release PR #142 is open, in case it fits that release; neither #142 nor any other open upstream PR touches these files. CodeRabbit's review of the fork-internal PR ValtorX/Pandrator#4 (2026-11-13) found nothing ("No actionable comments"). Opened 2026-11-13 on the owner's go-ahead as upstream #144 (3 commits, 6 files, +473 / -32); the fork PR was closed without merging, and `5164d564` is on the epic branch as `f590322c`. Evidence: `%USERPROFILE%\pandrator-perf\work-2-11-pr\` (`run.sh`, `before.log`, `after.log`, test and lane logs). Pre-review (2026-11-13, independent subagent, nothing critical or major): taken in `5164d564` were rejecting an unknown `view` (a direct caller passing anything but `full` or `compact` silently got the full read; a test shows the old code missed it), a docstring sentence naming where SQLite's extract differs from `json.loads` (a non-object snapshot, top-level `NaN`, integers beyond 64 bits; no writer produces them) and moving the null-side comment beside its column. Not taken: returning projected payloads from compact `list_runs` (the plan keeps projection in the route, as for the full view); calling the SQL-text check secondary in a comment (it already asserts a positive control on the full view, and the `loaded_as_persistent` check carries the main assertion); dropping the back-reference comments in `passage_regroup.py` and `generation_run_history.py` (story 11's code review added them so a new key read there joins the constant).
+
+**Title:** Load only the keys the compact run list reads
+
+**Body:**
+
+### Summary
+While a generation run is active, the web UI polls `GET /api/v1/sessions/<id>/generation-runs?view=compact&limit=25` every 10 s. On a 5,167-segment cast book each poll takes about 1.7 s of server CPU (up to 2.5 s while admission runs), so every open tab keeps a large share of a core busy for as long as generation runs. MCP's `list_generation_runs` asks for the same compact view.
+
+### Reproduction
+1. Take a long cast project with several generation runs (here 10 runs whose settings snapshots total 150 MB, the largest 80 MB) and a few output assemblies.
+2. Request `GET /api/v1/sessions/<id>/generation-runs?view=compact&limit=25` repeatedly and time it.
+
+### Root cause
+The run-list reader hydrates every selected `GenerationRun` with its whole `settings_snapshot_json`, and every latest `OutputAssembly` with its whole `settings_json` (pinned take manifests, 17.6 MB here), then deep-copies the manifests in `_assembly_payload`. The compact projection then drops both. Almost all of each snapshot is the generation control and performance snapshots, audio identities and guards, which no compact field uses. In a profile, JSON decoding was 0.82 s and the deep copy 1.0 s of a 1.56 s call.
+
+### Fix
+- `0c7d0e6f`: `list_runs` takes the route's `view`. Under `view=compact` it selects each run's snapshot as only the six keys the payload reads (`tts`, `rvc`, `selected_segment_override`, `audio` and the early-repair and regroup markers), extracted in SQL, and each assembly's settings as only `audio_version_side`. The whole columns are deferred with `raiseload`, so an unplanned read fails loudly rather than decoding them, and the narrowed values are set with `set_committed_value`, so they are never dirty and nothing is written back. An explicit JSON `null` side stays distinct from an absent one, as the versions map keys them differently. The full view, single-run reads and the dispatch readers are unchanged.
+- `037bb583`: a route test for `view=compact` with and without `limit`; both compact tests re-read the stored columns afterwards; the key tuple names its readers, and the readers outside the module point back to it.
+- `5164d564`: `list_runs` rejects an unknown view instead of silently reading everything; the docstring names the cases where SQLite's extract differs from `json.loads`, none of which any writer produces.
+
+### Timings
+`GET .../generation-runs?view=compact&limit=25` on a copy of a real 5,167-segment cast book (10 runs, 150 MB of run snapshots), 5 calls each through the running server, on upstream `main` (`769c9c7d`) with and without this PR:
+
+| Project | Upstream `main` | With this PR |
+|---|---|---|
+| Large (5,167 segments) | 1.71 s median (1.60-2.00 s) | 0.63 s median (0.57-0.65 s) |
+| Small (189 segments) | 0.06 s | 0.05 s |
+
+Once the UI has the whole history it drops `limit`; that compact read went from 1.62 s to 0.30 s on the same copy in our fork. The full view is unchanged (1.5-1.9 s).
+
+### Tests
+- `tests/test_session_view_performance.py`: for audiobook and voiceover sessions with early-repair and regroup children, a malformed marker, a recast run with before and after assemblies, empty and `null` snapshots and a queued run, the compact list with and without `limit` and repairs equals projecting the full list; removing any one key from `COMPACT_RUN_SNAPSHOT_KEYS` changes some compact output; and neither the reader nor the route loads or selects a whole snapshot or assembly settings column, with a positive control on the full view. The stored columns are unchanged afterwards.
+- `tests/test_catalogue_discovery_and_run_views.py`: the admission-replay test also compares `?view=compact&limit=25` with `?limit=25`.
+- `test_unknown_run_list_view_is_rejected`: `list_runs` refuses a view other than `full` or `compact`.
+- On Windows (uv, Python 3.11): the five run-history files (`test_session_view_performance.py`, `test_generation_run_history_projection.py`, `test_regroup_history_batches.py`, `test_generation_summary.py`, `test_catalogue_discovery_and_run_views.py`) give 82 passed under SQLAlchemy 2.1.8 and 2.0.52; `web-04-serial` 297 passed; `web-12-serial` 79 passed, with the 2 symlink tests in `test_session_output_storage.py` failing on `WinError 1314` (no symlink privilege), as on `main`. ruff, vulture and `test_lanes.py check` pass; basedpyright reports only the existing `nemo_normalizer.py:98` on win32.
+
+### Suggested release note
+The run history the app polls during generation no longer costs seconds of CPU per refresh on long projects.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+---
+
+## 10. Story 12: audit result, as a comment on merged #134
+
+Posted 2026-11-13 on the owner's go-ahead: https://github.com/lukaszliniewicz/Pandrator/pull/134#issuecomment-6853083894. Story 12 changed no code (owner decision 2026-11-13, in its plan), so nothing is offered as a PR. #134's body said the segment search now reads its rows in full "so no heavy read keeps a statement open across per-row work"; story 12 finished that audit across the app. The comment records the one remaining site and why it was kept, beside the WAL work upstream merged in #137 and #139. Figures come from story 12's plan (scratch database, uv environment, best of 5 and 7 runs). Posting needs the owner's go-ahead.
+
+**Comment:**
+
+A follow-up to this PR's note that, with the segment search reading its rows in full, no heavy read keeps a statement open across per-row work. We audited the rest of the app for it, since such a read holds a WAL read mark and a checkpoint cannot copy past it.
+
+With SQLAlchemy 2.0 and 2.1, ORM selects fetch every row on first fetch. So only Core table selects, `text()`, raw `sqlite3` cursors and `yield_per` can keep a statement open. Every app site using one either reads in full first or only copies rows, with one exception: `JobQueue._next_claimable_job_id` streams candidates with `yield_per=128` and checks each one's resource keys while the statement is open. It runs on every worker poll while any resource is claimed.
+
+We measured it on 5,000 queued jobs and kept it:
+
+| | Statement open | Total |
+|---|---|---|
+| Current scan, first job claimable | 1.3 ms | 1.3 ms |
+| Current scan, every job blocked | 10.8 ms | 10.8 ms |
+| One full `.all()` read, first job claimable | 8.3 ms | 8.3 ms |
+| One full `.all()` read, every job blocked | 8.1 ms | 11.1 ms |
+
+Keyset pages of 128, fetched in full, would close the statement before each page's checks but cost up to 4 times as much per poll. With every job blocked, that was 42.9 ms against 10.6 ms at 5,000 jobs, because each page sorts the remaining candidates again. A full read only helps when everything is blocked, and holds the statement open 6 times longer in the common case. The per-row work is in-memory set checks, so the current scan is already the cheapest option.
+
+Nothing to change; we're recording it so the next person looking at WAL growth doesn't have to re-measure it.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
