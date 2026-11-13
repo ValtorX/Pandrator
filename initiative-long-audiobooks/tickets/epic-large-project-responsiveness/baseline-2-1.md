@@ -1127,3 +1127,64 @@ polls and `auth/status` while admission ran, and which requests spooled was not
 recorded. Upstream #140, which stops auditing status polls, static assets and
 the app shell, is not on `f590322c` and arrives with 0.14.4; story 14 shows
 whether the spools go.
+
+## Story 14: verified on real data in a released build
+
+The installed build is `v.0.14.4+fork.1` (`5fd1df19`), on the stock 30-second
+lease. The harness ran from that commit on fresh copies of the real data, taken
+2026-11-13 with the app stopped (`work-2-14/`), in the uv environment with
+SQLAlchemy 2.0.52, one harness process at a time. The owner's app was running
+beside it ("owner app listening: True"), so the figures include a little shared
+CPU. The commands are those of the dry run above, except that A skips the burst:
+A `--runs 3 --timeout 900 --skip-burst --listing-interval 2 --ui-interval 10`;
+B `--only burst --burst-operation plan_status --skip-admission --timeout 900`;
+C `--skip-reads --skip-burst --cancel-during-check`.
+
+| Req | Story 14 | Dry run | Limit or target |
+|---|---|---|---|
+| R1 | listings 0.40-0.77 s (`segments_default` 0.70 s, `segments_limit100` 0.77 s) | 0.42-0.76 s | 15 s |
+| R2 | small listing 0.19-0.28 s, before and after the burst | 0.20-0.27 s | 15 s |
+| R3 | `plan_status_summary` 0.38 s, `revision_active` 6.33 s, `revision_non_active` 6.29 s | 0.40 s, 6.44 s | 15 s each |
+| R4 | B: 16 `plan_status` reads, all abandoned at 15 s; first `auth/status` after it 0.03 s (max 0.48 s), server idle at once | 0.40 s | 65.7 s at the Replan |
+| R5 | 0 `database is locked` records in A, B and C; WAL peak 0.7 MiB, settled 0.7 MiB; audit spools 9 in A, 0 in B, 1 in C | 15 spools in A | none locked, WAL settles |
+| R6 | admission 11.8 / 12.5 s with UI reads sampled (A), 10.1 / 10.0 s clean (C); sampled reads during it at most 2.31 s, no timeout | 13.1 / 12.1 s | 30 s |
+| R7 | opening check 4.5 / 4.5 s (A) | 4.7 / 4.4 s | 45 s |
+| R8 | C: cancel sent during the check; job and generation run `canceled` 0.38 / 3.53 s after the request | 3.6-3.7 s | promptly |
+
+A cancel takes effect when the check ends, so its time depends on how far into
+the check it lands. The drop in audit spools from the dry run's 15 to 9 matches
+upstream #140, which stops auditing status polls and is in this build. The full
+`plan_status` (15.9 s) and `revisions` (15.5 s) stay over 15 s; neither the web
+UI nor MCP requests them.
+
+**Live app, real engine** (audio.cpp, through MCP and the owner's UI, plan
+revision 3 active, timestamps UTC):
+
+- A regenerate of 2 segments through MCP: admission 5.5 s, the run 16.4 s,
+  2 generated, no verification warnings.
+- A one-segment regenerate through MCP: check 18:24:42.107 to 18:24:46.826
+  (4.7 s), provider settings 0.2 s, synthesis 2.6 s, saved at 18:24:49.764. The
+  MCP cancel arrived at 18:24:50.268 and was logged `job.cancel_ignored`: a
+  model-driven round trip is slower than the check. The take it made was
+  replaced by the segment's earlier take.
+- The owner's cancel from the UI during the check: check from 18:56:05.079,
+  cancel requested 18:56:08.960, job `canceled` 18:56:09.708 (0.75 s), the
+  generation run `canceled`, no provider-settings event and no TTS request.
+
+**Found outside the epic's fixed paths** (story 15 and epic 4):
+
+- Re-running Segment narration from the UI: the stage selection save took
+  28.6 s, and the four run requests 21.8, 20.7, 49.9 and 52.0 s, each waiting for
+  the writer, the last two behind the Prepare text jobs (17:54:33 to 17:56:46).
+  The UI showed nothing meanwhile; three runs made a plan revision each.
+- MCP `regenerate_segments` timed out at its 15 s limit on its first use, twice,
+  while the admission behind it took 5.5 s; later calls answered at once.
+- An MCP segment-listing page of the book, even of one segment, was 874 KB:
+  904 KB of it is the active revision's restore `operation_json`.
+- The owner's missing-only regenerate of 8 segments cloned 5,159 reusable takes
+  into its run at admission (`workspace.py`, preserved takes; the same audio
+  files, made active), and its admission job took 21 s against 5.5 s for a
+  one-segment regenerate. Its writer hold was not measured.
+- The new plan revision from re-running Segment narration reused none of the
+  book's audio, although 5,150 of its 5,167 segments have the same text at the
+  same position as revision 3 (epic 4, R15 and R16).

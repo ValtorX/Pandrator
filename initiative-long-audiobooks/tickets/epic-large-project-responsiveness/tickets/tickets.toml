@@ -162,3 +162,15 @@ after = [13, "1.2", "1.13"] # cuts a new fork version by 1.13's procedure and in
 hitl = true # the owner provides the copy and runs the released build
 risk = "medium"
 notes = ["Waited for upstream #131 to merge and reach fork main and this epic's branch (epic Notes, 2026-11-12); it did in 3b7b490e. Runs on the 0.14.4+fork.1 build once upstream releases 0.14.4. Numbered 14 until story 11 was dropped, then 13, and 14 again once the revision-detail story was added (2026-11-13).", "Dry run on f590322c (2026-11-13, baseline-2-1.md, 'Story 14 dry run'): every requirement met; it added --cancel-during-check to the harness, showed the default burst no longer abandons anything, and left the stretch after the check to the real-engine run."]
+
+[[entry]]
+id = 15
+type = "story"
+title = "Re-preparing text and MCP generation stay responsive"
+description = "Fixes what story 14's real-data check found outside the paths this epic had fixed. Saving a stage's input selection and running the Prepare text stage no longer hold SQLite's writer for tens of seconds (28.6 s for the selection save and 20-52 s for run requests waiting behind the Prepare text job on the real 5,167-segment book), so other requests' writes do not wait. MCP regenerate_segments answers within its 15 s limit on first use (it timed out twice while its admission took 5.5 s). An MCP segment-listing page no longer carries the active revision's whole restore operation_json (904 KB on the real book) unless asked for it. A missing-only admission's write with its preserved-take clones (5,159 on the real book) is measured against the writer-hold goal and fixed if it misses. Each problem is first reproduced on current upstream code; what belongs upstream is offered as a focused PR or issue. Responses keep their fields and meaning, except that operation_json moves behind an explicit request if the plan shows nothing else reads it."
+verify = "Tests count writer holds and work, not wall-clock time; on a fresh copy of the real data the selection save and Prepare text run requests answer within a few seconds while a Prepare text job runs, the first MCP regenerate answers within 15 s, a one-segment listing page is a few kilobytes, and the missing-only admission's write is recorded in baseline-2-1.md."
+covers = ["R5", "R6", "R1"]
+after = [14]
+hitl = false
+risk = "medium"
+notes = ["Added by the owner (2026-11-13) from story 14's findings. Losing reuse when Segment narration is re-run, and the UI's Run again (no feedback, skipped confirmation, repeated clicks), went to epic 4 (R15, R16) instead."]
