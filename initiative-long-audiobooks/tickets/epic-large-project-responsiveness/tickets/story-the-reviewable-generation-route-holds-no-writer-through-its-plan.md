@@ -3,7 +3,7 @@ title: 'The reviewable generation route holds no writer through its check'
 type: bugfix
 ticket: '10'
 created: '2026-11-12'
-status: built
+status: done
 baseline_revision: '0d5076fd8ca984b17dc9cbcb0c7af358fc700ab7'
 route: full
 route_source: auto
@@ -120,3 +120,11 @@ Reverified (uv, Python 3.11, Windows):
 - `<uv env> python -m pytest -q _bmad-output/scripts/test_large_project_tools.py` -- expected: pass
 - `<uv env> python _bmad-output/scripts/admission_writer_holds.py --root <fresh real copy> --route reviewable --runs 3` -- expected: no hold over 250 ms contains the freeze or identity pass; longest-hold median at most 0.75 s
 - `<uv env> python _bmad-output/scripts/large_project_timing.py --root <fresh copy> --skip-reads --skip-burst --admission-sizes 1,15` on `real` and `synthetic` -- expected: opening check at most 45 s
+
+## Upstream
+
+Superseded upstream (2026-11-12). The maintainer's own open #131 makes the same change to `run_reviewable_generation`: guard first, freeze and identity pass in a plain session, recheck under a short write. It also moves regroup and early repair out of the writer and checks the stop before the run is created, so this story is not offered as a PR. For the epic's "offered upstream" criterion it counts as delivered by #131 (epic Notes, 2026-11-12).
+
+- Posted on #131 as supporting evidence: this story's writer-hold timings on the real 5,167-segment plan, 9.475 s to 0.170 s median (comment 6840942439), with an offer of `test_reviewable_start_stores_what_the_single_writer_order_stored` as a follow-up once #131 merges.
+- Story 10's other tests (writer free through the check, changed inputs refused, revision replaced during the check) overlap #131's.
+- When #131 reaches fork `main`, take upstream's side in `workflow_generation_start.py`, `test_web_workflow_handlers.py` and `test_workflow_generation_language_preflight.py`, and keep this story's extra tests only where they still pass.

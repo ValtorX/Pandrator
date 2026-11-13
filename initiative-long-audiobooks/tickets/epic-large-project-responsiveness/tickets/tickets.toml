@@ -118,17 +118,6 @@ notes = ["Starts after the upstream 0.14.3 merge (which includes #125) lands in 
 [[entry]]
 id = 11
 type = "story"
-title = "A cancel stops the opening check"
-description = "Gives the identity loop a cancellation hook, so a cancel during the opening check frees the worker promptly. Builds on upstream #125's cancel handling (_finish_owned_cancellation_locked in jobs.py, and the queue ending the run), merged into fork main and this epic's branch first."
-verify = "A test cancelling during a slow identity check shows the worker free within seconds and the job closed as cancelled."
-covers = ["R8"]
-after = [3, 9, 10, "1.1"]
-hitl = false
-risk = "medium"
-
-[[entry]]
-id = 12
-type = "story"
 title = "The run list stops decoding whole run snapshots"
 description = "Makes the compact run list (generation-runs?view=compact&limit=25), which the web UI repeats every 10 s while a run is active, answer without decoding each run's full snapshot. On the large real project it costs 2.3-3.1 s of a core per call today, about a quarter of a core per open tab. The compact response keeps its fields and meaning."
 verify = "A test shows the compact view decodes no full run snapshot, and on a fresh real copy the timing script's ui_runs_compact answers well under story 9's 2.3-2.5 s median."
@@ -136,26 +125,28 @@ covers = ["R6"]
 after = [9]
 hitl = false
 risk = "medium"
-notes = ["Raised by story 9's code review (2026-11-12); the owner chose a new story in this epic."]
+notes = ["Raised by story 9's code review (2026-11-12); the owner chose a new story in this epic. Numbered 12 until story 11 was dropped (epic Notes, 2026-11-12)."]
+
+[[entry]]
+id = 12
+type = "story"
+title = "Refactor sweep: no read holds a statement open across per-row work"
+description = "Finishes the audit story 8 left open: checks the snapshot_session callers and other streaming loops for a read that keeps a statement open while it does per-row work, and makes any it finds read its rows in full first, as story 8 did for the segment search. Cleanup only: responses and behaviour stay the same. No other deferred work was collected for this epic."
+verify = "The plan lists every snapshot_session caller and streaming loop checked, with the outcome for each; a test covers each read that changed; the epic's focused tests, lint and type checks pass, with no behaviour change."
+covers = []
+after = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+hitl = false
+risk = "low"
+notes = ["Scoped by the owner (2026-11-12) to story 8's unaudited callers (story 8 plan, false-assumption list). Numbered 13 until story 11 was dropped."]
 
 [[entry]]
 id = 13
 type = "story"
-title = "Refactor sweep"
-description = "Cleans up what the plans and reviews in this epic deferred, with scope set at its start and cleanup only."
-verify = "The epic's focused tests, lint and type checks pass, with no behaviour change."
-covers = []
-after = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-hitl = false
-risk = "low"
-
-[[entry]]
-id = 14
-type = "story"
 title = "Verified on real data in a released build"
-description = "Runs the timing script and a small regenerate against a fresh copy of the real database on a released fork build, on the stock 30-second lease, records the results against every line of this epic, and, with the owner's go-ahead, offers upstream as focused PRs any fixes not yet offered."
-verify = "The owner sees every timing inside its limit or target, a small regenerate completing on the released build, and a list showing each fix's upstream PR or why it wasn't offered."
+description = "Runs the timing script, a small regenerate and a cancel during the opening check against a fresh copy of the real database on a released fork build, on the stock 30-second lease, records the results against every line of this epic, and, with the owner's go-ahead, offers upstream as focused PRs any fixes not yet offered. The cancel is timed from the request to the worker taking its next job, which verifies R8 now that the opening check takes about 4 s. The build carries upstream #131, so regroup and early repair no longer hold the writer through the check (R7)."
+verify = "The owner sees every timing inside its limit or target, a small regenerate completing on the released build, a cancel during the opening check freeing the worker within seconds with the job and run closed as cancelled, and a list showing each fix's upstream PR or why it wasn't offered."
 covers = ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8"]
-after = [13, "1.2", "1.13"] # cuts a new fork version by 1.13's procedure and installs it with 1.2's script
+after = [12, "1.2", "1.13"] # cuts a new fork version by 1.13's procedure and installs it with 1.2's script
 hitl = true # the owner provides the copy and runs the released build
 risk = "medium"
+notes = ["Waits for upstream #131 to merge and reach fork main and this epic's branch (epic Notes, 2026-11-12). Numbered 14 until story 11 was dropped."]

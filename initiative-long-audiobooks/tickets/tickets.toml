@@ -13,7 +13,7 @@ slug = "epic-large-project-responsiveness"
 title = "Large projects stay responsive"
 description = "On a 5,000-segment project, listing, plan status and generation start stay within their limits, and heavy or abandoned reads no longer stall other requests. Provides the synthetic project and timing check the other epics reuse, and the reworked audio identity path Epic 3 builds on."
 covers = ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8"]
-after = [{ epic = 1, needs = "the release line carrying the lease fix, for the cancel story and the real-data check" }]
+after = [{ epic = 1, needs = "the release line carrying the lease fix, for the real-data check and its cancel measurement" }]
 
 [[epic]]
 id = 3
