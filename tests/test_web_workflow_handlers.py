@@ -44,6 +44,7 @@ from pandrator.web.models import (
     SessionStageSelection,
     StoredCredential,
     UsageEvent,
+    Voice,
     WorkspaceSetting,
 )
 from pandrator.web.pronunciations import PronunciationLibrary
@@ -2685,6 +2686,221 @@ class WebWorkflowHandlerTests(unittest.TestCase):
         self.assertEqual(before_payload, payload)
         self.assertEqual(before_snapshot, snapshot)
         self.assertEqual(source_bytes, path.read_bytes())
+
+    def _reviewable_plan_payload(self):
+        _path, _bytes, source = self._reviewable_start_source()
+        revision_id, _ = self.handlers._store_generation_plan(
+            self.session.id, [{"text": "Native narration."}, {"text": "Second line."}],
+            settings={"service": "XTTS"}, source_artifact_id=source.id,
+        )
+        payload = {
+            "session_id": self.session.id, "source_artifact_id": source.id,
+            "speech_plan_revision_id": revision_id, "settings": {"service": "XTTS"},
+        }
+        return payload, revision_id
+
+    def _wrap_reviewable_stage(self, name, action):
+        """Run ``action`` once inside the freeze or the identity pass the route makes."""
+        from pandrator.web import generation_audio_identity, speech_plan_workspace
+
+        module = {
+            "freeze_speech_snapshot": speech_plan_workspace,
+            "plan_audio_identities": generation_audio_identity,
+        }[name]
+        original = getattr(module, name)
+        calls = []
+
+        def wrapped(session, *args, **kwargs):
+            if not calls:
+                action(session)
+            calls.append(True)
+            return original(session, *args, **kwargs)
+
+        patcher = mock.patch.object(module, name, wrapped)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return calls
+
+    def _record_freeze(self):
+        """Record, for each freeze, a pre-freeze copy of the snapshot and the explicit flag."""
+        from pandrator.web import speech_plan_workspace
+
+        original = speech_plan_workspace.freeze_speech_snapshot
+        recorded = []
+
+        def recording(session, revision_id, snapshot, *args, **kwargs):
+            recorded.append({
+                "revision_id": revision_id, "snapshot": deepcopy(snapshot),
+                "explicit": kwargs.get("explicit"),
+            })
+            return original(session, revision_id, snapshot, *args, **kwargs)
+
+        patcher = mock.patch.object(speech_plan_workspace, "freeze_speech_snapshot", recording)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return recorded
+
+    def _start_reviewable(self, payload):
+        with mock.patch.object(self.handlers, "run_generation", return_value={}):
+            return self.handlers._run_reviewable_generation(
+                payload, self.progress, threading.Event()
+            )
+
+    def test_reviewable_start_leaves_the_writer_free_through_its_check(self):
+        payload, _revision_id = self._reviewable_plan_payload()
+        queue = JobQueue(self.database)
+        job = queue.enqueue("noop")
+        claimed = queue.claim("reviewable-worker")
+        self.assertEqual(job.id, claimed.id)
+        for stage in ("freeze_speech_snapshot", "plan_audio_identities"):
+            with self.subTest(stage=stage):
+                observed = {}
+
+                def probe(_session, stage=stage, observed=observed):
+                    with self.database.immediate_session(busy_timeout_ms=0) as other:
+                        other.add(SessionSetting(
+                            session_id=self.session.id, section=f"probe-{stage}",
+                            value_json={"ok": True},
+                        ))
+                    observed["beat"] = queue.heartbeat(
+                        job.id, "reviewable-worker",
+                        lease_generation=claimed.lease_generation,
+                    )
+
+                calls = self._wrap_reviewable_stage(stage, probe)
+                before = self._run_count()
+                self._start_reviewable(payload)
+                self.assertTrue(calls)
+                self.assertEqual(before + 1, self._run_count())
+                self.assertTrue(observed["beat"])
+                with self.database.session() as db:
+                    self.assertIsNotNone(db.scalar(select(SessionSetting).where(
+                        SessionSetting.section == f"probe-{stage}"
+                    )))
+
+    def _run_count(self):
+        with self.database.session() as db:
+            return db.scalar(select(func.count()).select_from(GenerationRun))
+
+    def test_reviewable_start_refuses_inputs_changed_during_its_check(self):
+        from pandrator.web.generation_controls import save_generation_controls
+        from pandrator.web.settings_policy import RevisionConflict
+
+        payload, revision_id = self._reviewable_plan_payload()
+
+        def change_controls():
+            with self.database.immediate_session() as other:
+                save_generation_controls(
+                    other, self.session.id, expected_revision=0,
+                    characters=[{"display_name": "Alice"}],
+                )
+
+        def change_segment_text():
+            with self.database.immediate_session() as other:
+                segment = other.scalars(select(GenerationSegment).where(
+                    GenerationSegment.plan_revision_id == revision_id
+                ).order_by(GenerationSegment.id)).first()
+                segment.text = "Changed while the pass ran."
+
+        def add_voice():
+            with self.database.immediate_session() as other:
+                other.add(Voice(
+                    workspace_id=initial_personal_workspace(other).id, name="Added during the pass",
+                ))
+
+        for name, change in (
+            ("controls", change_controls), ("segment text", change_segment_text),
+            ("voice", add_voice),
+        ):
+            with self.subTest(change=name):
+                self._wrap_reviewable_stage("plan_audio_identities", lambda _session, c=change: c())
+                with self.assertRaises(RevisionConflict) as raised:
+                    self._start_reviewable(payload)
+                self.assertIn("changed while generation was being prepared", str(raised.exception))
+                self.assertEqual(0, self._run_count())
+
+    def test_reviewable_start_refuses_a_revision_replaced_during_its_check(self):
+        from pandrator.web.settings_policy import RevisionConflict
+
+        payload, revision_id = self._reviewable_plan_payload()
+
+        def replace_revision(session):
+            replacement, _ = self.handlers._store_generation_plan(
+                self.session.id, [{"text": "A different plan."}],
+                settings={"service": "XTTS"}, source_artifact_id=payload["source_artifact_id"],
+                force_new=True,
+            )
+            self.assertNotEqual(revision_id, replacement)
+            with self.database.session() as other:
+                plan = other.scalar(select(GenerationPlan).where(
+                    GenerationPlan.session_id == self.session.id
+                ))
+                self.assertEqual(replacement, plan.active_revision_id)
+
+        self._wrap_reviewable_stage("plan_audio_identities", replace_revision)
+        with self.assertRaises(RevisionConflict) as raised:
+            self._start_reviewable(payload)
+        self.assertIn("no longer available", str(raised.exception))
+        self.assertEqual(0, self._run_count())
+
+    def _assert_stored_like_single_writer(self, payload, explicit):
+        """Start the route, then rebuild its run in the old order from the pre-freeze snapshot.
+
+        The old order is freeze, identities and hash inside one writer. The reference starts
+        from the snapshot the route passed into the freeze, with the expected ``explicit``.
+        """
+        from pandrator.web.generation_audio_identity import plan_audio_identities
+        from pandrator.web.speech_plan_workspace import freeze_speech_snapshot
+
+        recorded = self._record_freeze()
+        self._start_reviewable(payload)
+        self.assertEqual(1, len(recorded))
+        self.assertIs(explicit, recorded[0]["explicit"])
+        with self.database.session() as db:
+            run = db.scalar(select(GenerationRun))
+            self.assertEqual(recorded[0]["revision_id"], run.plan_revision_id)
+            stored, stored_hash = deepcopy(run.settings_snapshot_json), run.settings_hash
+            db.delete(run)
+            db.commit()
+        reference = deepcopy(recorded[0]["snapshot"])
+        self.assertNotIn("generation_audio_identities", reference)
+        with self.database.immediate_session() as session:
+            freeze_speech_snapshot(
+                session, recorded[0]["revision_id"], reference, explicit=explicit
+            )
+            reference["generation_audio_identities"] = plan_audio_identities(
+                session, recorded[0]["revision_id"], reference
+            )
+        self.assertTrue(stored["generation_audio_identities"])
+        self.assertEqual(reference, stored)
+        self.assertEqual(
+            hashlib.sha256(json.dumps(
+                reference, ensure_ascii=False, sort_keys=True, default=str
+            ).encode("utf-8")).hexdigest(),
+            stored_hash,
+        )
+
+    def test_reviewable_start_stores_what_the_single_writer_order_stored(self):
+        payload, _revision_id = self._reviewable_plan_payload()
+        with self.subTest(source="json", explicit=True):
+            self._assert_stored_like_single_writer(payload, explicit=True)
+        with self.subTest(source="json", explicit=False):
+            implicit = {k: v for k, v in payload.items() if k != "speech_plan_revision_id"}
+            self._assert_stored_like_single_writer(implicit, explicit=False)
+        with self.subTest(source="srt", explicit=False):
+            srt = self.session_dir / "reviewable-start-source.srt"
+            srt.write_text(
+                "1\n00:00:00,000 --> 00:00:02,000\nFirst cue.\n\n"
+                "2\n00:00:02,500 --> 00:00:04,000\nSecond cue.\n",
+                encoding="utf-8",
+            )
+            source = self.artifacts.register(
+                srt, kind="srt", role="transcription", session_id=self.session.id
+            )
+            self._assert_stored_like_single_writer({
+                "session_id": self.session.id, "source_artifact_id": source.id,
+                "settings": {"service": "XTTS", "language": "en"},
+            }, explicit=False)
 
     def test_reviewable_start_preserves_completed_run_after_reporting_failure(self):
         path, source_bytes, source = self._reviewable_start_source()

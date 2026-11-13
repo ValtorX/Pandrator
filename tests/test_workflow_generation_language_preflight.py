@@ -542,7 +542,7 @@ class WorkflowGenerationLanguagePreflightTests(unittest.TestCase):
                 threading.Event(),
             )
 
-    def test_worker_final_guard_rechecks_active_revision_before_freeze(self):
+    def test_worker_final_guard_rechecks_active_revision_before_run_insert(self):
         session_id, source_id = self._session_with_narration(language="en")
         self._add_plan_revision(
             session_id,
@@ -582,10 +582,6 @@ class WorkflowGenerationLanguagePreflightTests(unittest.TestCase):
                 "immediate_session",
                 side_effect=switch_revision_before_final_check,
             ),
-            patch(
-                "pandrator.web.speech_plan_workspace.freeze_speech_snapshot",
-                side_effect=AssertionError("stale revision must not be frozen"),
-            ) as freeze,
         ):
             with self.assertRaisesRegex(ValueError, "no longer available"):
                 handlers._run_reviewable_generation(
@@ -593,7 +589,8 @@ class WorkflowGenerationLanguagePreflightTests(unittest.TestCase):
                     lambda *_args, **_kwargs: None,
                     threading.Event(),
                 )
-        freeze.assert_not_called()
+        with database.session() as db_session:
+            self.assertIsNone(db_session.scalar(select(GenerationRun.id)))
 
 
 if __name__ == "__main__":
