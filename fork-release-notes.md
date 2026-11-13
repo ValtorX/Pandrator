@@ -8,7 +8,7 @@ once an upstream release ships it.
 
 ## Unreleased
 
-From `epic-large-project-responsiveness`, stories 7, 8, 9 and 10 (upstream PRs #132, #134 and #136 for stories 7, 8 and 9).
+From `epic-large-project-responsiveness`, stories 7, 8, 9 and 10 (upstream PRs #132, #134 and #136 for stories 7, 8 and 9; story 10's fix is upstream's own open #131, so its line moves to "Merged upstream" when #131 merges).
 
 ### Fixes
 
