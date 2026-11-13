@@ -1007,3 +1007,62 @@ after one warm-up:
 
 The no-limit compact read meets the same target. It is faster than the limited one
 because it skips the history index the `limit` branch builds.
+
+## After story 12: single revision detail (story 13)
+
+Story 13 profiled one revision's detail (`generation-plan/revisions/<id>`), which
+every MCP plan-status and history call makes for the active revision. It changed
+no code: the owner closed it on this evidence (2026-11-13, option C below).
+Measured at `f590322c` on a fresh copy of `real` (`work-2-13/profile`), uv
+environment, SQLAlchemy 2.0.52, no other harness process. The wall timings come
+from the app's test client in process (bearer token, HTTP routing included),
+three calls each, with a timer wrapped around each phase. The cProfile run
+(`--profile --runs 1 --only large.revision_active`) took 18.28 s and was used for
+the call counts only.
+
+**Result:** `revision_active` 6.62 s median (6.48-6.69 s); reuse counts 5,159
+reusable, 8 settings-stale, 0 unknown of 5,167. 1,386 statements, 0.05 s in SQL.
+
+**Where the wall time goes** (6.3 s of the 6.7 s is the identity pass):
+
+| Phase | Wall | Calls |
+| --- | --- | --- |
+| Whole-revision cast freeze (`freeze_cast_snapshot`) | 2.45 s | 1 |
+| of which `remap_markup` (two markup parses each) | 0.90 s | 5,167 |
+| of which `build_render_parts` | about 1.3 s | 5,167 |
+| Per-segment render again (`segment_render_parts`) | 2.15 s | 5,167 |
+| of which retained-pin re-validation (`validate_retained_cast_resolution`) | 0.88 s | 6,424 |
+| of which markup parse | 0.42 s | 5,167 |
+| `apply_resolved_binding` (both renders) | 0.68 s | 17,978 |
+| `compile_performance` | 0.42 s | 6,400 |
+| `_memoized_material_settings` | 0.30 s | 6,401 |
+| `_copy_inspection_settings` | 0.30 s | 25,622 |
+
+Each segment's markup is parsed four times and its parts rendered twice, once in
+the freeze and once in the identity pass.
+
+**Upper bounds from stubs** (crude in-request memos in the probe, not exact
+designs; reuse counts identical in each):
+
+| Memoized within the request | Median |
+| --- | --- |
+| none | 6.62 s |
+| markup parse | 6.35 s |
+| retained-pin re-validation, keyed by binding only (not a safe key: the check reads per-segment settings) | 5.80 s |
+| parse, remap and re-validation together | 5.78 s |
+
+**What this says.** The proposed 3 s target is out of reach by trimming. Reaching
+it would need the identity pass to render each segment once per request, reusing
+the freeze's parse and binding resolution. That means splitting `build_render_parts`
+into a settings-independent and a settings-applying part: a large, high-risk
+change in identity and cast code upstream also edits (#125, #131), estimated at
+3-4 s but not shown feasible. Exact trims would reach about 6.0-6.3 s. A cache
+across requests is safe only if its key covers the settings snapshot, segment
+rows, cast controls, performance plans, speech references, the voice library and
+its files, retained inputs and the provider catalogue.
+
+**Owner decision (2026-11-13): option C, close with no code change.** R3 is met
+(6.6 s against 15 s, about 2.3x headroom). On a book long enough to push this read
+past the MCP client timeout, the MCP tools still return the summary and turn the
+detail timeout into a warning (story 4). Story 14 times this read again on the
+released build.
