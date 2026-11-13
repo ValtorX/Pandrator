@@ -916,3 +916,51 @@ Admission itself already met its target before this story.
 - Admission now takes 9-11 s with nothing else running, and at most 17.4 s
   under the sampled load measured here. The owner tightened the admission
   target from 60 s to 30 s.
+
+## After story 9: the reviewable route (story 10)
+
+The workflow's `generate_audio` stage starts its run through the reviewable
+generation route. It froze the speech snapshot and ran the whole-plan identity
+pass inside one `BEGIN IMMEDIATE` transaction. Now both run in a plain session
+with no writer open, and a short write transaction re-proves the revision,
+compares a fresh `snapshot_guard` against the one taken before the freeze and
+inserts the run.
+
+Measured with `admission_writer_holds.py --route reviewable --runs 3` (the run
+itself stubbed out) on a fresh `real` copy, large plan of 5,167 segments. The
+payload is built as the `generate_audio` stage builds it: the flattened
+`settings`, `resolved_settings_snapshot` and `settings_hash` come from
+`WorkflowService.resolve_stage`, and the revision's own `_source_artifact_id`
+is kept as the source (the stage picks a different source on this copy).
+
+| | route writer holds | longest hold per run | median | holds over 250 ms containing the freeze or identity pass |
+| --- | --- | --- | --- | --- |
+| Before | 1 per run | 9.545, 9.475, 9.457 s | 9.475 s | 3 of 3 runs |
+| After | 1 per run | 0.170, 0.179, 0.103 s | 0.170 s | 0 |
+
+The target (median at most 0.75 s, no slow hold containing the check) is met.
+The tool times only `BEGIN IMMEDIATE` transactions, so a write from the plain session
+(an implicit `BEGIN`) would not show in it. What shows the plain session takes no
+writer is the regression test, whose zero-busy-timeout writes from another
+connection commit during the freeze and the identity pass.
+The one remaining hold is the insert transaction, with a `snapshot_guard`
+inside it. An earlier run of the tool called the route with `settings: {}` and
+no resolved snapshot, so the freeze and identity pass ran over an empty-settings
+snapshot. It understated the workflow: before 0.805, 0.800, 0.800 s (median
+0.800 s), after 0.145, 0.141, 0.080 s (median 0.141 s). The figures above
+replace it.
+
+Opening check, `large_project_timing.py --skip-reads --skip-burst
+--admission-sizes 1,15` on fresh copies, against the 45 s target (the original
+baseline was 328-452 s):
+
+| Dataset | Admission size | Opening check |
+| --- | --- | --- |
+| real | 1 | 4.0 s |
+| real | 15 | 4.0 s |
+| synthetic | 1 | 4.0 s |
+| synthetic | 15 | 4.0 s |
+
+The opening check is run by `run_generation` after admission and was not
+changed here; the route's own change does not alter it, so these figures
+confirm it still meets the target.

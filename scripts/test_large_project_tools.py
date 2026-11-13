@@ -612,3 +612,68 @@ def test_writer_holds_refuses_sizes_beyond_the_plan(seeded_root: Path, tmp_path:
         "--small-segments", "5", "--out", str(tmp_path / "holds.json"),
     ])
     assert code == 2 and not (tmp_path / "holds.json").exists()
+
+
+def _revision_database(path: Path, settings: dict, artifact_path: str | None) -> Path:
+    import sqlite3
+
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE generation_plan_revisions (id TEXT, settings_json TEXT)")
+        connection.execute("CREATE TABLE artifacts (id TEXT, relative_path TEXT)")
+        connection.execute("INSERT INTO generation_plan_revisions VALUES ('rev', ?)",
+                           (json.dumps(settings),))
+        if artifact_path is not None:
+            connection.execute("INSERT INTO artifacts VALUES ('art', ?)", (artifact_path,))
+    return path
+
+
+def test_reviewable_route_wires_the_active_revision_and_its_source(tmp_path: Path) -> None:
+    database = _revision_database(tmp_path / "a.sqlite3", {"_source_artifact_id": "art"}, "x/Source.JSON")
+    assert holds_tool.reviewable_source(database, "rev") == "art"
+    assert holds_tool.reviewable_payload("sess", "rev", "art") == {
+        "session_id": "sess", "source_artifact_id": "art",
+        "speech_plan_revision_id": "rev", "settings": {},
+    }
+    # With the stage's resolution, its flattened settings come along and the revision's source stays.
+    staged = holds_tool.reviewable_payload(
+        "sess", "rev", "art", {"settings": {"service": "x"}, "source_artifact_id": "other"})
+    assert staged["settings"] == {"service": "x"} and staged["source_artifact_id"] == "art"
+
+
+@pytest.mark.parametrize("settings,artifact", [
+    ({}, "x/source.json"),
+    ({"_source_artifact_id": "art"}, None),
+    ({"_source_artifact_id": "art"}, "x/source.txt"),
+])
+def test_reviewable_route_refuses_a_revision_without_a_usable_source(
+    tmp_path: Path, settings: dict, artifact: str | None,
+) -> None:
+    database = _revision_database(tmp_path / "a.sqlite3", settings, artifact)
+    with pytest.raises(timing.RootRefused):
+        holds_tool.reviewable_source(database, "rev")
+
+
+def test_reviewable_route_summary_takes_the_median_longest_hold() -> None:
+    def run(longest: float, contains: bool = False) -> dict:
+        return {"longest_hold_seconds": longest,
+                "holds_over_250ms": [{"contains_check": contains}] if contains else []}
+
+    summary = holds_tool.summarize_route([run(0.4), run(0.5), run(2.0, True)])
+    assert summary["longest_hold_median_seconds"] == 0.5 and summary["longest_hold_within_target"]
+    assert summary["holds_containing_check"] == 1
+    described = holds_tool.describe_route([
+        {"seconds": 0.3, "thread": "MainThread", "where": "x", "pieces": {"plan_audio_identities": [0.2, 1]}},
+        {"seconds": 0.1, "thread": "MainThread", "where": "y", "pieces": {}},
+    ])
+    assert described["longest_hold_seconds"] == 0.3
+    assert [hold["contains_check"] for hold in described["holds_over_250ms"]] == [True]
+
+
+def test_reviewable_route_refuses_a_plan_without_a_source_artifact(
+    seeded_root: Path, tmp_path: Path,
+) -> None:
+    code = holds_tool.main([
+        "--root", str(seeded_root), "--route", "reviewable", "--large-segments", "12",
+        "--small-segments", "5", "--out", str(tmp_path / "holds.json"),
+    ])
+    assert code == 2 and not (tmp_path / "holds.json").exists()

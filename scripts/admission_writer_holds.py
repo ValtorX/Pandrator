@@ -9,6 +9,12 @@ calling functions. The admission's commit transaction is the one that runs
 
     <uv env> python _bmad-output/scripts/admission_writer_holds.py --root <copied data root> --runs 3
 
+`--route reviewable` instead calls the workflow's reviewable generation start on the
+large project's active revision (the route behind the `generate_audio` stage), with the
+run itself stubbed out, with the payload, resolved snapshot and settings hash the stage
+resolves (as the workflow's `generate_audio` stage does), and times that route's writer holds and whether any of them
+contains the speech freeze or the identity pass.
+
 Results hold timings, counts and function names only: no paths, titles or text.
 The root must be a copy outside any install. The JSON lands beside the root in
 `results/`, like the timing script's.
@@ -24,6 +30,7 @@ import threading
 import time
 import traceback
 import uuid
+from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -176,6 +183,198 @@ def instrument_admission(recorder: HoldRecorder) -> None:
     recorder.instrument(Session, "commit", "session.commit")
 
 
+ROUTE_CHECK_PIECES = ("freeze_speech_snapshot", "plan_audio_identities")
+REVIEWABLE_SUFFIXES = (".json", ".srt")
+
+
+def instrument_reviewable(recorder: HoldRecorder) -> None:
+    import pandrator.web.generation_audio_identity as identity
+    import pandrator.web.generation_start_preparation as preparation
+    import pandrator.web.speech_plan_workspace as speech
+
+    recorder.instrument(speech, "freeze_speech_snapshot", "freeze_speech_snapshot")
+    recorder.instrument(identity, "plan_audio_identities", "plan_audio_identities")
+    recorder.instrument(preparation, "snapshot_guard", "snapshot_guard")
+
+
+def reviewable_source(database: Path, revision_id: str) -> str:
+    """The source artifact id the active revision names, or a refusal."""
+    import contextlib
+
+    with contextlib.closing(timing._connect_readonly(database)) as connection:
+        row = connection.execute(
+            "SELECT settings_json FROM generation_plan_revisions WHERE id = ?", (revision_id,)
+        ).fetchone()
+        settings = json.loads(row[0]) if row and row[0] else {}
+        artifact_id = str((settings or {}).get("_source_artifact_id") or "")
+        if not artifact_id:
+            raise timing.RootRefused("The active revision names no source artifact.")
+        found = connection.execute(
+            "SELECT relative_path FROM artifacts WHERE id = ?", (artifact_id,)
+        ).fetchone()
+    if not found or Path(str(found[0] or "")).suffix.lower() not in REVIEWABLE_SUFFIXES:
+        raise timing.RootRefused("The revision's source artifact is not a .json or .srt file.")
+    return artifact_id
+
+
+def ensure_source_file(paths: Any, database: Any, artifact_id: str) -> bool:
+    """Give a copied root's JSON source a stand-in file when the copy left the sessions out.
+
+    The route resolves the source file but never reads a JSON source while it reuses the
+    active revision, so an empty list stands in. Returns whether one was written.
+    """
+    from pandrator.web.models import Artifact
+
+    with database.snapshot_session() as session:
+        relative = session.get(Artifact, artifact_id).relative_path
+    target = paths.managed_path(relative)
+    if target.is_file() or target.suffix.lower() != ".json":
+        return False
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("[]", encoding="utf-8")
+    return True
+
+
+def reviewable_payload(session_id: str, revision_id: str, source_artifact_id: str,
+                       stage: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The `generate_audio` stage's handler payload, with the revision's own source.
+
+    `stage` is the stage's resolved payload (`settings`, `resolved_settings_snapshot`,
+    `settings_hash`); without it the settings are empty.
+    """
+    stage = stage or {}
+    return {"session_id": session_id, "source_artifact_id": source_artifact_id,
+            "speech_plan_revision_id": revision_id, "settings": dict(stage.get("settings") or {})}
+
+
+def resolve_stage_payload(database: Any, session_id: str) -> dict[str, Any]:
+    """What the workflow resolves for `generate_audio` with no Run Now values."""
+    from pandrator.web.jobs import JobQueue
+    from pandrator.web.workflows import WorkflowService
+
+    return WorkflowService(database, JobQueue(database)).resolve_stage(
+        session_id, "generate_audio", {}, continuation=False).payload
+
+
+def describe_route(holds: list[dict[str, Any]]) -> dict[str, Any]:
+    """The route's holds: every one over 250 ms with its frames, and whether it held the check."""
+    slow = sorted((item for item in holds if item["seconds"] > SLOW_HOLD_SECONDS),
+                  key=lambda item: -item["seconds"])
+    return {
+        "writer_holds": len(holds),
+        "longest_hold_seconds": round(max((item["seconds"] for item in holds), default=0.0), 3),
+        "held_seconds": round(sum(item["seconds"] for item in holds), 3),
+        "holds_over_250ms": [{
+            "seconds": round(item["seconds"], 3), "thread": item["thread"], "where": item["where"],
+            "contains_check": any(label in item["pieces"] for label in ROUTE_CHECK_PIECES),
+            "pieces": {label: {"seconds": round(seconds, 3), "calls": calls}
+                       for label, (seconds, calls) in sorted(item["pieces"].items(),
+                                                             key=lambda pair: -pair[1][0])},
+        } for item in slow],
+    }
+
+
+def summarize_route(runs: list[dict[str, Any]]) -> dict[str, Any]:
+    longest = [item["longest_hold_seconds"] for item in runs]
+    median = statistics.median(longest) if longest else None
+    return {
+        "runs": len(runs),
+        "longest_hold_seconds": longest,
+        "longest_hold_median_seconds": round(median, 3) if median is not None else None,
+        "longest_hold_within_target": median is not None and median <= TARGET_MEDIAN_SECONDS,
+        "holds_containing_check": sum(
+            1 for item in runs for hold in item["holds_over_250ms"] if hold["contains_check"]),
+    }
+
+
+def run_reviewable(args: argparse.Namespace, large: Any, output: Path) -> int:
+    from unittest import mock
+
+    from sqlalchemy import delete, select
+
+    from pandrator.web.accounts.execution_actor import HostActor, execution_actor_scope
+    from pandrator.web.models import GenerationRun
+
+    try:
+        source_id = reviewable_source(args.root / "pandrator.sqlite3", large.active_revision_id)
+    except timing.RootRefused as error:
+        print(f"Refused: {error}", file=sys.stderr)
+        return 2
+    label = args.label or args.root.name
+    results: dict[str, Any] = {
+        "schema_version": 1, "label": label, "mode": "writer-holds-reviewable",
+        "started_at": datetime.now(UTC).isoformat(), "checkout": timing.git_revision(),
+        "slow_hold_seconds": SLOW_HOLD_SECONDS, "target_median_seconds": TARGET_MEDIAN_SECONDS,
+        "projects": {"large": timing.describe_project(large)}, "runs": [],
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    app, _token, _worker, gpu_probe = timing.build_services(args.root, hold_seconds=0.0,
+                                                            cancel_in_process=True)
+    services = app.extensions["pandrator"]
+    database = services["database"]
+    # A fresh handler set, like the worker's, with only the run itself stubbed.
+    from pandrator.web.workflow_handlers import WorkflowHandlers
+
+    handlers = WorkflowHandlers(database, services["paths"])
+    with execution_actor_scope(HostActor("pandrator-cli")):
+        results["source_stand_in"] = ensure_source_file(services["paths"], database, source_id)
+    recorder = HoldRecorder(database.engine)
+    instrument_reviewable(recorder)
+    with execution_actor_scope(HostActor("pandrator-cli")):
+        stage = resolve_stage_payload(database, large.session_id)
+    payload = reviewable_payload(large.session_id, large.active_revision_id, source_id, stage)
+    snapshot = stage.get("resolved_settings_snapshot")
+    settings_hash = str(stage.get("settings_hash") or "") or None
+    results["stage_resolved"] = True
+    results["stage_source_is_revision_source"] = stage.get("source_artifact_id") == source_id
+    try:
+        for run in range(1, args.runs + 1):
+            with database.snapshot_session() as session:
+                existing = set(session.scalars(select(GenerationRun.id).where(
+                    GenerationRun.session_id == large.session_id)))
+            recorder.take()
+            started = time.perf_counter()
+            error = None
+            try:
+                with execution_actor_scope(HostActor("pandrator-cli")), \
+                        mock.patch.object(handlers, "run_generation", return_value={}):
+                    handlers._run_reviewable_generation(
+                        dict(payload), lambda *_a, **_k: None, threading.Event(),
+                        resolved_snapshot=deepcopy(snapshot), settings_hash=settings_hash)
+            except Exception as failure:  # recorded by type only: messages may name data
+                error = type(failure).__name__
+            elapsed = time.perf_counter() - started
+            entry = {"run": run, "seconds": round(elapsed, 3), "error": error,
+                     **describe_route(recorder.take())}
+            with database.immediate_session() as session:
+                created = [item for item in session.scalars(select(GenerationRun.id).where(
+                    GenerationRun.session_id == large.session_id)) if item not in existing]
+                if created:
+                    session.execute(delete(GenerationRun).where(GenerationRun.id.in_(created)))
+            results["runs"].append(entry)
+            print(f"route run {run}: {elapsed:.2f}s, {entry['writer_holds']} writer holds, "
+                  f"longest {entry['longest_hold_seconds']}s, "
+                  f"{len(entry['holds_over_250ms'])} over 250 ms"
+                  + (f", FAILED ({error})" if error else ""), flush=True)
+            output.write_text(json.dumps(results, indent=2), encoding="utf-8")
+            if error:
+                return 1
+        results["summary"] = summarize_route(results["runs"])
+        results["finished_at"] = datetime.now(UTC).isoformat()
+        output.write_text(json.dumps(results, indent=2), encoding="utf-8")
+        summary = results["summary"]
+        print(f"route: longest hold median {summary['longest_hold_median_seconds']}s "
+              f"(target {TARGET_MEDIAN_SECONDS}s: "
+              f"{'met' if summary['longest_hold_within_target'] else 'NOT met'}), "
+              f"{summary['holds_containing_check']} slow holds contain the freeze or identity pass")
+        print(f"Results: {output.name}")
+    finally:
+        recorder.close()
+        gpu_probe.stop()
+        database.dispose()
+    return 0
+
+
 def describe(holds: list[dict[str, Any]]) -> dict[str, Any]:
     commit = [item for item in holds if item["admission_commit"]]
     fallback = not commit
@@ -252,6 +451,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--large-segments", type=int, default=5000, help="Target size of the large plan.")
     parser.add_argument("--small-segments", type=int, default=189, help="Target size of the small plan.")
     parser.add_argument("--large-session", help="Session id of the large project.")
+    parser.add_argument("--route", choices=("admission", "reviewable"), default="admission",
+                        help="Which start route to time (default: generation admission).")
     args = parser.parse_args(argv)
     args.root = args.root.expanduser().resolve()
     if args.runs < 1:
@@ -276,6 +477,11 @@ def main(argv: list[str] | None = None) -> int:
     except timing.RootRefused as error:
         print(f"Refused: {error}", file=sys.stderr)
         return 2
+    if args.route == "reviewable":
+        label = args.label or args.root.name
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        return run_reviewable(args, large, args.out or args.root.parent / "results"
+                              / f"{label}-reviewable-holds-{stamp}.json")
     sizes = args.sizes
     if max(sizes) > len(large.first_segment_ids):
         # A larger size would admit only the ids there are, under a misleading label.

@@ -8,13 +8,14 @@ once an upstream release ships it.
 
 ## Unreleased
 
-From `epic-large-project-responsiveness`, stories 7, 8 and 9 (upstream PRs #132 and #134 for stories 7 and 8).
+From `epic-large-project-responsiveness`, stories 7, 8, 9 and 10 (upstream PRs #132, #134 and #136 for stories 7, 8 and 9).
 
 ### Fixes
 
 - Listing segments, plan status and plan history now stop partway through the book once their client has given up, and a read still waiting its turn never starts. Heavy MCP reads that time out no longer stall the server. A change whose client gave up still runs. The server now requires waitress 3.0.1 or later, which fixes a request-smuggling flaw that this setting would otherwise expose.
 - After heavy use, the database's write-ahead log now shrinks back to a small size the next time the app saves anything, instead of staying at its largest.
 - Starting generation on an edited long plan no longer blocks other requests' writes for over a second.
+- Starting generation from the workflow on a long plan no longer blocks other requests' writes while it checks the plan and voices.
 
 ## Merged upstream, not yet released
 
