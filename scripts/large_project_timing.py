@@ -835,8 +835,15 @@ class ReadSampler:
 def run_admission(
     client: Client, large: ProjectChoice, small: ProjectChoice, size: int, *,
     job_timeout: float, sample_interval: float, log: Callable[[str], None],
-    listing_interval: float = 0.0, ui_interval: float = 0.0,
+    listing_interval: float = 0.0, ui_interval: float = 0.0, cancel_during_check: bool = False,
 ) -> dict[str, Any]:
+    """Admit a regenerate, then follow its run to the cancel.
+
+    By default the run is cancelled once the opening check has finished, at the
+    provider-settings line. With ``cancel_during_check`` the cancel is sent at the
+    first poll that shows the check under way, and the result times it from the
+    request to the job's finish (R8: a cancel during the check frees the worker).
+    """
     session = f"/api/v1/sessions/{large.session_id}"
     segment_ids = large.first_segment_ids[:size]
     result: dict[str, Any] = {"segments": len(segment_ids), "operation": "regenerate"}
@@ -881,18 +888,34 @@ def run_admission(
             return result
 
         cancel: dict[str, Any] = {}
+        cancel_at = CHECK_START if cancel_during_check else CHECK_END
 
-        def cancel_at_provider_line(job: dict[str, Any]) -> None:
-            if cancel or job.get("progress_detail") != CHECK_END:
+        def cancel_at_line(job: dict[str, Any]) -> None:
+            if cancel or job.get("progress_detail") != cancel_at:
                 return
+            cancel["sent_at"] = datetime.now(UTC).isoformat()
             sample, _ = client.call("POST", f"/api/v1/jobs/{child_id}/cancel", timeout=60)
             cancel.update(sample.as_dict())
 
-        child = wait_for_job(client, child_id, timeout=job_timeout, on_poll=cancel_at_provider_line)
+        child = wait_for_job(client, child_id, timeout=job_timeout, on_poll=cancel_at_line)
         _, logs = client.call("GET", f"/api/v1/jobs/{child_id}/logs", timeout=60)
         events = (logs or {}).get("items") or [] if isinstance(logs, dict) else []
         result["run"] = {**(job_timings(child) if child else {"status": "timed_out"}),
-                         **check_window(events), "cancel_request": cancel or None}
+                         **check_window(events), "cancel_request": cancel or None,
+                         "cancel_at": "during_check" if cancel_during_check else "provider_line"}
+        if cancel_during_check:
+            result["run"]["cancel_to_finish_seconds"] = (
+                seconds_between(cancel.get("sent_at"), child.get("finished_at"))
+                if cancel and child else None
+            )
+            _, runs = client.call("GET", f"{session}/generation-runs",
+                                  params={"view": "compact", "limit": 1}, timeout=60)
+            items = (runs or {}).get("items") or [] if isinstance(runs, dict) else []
+            result["run"]["generation_run_status"] = items[0].get("status") if items else None
+            log(f"  cancel    {size:>2}: sent during check, job {result['run'].get('status')} "
+                f"{result['run']['cancel_to_finish_seconds']}s later, generation run "
+                f"{result['run']['generation_run_status']}, check finished "
+                f"{result['run']['check_finished']}")
         log(f"  check     {size:>2}: {result['run'].get('check_seconds')}s, "
             f"run {result['run'].get('status')} (queued {result['run'].get('queue_wait_seconds')}s)")
     result["reads_during"] = sampler.summary()
@@ -1205,6 +1228,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--light-pace", type=float, default=0.0,
                         help="Seconds between one light client's requests.")
     parser.add_argument("--admission-sizes", default="1,15", help="Comma list of segment counts.")
+    parser.add_argument("--cancel-during-check", action="store_true",
+                        help="Cancel each admitted run as soon as its opening check is under way, "
+                             "and time the cancel to the job's finish, instead of cancelling at "
+                             "the provider-settings line.")
     parser.add_argument("--sample-interval", type=float, default=2.0,
                         help="Seconds between auth-status samples during jobs.")
     parser.add_argument("--listing-interval", type=float, default=0.0,
@@ -1329,7 +1356,8 @@ def main(argv: list[str] | None = None) -> int:
                         client, large, small, size, job_timeout=args.job_timeout,
                         sample_interval=args.sample_interval, log=log,
                         listing_interval=args.listing_interval,
-                        ui_interval=args.ui_interval))
+                        ui_interval=args.ui_interval,
+                        cancel_during_check=args.cancel_during_check))
                     save()
             if heavy is not None:
                 log(f"  read-load burst: {args.burst_operation}, {args.load_seconds:.0f}s x "

@@ -1066,3 +1066,64 @@ its files, retained inputs and the provider catalogue.
 past the MCP client timeout, the MCP tools still return the summary and turn the
 detail timeout into a warning (story 4). Story 14 times this read again on the
 released build.
+
+## Story 14 dry run (before the released build)
+
+A rehearsal of story 14 while upstream 0.14.4 was still unreleased, on the epic
+branch tip `f590322c`, which carries the same code as upstream's
+`release/0.14.4` apart from its later fixes (#138, #140, #141). Fresh copies of
+`real` under `work-2-14-dry/` (`full`, `cancel`, `burst`), uv environment,
+SQLAlchemy 2.0.52, one harness process at a time. It found two gaps in the
+harness and one in what the harness can show; the released build still has to
+be measured.
+
+**Commands.**
+
+- A: `large_project_timing.py --runs 3 --timeout 900 --listing-interval 2 --ui-interval 10`:
+  the read matrix, the read-load burst and admission of 1 and 15 segments with
+  the UI's reads sampled.
+- B: `large_project_timing.py --skip-reads --skip-burst --cancel-during-check`: admission of
+  1 and 15 segments, each run cancelled at the first poll that shows its
+  opening check under way.
+- C: `large_project_timing.py --only burst --burst-operation plan_status --skip-admission --timeout 900`:
+  the burst on a read slow enough to be abandoned.
+
+**Results against each requirement** (medians of 3; large project 5,167 segments):
+
+| Req | Measured | Limit or target |
+|---|---|---|
+| R1 | listings 0.42-0.76 s (`segments_default` 0.66 s, `segments_limit100` 0.76 s) | 15 s |
+| R2 | small listing 0.20-0.27 s, before and after the burst | 15 s |
+| R3 | `plan_status_summary` 0.40 s, `revision_active` 6.44 s, `revision_non_active` 6.30 s, `revisions_summary` 0.03 s | 15 s each |
+| R4 | C: 16 `plan_status` reads, all abandoned at 15 s; first `auth/status` after it 0.40 s, small listing 0.24 s, server idle at once | 65.7 s at the Replan |
+| R5 | 0 `database is locked` records in A, B and C; WAL at most 8.0 MiB in A, 0.8 MiB in C; audit spools 15 in A, 0 in B and C | none locked, WAL settles |
+| R6 | admission 13.1 / 12.1 s with UI reads sampled (A), 9.2 / 9.1 s clean (B); sampled reads during it at most 2.25 s, no timeout | 30 s |
+| R7 | opening check 4.7 / 4.4 s (A) | 45 s |
+| R8 | B: cancel sent 0-1 s into the check; job and generation run `canceled`, 3.67 / 3.63 s after the request | promptly |
+
+The full `plan_status` (16.0 s) and `revisions` (15.7 s) reads stay over 15 s;
+neither the web UI nor MCP requests them (story 4). The compact run list is
+0.56 s (story 11).
+
+**Gaps found.**
+
+- The harness could only cancel after the opening check, at the provider-settings
+  line. `--cancel-during-check` (added here) sends the cancel when the run reports
+  the check under way and records the time to the job's finish, the job's and the
+  generation run's status, and whether the check reached its end.
+- The burst's default read, `segments_default`, now answers in 0.66 s, so A's
+  burst abandoned nothing (68 requests, 0 abandoned) and did not test R4. Story
+  14 runs the burst with `--burst-operation plan_status`, as C did.
+- The opening check has no cancel checkpoint inside it, so a cancel takes effect
+  when the check ends: the 3.6 s is about what remained of a 4 s check, as the
+  decision that dropped the old story 11 accepted. In production the run then
+  loads provider settings and next checks the cancel before its first TTS request
+  (`workflow_generation_execution.py`, "cancelled before its next request"). The
+  harness stops every run at the provider-settings line, so it cannot time that
+  stretch. Only the released build with a real engine can.
+
+A had 15 audit spools and B and C none; A is the only run that sampled the UI's
+polls and `auth/status` while admission ran, and which requests spooled was not
+recorded. Upstream #140, which stops auditing status polls, static assets and
+the app shell, is not on `f590322c` and arrives with 0.14.4; story 14 shows
+whether the spools go.
