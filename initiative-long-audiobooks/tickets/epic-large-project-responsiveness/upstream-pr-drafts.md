@@ -547,6 +547,8 @@ Round 2 (2026-11-14): the 2.15 session fixed CodeRabbit's findings on #5 (`5826e
 
 Opened upstream on the owner's go-ahead (2026-11-14), from upstream `main` `f449f03f`: #150 (recast previews, `5826e097`), #151 (selection save, `d6b24102`) and #152 (Prepare text rows, `34933587`); the fork PRs were closed without merging. #151 was retitled "Walk only the chosen artifact's lineage when saving a stage selection" right after opening, because the final code walks the lineage in any session rather than narrowing it to the session. All five story 15 changes are now open upstream: #148 to #152.
 
+Upstream CI on #149 failed `web-12` (both OS) on upstream's facade test, whose keyword set lacked the new `operation` keyword; fixed by `c0750bc5` (pushed to the PR branch, epic `073695cd`) with a comment on #149 that also explains the expected "Frontend and contract" failure (static bundle left out).
+
 Drafted from the plan, `baseline-2-1.md` ("Story 14", "Story 15") and each branch's diff; every number checked against those records. Each Timings lead says what "with" was measured on: 2.15's branch carrying all five changes, none of which touches another's transaction.
 
 ### Draft 1. abandoned-recast-previews-stop

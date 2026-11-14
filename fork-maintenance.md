@@ -118,6 +118,12 @@ What upstream's PR history shows (read 2026-11-10; upstream has no CONTRIBUTING 
    2.0.52 and the lanes that hold them, on the branch, not only on the epic branch. A PR that
    claims speed gets a before and after run on upstream `main` with the same harness and data.
    Note failures that are upstream's own (Windows symlink tests, the stale contract check).
+   "The lanes that hold them" means every lane holding a test that exercises the changed code,
+   not only the test files the branch changes: search `tests/` for the changed functions,
+   routes and signatures (`rg`), look each file's lane up with `scripts/test_lanes.py list`,
+   and run those whole lanes. The fork's CI does not run the web lanes on epic-branch pushes,
+   so upstream's CI is otherwise the first to find such a test: #149 failed `web-12` on
+   upstream's facade test for a keyword the PR added (2026-11-14).
 7. **Optional: local CodeRabbit.** From `C:\Users\Valtor\Source\Pandrator-pr` on the PR branch,
    `coderabbit review --agent --deep --committed --base upstream/main`, in the background (5 to 10
    minutes, one of 10 reviews per rolling hour). It is an extra pass, not a gate: on 2026-11-12 it

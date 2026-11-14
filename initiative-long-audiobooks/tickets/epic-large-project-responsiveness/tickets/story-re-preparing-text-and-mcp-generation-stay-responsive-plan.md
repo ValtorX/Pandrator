@@ -207,3 +207,7 @@ Checks (uv env):
 - **Epic branch:** the focused files (250 tests) pass under both versions; ruff is clean; types are clean except the known `nemo_normalizer.py:98`.
 - **Pushed to `origin`** (fork only): the three PR branches and `epic-large-project-responsiveness` (`472a3ed6`). #8 and #9 are unchanged.
 - **Not re-measured:** the plan-store fingerprint adds one JSON encoding of the cleaned records under the writer, and the selection walk's statement count now follows lineage depth. Neither was re-measured on the real copy.
+
+### 2026-11-14: upstream CI on #149
+
+Upstream's CI on #149 failed `web-12` on Ubuntu and Windows: `test_standalone_segment_reader_matches_facade_and_forwards_every_keyword` (`tests/test_session_view_performance.py`) checks that the facade forwards every `list_segments` keyword unchanged, and the listing's new `operation` keyword, defaulting to `summary`, was missing from its keyword set. The test file was not one the branch changed, and the focused runs did not include its lane. Fixed by adding `"operation": "full"` to the set: `c0750bc5` on the PR branch (pushed, so #149 reruns), `073695cd` on the epic branch (pushed). `web-12-serial` passes on both, apart from the two Windows symlink tests that fail on any upstream checkout here. #149's "Frontend and contract" failure is the static bundle the PR leaves out on purpose. `fork-maintenance.md` section 3 step 6 now spells out running every lane with a test that exercises the changed code.
