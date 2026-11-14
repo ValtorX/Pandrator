@@ -538,3 +538,283 @@ Built 2026-11-13 from upstream `main` at `f449f03f` in `%USERPROFILE%\Source\Pan
 | `segment-listing-leaves-out-large-operations` | `02f2aef9` (`c810a683`, without the rebuilt `pandrator/web/static/`), `b3f52f1b` (`ce005f3f`) | 14 files, +267 / -7 | one-row page 876,840 to 3,640 bytes |
 
 The listing branch keeps the regenerated `openapi.json` and `api.generated.ts`, because its new query parameter changes them. It leaves out the rebuilt `pandrator/web/static/`: `npm --prefix web run build` regenerates it, and the PR body should say so.
+
+### Drafts (2026-11-14)
+
+Fork-internal CodeRabbit reviews (2026-11-14): ValtorX/Pandrator#5 to #9. #8 and #9 came back with no actionable comments and were opened upstream on the owner's go-ahead as lukaszliniewicz/Pandrator#148 (missing-only bulk copy) and #149 (segment listing), from upstream `main` `f449f03f`; their fork PRs were closed without merging. #5 (1 Minor), #6 (1 Minor) and #7 (1 Major and 1 Minor, both marked unverified) are being fixed by the 2.15 session on their PR branches.
+
+Round 2 (2026-11-14): the 2.15 session fixed CodeRabbit's findings on #5 (`5826e097`), #6 (`d6b24102`) and #7 (`34933587`), each with a test that fails without it, cherry-picked onto the epic branch (`5cb8b3a0`, `b0f38e4b`, `472a3ed6`). Replies went into #5's and #6's finding threads and a PR comment on #7; the re-reviews came back with no actionable comments and both threads were resolved. The two timings the fixes could move were re-measured with `admission_writer_holds.py`, 3 runs each, on fresh copies of `real`, upstream `main` `f449f03f` against each PR branch alone (`%USERPROFILE%\pandrator-perf\work-2-15-pr-round2-timing\`): selection save 0.559 / 0.560 / 0.584 s to 0.079 / 0.019 / 0.019 s (median 0.560 to 0.019 s), plan store 0.742 / 0.769 / 0.782 s to 0.200 / 0.130 / 0.196 s (median 0.769 to 0.196 s). The bodies below carry the fix bullets and these per-branch timings.
+
+Opened upstream on the owner's go-ahead (2026-11-14), from upstream `main` `f449f03f`: #150 (recast previews, `5826e097`), #151 (selection save, `d6b24102`) and #152 (Prepare text rows, `34933587`); the fork PRs were closed without merging. #151 was retitled "Walk only the chosen artifact's lineage when saving a stage selection" right after opening, because the final code walks the lineage in any session rather than narrowing it to the session. All five story 15 changes are now open upstream: #148 to #152.
+
+Drafted from the plan, `baseline-2-1.md` ("Story 14", "Story 15") and each branch's diff; every number checked against those records. Each Timings lead says what "with" was measured on: 2.15's branch carrying all five changes, none of which touches another's transaction.
+
+### Draft 1. abandoned-recast-previews-stop
+
+Commits: `9ded97d3` Stop an abandoned recast preview and cut its per-call cost
+Files: 8 files changed, 294 insertions(+), 7 deletions(-)
+
+**Title:** Stop an abandoned recast preview and cut its per-call cost
+
+**Body:**
+
+#### Summary
+A recast preview whose client has gone keeps running, and each one that runs makes every other request slower. After a few of them the app needs a restart. This PR makes the preview stop when its client leaves, and makes each preview call much cheaper.
+
+#### Reproduction
+1. Open a long cast project (about 5,000 segments here).
+2. Start `POST /api/v1/sessions/<id>/generation-recast/preview` and close the connection after a second (the Cast panel's refresh does this, and so does an MCP client with its 15 s limit).
+3. Watch the server: the preview keeps running to the end. Meanwhile a selection save, which takes 0.8 s on a fresh copy, took 28.66 s with one abandoned preview in flight. Over 45 minutes of UI and MCP use, the plan status summary went from 20 s to 120 s timeouts with 11 previews still running 380-2,492 s after their clients left.
+
+#### Root cause
+- The preview is a read-only POST, so neither the disconnect probe nor waitress's disconnect channel watched it. Both only watched GET and HEAD. `prepare_recast` also never checked whether its request was abandoned.
+- Each segment rebuilt and deep-copied the TTS service catalogue and re-proved every retained pin, because `generation_recast._effective` did not pass the context's catalogue cache, proof memo or provider registry on. One preview took 317-348 s (about 300,000 statements).
+- A CPU-bound preview makes every other thread wait for the GIL between SQLite steps, so row-heavy requests and writer holds stretch 10-40 times per running preview. Once previews fill the 12 waitress threads, even trivial requests queue.
+
+#### Fix
+- `9ded97d3`: `abandoned_requests.watches_disconnect(method, path)` names GET, HEAD and the recast preview POST. `http_lifecycle` (probe binding) and `api_server.ReadDisconnectChannel` both use it, so the read-only POST is watched like a read, and `prepare_recast` calls `raise_if_abandoned()` before each segment. `generation_recast._effective` now passes the context's catalogue cache to `apply_resolved_binding`, and its proof memo and provider registry to `resolve_project_cast_binding` and `validate_retained_cast_resolution`. `resolve_project_cast_binding` forwards the memo and proves its own access check and slot-lookup guard once per pass.
+- `5826e097`: the target-building pass, which deep-copies each target's controls (thousands with `include_missing=True`), also calls `raise_if_abandoned()` at each segment, so a departed client stops it there too.
+
+#### Timings
+One recast preview on a copy of a real 5,167-segment cast book, with the app run as installed (waitress with 12 threads and a separate worker). Without: 0.14.4 as released. With: 0.14.4 plus #146, this change and the four other focused changes we are offering separately; none of the others touches the preview path.
+
+| Request | Without this PR | With this PR |
+|---|---|---|
+| Preview, client that waits | 317-348 s, about 300,000 statements | 4.99-5.02 s, 10,507 statements |
+| MCP `pandrator_preview_recast` | timed out at 15 s | 4.95 s and 5.03 s |
+| Preview whose client left after 1 s | ran to the end | answered 499 at 1.014 s, 433 statements |
+
+A 28-minute workload (UI polls and bursts, MCP reads, a preview and a regenerate every 3 minutes), on the same two builds: with the changes, the plan status summary stayed at a median of 0.54-1.17 s per 5-minute window and the waitress queue peaked at 3; on 0.14.4 the same windows went 20 s, 66 s, 111 s, then 120 s timeouts, with the queue peaking at 85. That comparison credits the combination, though the abandoned previews were what stalled 0.14.4: the same workload with only this PR's catalogue-cache part applied stayed at 1.8-3.5 s.
+
+#### Tests
+- `tests/test_generation_recast_cost.py` (new):
+  - `test_preview_matches_the_old_preview_with_bounded_work`: the preview gives the same result as the old per-call path on a 12-segment cast plan, with at most 4 catalogue builds (was 14), 2 pin checks (was 20) and 2 access checks (was 40).
+  - `test_preview_stops_at_the_next_segment_once_its_client_leaves`: the loop stops at the next segment.
+  - `test_preview_stops_in_the_target_pass_once_its_client_leaves`: the target pass stops too; it fails without `5826e097`.
+  - `test_an_abandoned_preview_post_answers_499`: the route answers 499.
+- `tests/test_abandoned_reads.py`:
+  - `test_waitress_reports_a_closed_client_to_a_read_only_post_preview`: a real waitress server reports the departure to the preview POST.
+  - `test_only_reads_and_read_only_previews_watch_for_a_departed_client`: the predicate watches GET, HEAD and the preview POST, and no other method or path.
+- The new test file is added to a lane in `scripts/test_lanes.py`.
+
+#### Suggested release note
+A recast preview whose client has gone now stops instead of running for minutes, and each preview is far cheaper, so the app stays responsive during long Cast and MCP sessions.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+---
+
+### Draft 2. selection-save-reads-its-own-lineage
+
+Commits: `bb0be4d6` Narrow the stage selection save to the session's own lineage; `da1fe078` Follow a stage lineage through artifacts that have no session
+Files: 2 files changed, 136 insertions(+), 10 deletions(-)
+
+**Title:** Walk only the chosen artifact's lineage when saving a stage selection
+
+**Body:**
+
+#### Summary
+Saving a stage selection holds SQLite's single writer for about 0.54 s on a large project. Most of that time goes to loading every artifact edge in the database and every artifact of the session. This PR walks only the chosen artifact's own lineage.
+
+#### Reproduction
+1. Take a large project (here 15,324 session artifacts, and 46,267 artifact edges in the database).
+2. Save a stage selection (`choose_artifact`) and time the route's write transaction.
+
+#### Root cause
+`_edges` selected every `ArtifactEdge` in the database, and `choose_artifact` loaded whole `Artifact` rows for the session when it needs only `id` and `role`. Both ran while the writer was held.
+
+#### Fix
+- `bb0be4d6`: `choose_artifact` joins the edges to this session's artifacts and reads only artifact ids and roles. `_edges` takes a `session_id` for this. The other callers (`trash_stage_artifact`, `select_source_path`, `rerun_impact`) still read every edge, as before.
+- `da1fe078`: `Artifact.session_id` is nullable, and the unscoped walk continued through an ancestor that has no session. The scoped read dropped those edges and so stopped there, restoring fewer stages. It now also keeps edges whose child has no session.
+- `d6b24102`: a session-scoped read still lost a lineage that leaves the session and comes back (A in this session, B in another, C in this one again: choosing C lost A). `choose_artifact` now walks the chosen artifact's ancestors and descendants one frontier at a time, by `child_artifact_id IN frontier` and `parent_artifact_id IN frontier`, whatever session each artifact belongs to. It reads only the reachable edges through the indexes and gives the same result as the full-graph walk. `_edges` is back to its original form for the other callers.
+
+#### Timings
+The selection save's writer hold on a copy of a real project with 15,324 artifacts, 3 runs each, on upstream `main` (`f449f03f`) and on this branch:
+
+| | Upstream `main` | This PR |
+|---|---|---|
+| Writer hold, runs | 0.559 / 0.560 / 0.584 s | 0.079 / 0.019 / 0.019 s |
+| Writer hold, median | 0.560 s | 0.019 s |
+
+#### Tests
+`tests/test_web_artifact_selection.py` gains:
+- `test_selection_walk_reads_only_its_sessions_edges_and_artifact_roles`: the walk loads no edge from another session and no whole artifact, with the same result as before.
+- `test_selection_walk_passes_through_a_session_less_ancestor`: the lineage is followed through an ancestor with no session. It fails without the second commit.
+- `test_selection_of_an_unknown_or_wrong_role_artifact_is_refused`: an unknown artifact gives 404 and a wrong role gives 422, as before.
+
+#### Suggested release note
+Saving a stage selection on a large project barely holds the database writer, so other requests no longer wait for it.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+---
+
+### Draft 3. prepare-text-builds-plan-rows-first
+
+Commits: `398cd4fe` Build the plan's segment rows before Prepare text takes the writer
+Files: 9 files changed, 542 insertions(+), 117 deletions(-)
+
+**Title:** Build the plan's segment rows before Prepare text takes the writer
+
+**Body:**
+
+#### Summary
+Re-running Prepare text on a long book holds SQLite's single writer for about 0.78 s while it stores the speech plan. Every other write waits that long. This PR builds the segment rows before the write transaction starts and stores them with one bulk insert.
+
+#### Reproduction
+1. Take a book with about 5,000 segments and run Prepare text again.
+2. Time the write transaction that stores the plan (`store_generation_plan`).
+
+#### Root cause
+`store_generation_plan` normalised the records, remapped and parsed markup, and then added each segment one at a time with a flush per segment (5,174 flushes for 5,167 records), and rewrote `speech_plan_json` after the flush. All of it ran inside Prepare text's only write transaction.
+
+#### Fix
+- `398cd4fe`: `generation_plan_store.prepare_generation_plan_rows(...)` normalises the records, remaps and parses markup and computes the final `speech_plan_json`, with segment ids assigned up front (they are generated client-side). `store_generation_plan` accepts the prepared rows and inserts them in one bulk insert. If the `characters` it reads under the writer differ from the ones the rows were built from, it rebuilds them there; rows built for other records are refused. Prepare text builds the rows before `immediate_session` and passes them in through an optional `_prepare_generation_plan_rows` on `SourceWorkflowContext` (default `None`, so a context built without it stores as before). Other callers that already hold a writer work unchanged and get the bulk insert. The plan's digest and the stored rows are unchanged. The bulk insert uses `render_nulls=True`, because without it SQLAlchemy's ORM bulk insert splits rows whose `None` columns differ into separate batches.
+- `34933587`: prepared rows carry `records_key`, a fingerprint of the cleaned records and the settings, and the store rebuilds them under the writer when it no longer matches (a list changed in place, other settings, or equal content in another list), so a stale preparation still stores correct rows. Rows a committed store inserted are marked consumed and rebuilt with fresh segment ids if stored again, for example with `force_new=True`; after a rollback they stay usable. The commit is observed on the session's connection, because `Database.immediate_session` commits the connection rather than the Session.
+
+#### Timings
+The plan store's write transaction for 5,167 records on a copy of a real book, 3 runs each, on upstream `main` (`f449f03f`) and on this branch:
+
+| | Upstream `main` | This PR |
+|---|---|---|
+| Writer hold, runs | 0.742 / 0.769 / 0.782 s | 0.200 / 0.130 / 0.196 s |
+| Writer hold, median | 0.769 s | 0.196 s |
+
+In a run of the whole app with Prepare text jobs running, the job's writer hold was 0.29-0.34 s with this PR (1.5-1.8 s without it).
+
+#### Tests
+- `tests/test_generation_plan_store_bulk.py` (new):
+  - `test_bulk_store_gives_the_reference_rows_with_one_insert`: the rows equal those of a reference copy of the old per-segment store, inserted with one statement and no per-segment flush.
+  - `test_prepared_rows_are_stored_without_parsing_markup_in_the_writer`
+  - `test_prepared_rows_are_rebuilt_when_the_characters_changed`
+  - `test_prepared_rows_for_other_records_are_refused`
+  - `test_identical_content_keeps_the_active_revision`
+- `tests/test_generation_plan_store_bulk.py` also gains five tests for `34933587` (rows rebuilt when the records or settings changed, and rows already stored rebuilt with fresh ids but reusable after a rollback); each fails on the previous store.
+- `tests/test_web_workflow_handlers.py`: `test_prepare_text_builds_plan_rows_with_the_writer_free` writes and commits from another connection with a zero busy timeout while Prepare text builds its rows, and checks that the stored segment ids are the prepared ones. It also checks that a fault while building rows inserts none.
+- `tests/test_source_preparation_workspace_access.py`: the mid-write fault test now stores through the bulk path and still checks that the segment rows roll back.
+- `tests/test_web_backend_architecture.py` and `scripts/test_lanes.py` are adjusted for the new file and module shape.
+
+#### Suggested release note
+Re-running Prepare text on a long book holds the database writer for about a quarter of the time, so other requests stall less while it runs.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+---
+
+### Draft 4. missing-only-start-copies-takes-in-bulk
+
+Commits: `50bc2c02` Copy preserved takes in bulk when a missing-only run starts; `a84601d5` Test preserved-take copies across chunks and every conflict check
+Files: 4 files changed, 447 insertions(+), 37 deletions(-)
+
+**Title:** Copy preserved takes in bulk when a missing-only run starts
+
+**Body:**
+
+#### Summary
+Starting a missing-only run on a long book clones every preserved take inside admission's final write transaction, one take at a time. This PR does the copies in bulk and cuts that transaction from 3.734 s to 1.204 s (median of 3). It does not make the hold short: the commit still takes over a second, for the reasons below.
+
+#### Reproduction
+1. Take a book of about 5,167 segments in which 5,159 have a completed take and 8 are missing.
+2. Start a missing-only run and time admission's final write transaction (`BEGIN IMMEDIATE` to commit).
+
+#### Root cause
+`start_in_session` cloned each preserved take with its own reads (three `session.get` calls), an UPDATE and an INSERT, with autoflush, inside the write transaction. For 5,159 takes that is about 15,500 point reads and 15,600 flushes.
+
+#### Fix
+- `50bc2c02`: the checks read the takes with their segment status in chunks of 500, from the row state that is already collected and rechecked in the writer. The sources are made inactive with one chunked `UPDATE ... WHERE id IN` per chunk, and the clones go in with one bulk insert. The reuse checks keep their order: `take_reuse_reason` gains a column-value twin, `stored_take_reuse_reason`, for callers that load columns only, and stale-only mode still checks identity. A row that changed before the write still gives the existing guarded-start conflict.
+- `a84601d5`: tests across several chunks and each conflict check (see below). The reference loop keeps the revision check it had, and the docstring says the copies go in one INSERT.
+
+#### Timings
+Admission's commit transaction for a missing-only start (8 missing, 5,159 preserved) on a copy of a real 5,167-segment book, 3 runs each, on upstream `main` with and without this PR. "With" was measured on a branch carrying this change and four other focused changes we are offering separately; none of them touches this transaction:
+
+| | Upstream `main` | With this PR |
+|---|---|---|
+| Commit transaction, runs | 3.734 / 3.611 / 3.764 s | 1.184 / 1.252 / 1.204 s |
+| Commit transaction, median | 3.734 s | 1.204 s |
+| Whole admission job (wall) | 11.9-12.2 s | 9.5-9.8 s |
+
+Both runs preserved the same 5,159 takes: 5,159 copies made active and their sources made inactive.
+
+The hold is still over a second. In a profiled run the copy took 0.53 s: 0.247 s for the insert of 5,159 rows (each has five secondary indexes and four foreign keys), 0.119 s for the 11 chunked updates and 0.078 s to read the revision's active takes. The rest of the commit transaction (snapshot guards, row-state collection, resource keys, the stored snapshot's hash and copy, edit-copy inheritance) is about 0.65 s on its own. Going lower needs the copies out of the commit transaction, or no physical copies at all. Either changes how a run owns its takes, and this PR does not do that.
+
+#### Tests
+`tests/test_generation_preserved_take_clones.py` (new) compares the result with a reference copy of the old per-take loop:
+- `test_missing_only_copies_equal_the_per_take_loop` and `test_stale_only_copies_equal_the_per_take_loop`: same takes, status, artifact, kind, settings hash and duration. The source takes differ in these fields, so a copy of constants would be caught.
+- `test_copies_spanning_several_chunks_equal_the_per_take_loop`: more than one chunk of 500.
+- `test_copies_below_the_chunk_size_cost_one_update_and_one_insert`: statement counts, with no per-take read.
+- `test_no_copies_when_nothing_is_preserved`.
+- Conflicts: `test_a_take_missing_from_the_rechecked_state_conflicts`, `test_an_active_take_with_another_artifact_conflicts`, `test_a_deleted_artifact_conflicts`, `test_a_take_of_another_revision_conflicts` and `test_a_stale_only_take_whose_identity_no_longer_matches_conflicts`, plus `test_the_rechecked_state_itself_clones_without_conflict`.
+
+#### Suggested release note
+Starting a missing-only run on a long book holds the database writer for about a third of the time it did.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+---
+
+### Draft 5. segment-listing-leaves-out-large-operations
+
+Commits: `02f2aef9` Leave large operation values out of the segment listing by default; `b3f52f1b` Let MCP ask a segment listing for the whole operation
+Files: 14 files changed, 267 insertions(+), 7 deletions(-)
+
+**Title:** Leave large operation values out of the segment listing by default
+
+**Body:**
+
+#### Summary
+After a restore, every page of the segment listing carries the revision's whole `operation_json`, which makes even a one-segment page about 877 KB. This PR leaves large values out by default, names what it left out, and lets a caller ask for everything.
+
+The rebuilt static bundle (`pandrator/web/static/`) is left out of this PR. It is regenerated with `npm --prefix web run build`. The regenerated `openapi.json` and `web/src/lib/api.generated.ts` are included, because the new query parameter changes them.
+
+#### Reproduction
+1. Take a large project whose active revision comes from a restore.
+2. Request `GET /api/v1/sessions/<id>/generation-segments?limit=1` (or list one segment through MCP).
+
+#### Root cause
+A restore's `operation_json` carries a per-segment `mapping` and `lineage`. The listing put the whole value on every page: 873,410 of the 876,840 bytes of a one-row page.
+
+#### Fix
+- `02f2aef9`: the listing takes `operation=summary|full` (default `summary`). Summary leaves out each top-level `operation_json` value whose compact JSON is over 4 KB and names the keys in a sorted `operation_json_omitted`. The rule is by size, not by key, so later large values are covered. `action`, `reason`, `batch` and the revision ids stay. `full` returns everything with `operation_json_omitted: []`; any other value gives 422. The parameter is added to the route, the OpenAPI description and the typed client (`api-models.ts` also gains `operation_json_omitted`), and MCP passes the omitted keys through.
+- `b3f52f1b`: the MCP `list_generation_segments` tool takes the same `operation` option (default `summary`), passes it to the API and names it in the tool description. Its shorter views also name every operation key they leave out, not only the keys the server omitted.
+
+#### Timings
+Response size of one segment (`limit=1`) of a large project, in process, on upstream `main` with and without this PR:
+
+| Request | Upstream `main` | With this PR |
+|---|---|---|
+| default | 876,840 bytes (`operation_json` 873,410) | 3,640 bytes (`operation_json` 163; `lineage` and `mapping` omitted) |
+| `view=compact` | 874,384 bytes | 1,184 bytes |
+| `operation=full` | parameter ignored, 876,840 bytes | 876,868 bytes, whole `operation_json` |
+| `operation=bogus` | ignored, 200 | 422 |
+
+#### Tests
+`tests/test_generation_segment_operation_summary.py` (new):
+- `test_default_page_omits_large_operation_values_and_names_them`
+- `test_full_operation_on_request`
+- `test_an_unknown_operation_value_is_refused`
+- `test_small_operations_and_empty_plans_lose_nothing`
+- `test_summary_rule_is_by_size_not_by_key`
+- `test_mcp_asks_for_the_whole_operation_only_on_request`
+- `test_mcp_full_view_passes_the_server_summary_and_its_omissions`
+- `test_mcp_short_views_name_every_key_they_leave_out`
+- `test_mcp_full_operation_is_kept_whole_in_a_short_view`
+- `test_mcp_client_sends_operation_only_when_full`
+
+`tests/test_mcp_preview_and_generation.py` is updated for the new field.
+
+#### Suggested release note
+The segment listing no longer sends a restore's large per-segment maps on every page. Pass `operation=full` to get them.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+### Round 2 (2026-11-14): fixes for #5, #6 and #7
+
+Pushed to the fork PR branches; the owner answers the CodeRabbit threads.
+
+| Fork PR | Branch | New head | Fix commit | On the epic branch |
+|---|---|---|---|---|
+| #5 | `abandoned-recast-previews-stop` | `5826e097` | Stop an abandoned recast preview in its target pass too | `5cb8b3a0` |
+| #6 | `selection-save-reads-its-own-lineage` | `d6b24102` | Walk a selection's own lineage frontier by frontier, in any session | `b0f38e4b` |
+| #7 | `prepare-text-builds-plan-rows-first` | `34933587` | Rebuild prepared plan rows that no longer match or were already stored | `472a3ed6` |
+
+Draft 1's Fix and Tests sections need the new commit and `test_preview_stops_in_the_target_pass_once_its_client_leaves`. Drafts for #6 and #7 should describe the frontier walk, and the fingerprint with consumed rows, instead of the scoped edge read and the list-identity check. Details are in story 15's plan, Code Review, 2026-11-14.

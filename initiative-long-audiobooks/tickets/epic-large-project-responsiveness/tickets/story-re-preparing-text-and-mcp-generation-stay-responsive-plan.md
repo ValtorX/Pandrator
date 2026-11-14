@@ -187,3 +187,23 @@ Rejected:
 - Test hygiene (low; ruff passes; follows existing patterns).
 - waitress request without `path` (false: the real-waitress preview test would fail).
 - Commit `4d3ea915` message says chunked reads and per-chunk inserts (low; already committed; rewording is the owner's call).
+
+### 2026-11-14: CodeRabbit on the fork PRs
+
+The owner ran CodeRabbit on fork PRs ValtorX/Pandrator#5 to #9 (into `upstream-main` at `f449f03f`). #8 (bulk copy) and #9 (listing) were clean. The owner relayed four findings, each fixed on its PR branch in `Pandrator-pr` with a test that fails without the fix, then cherry-picked onto the epic branch:
+
+- [x] [Review][Patch] #5, `generation_recast.py:525`: the abandonment check covered only the first pass. The target-building pass, which deep-copies controls for every target (thousands with `include_missing`), now calls `raise_if_abandoned()` at each segment. `test_preview_stops_in_the_target_pass_once_its_client_leaves` fails without it. The first-pass test now counts its pre-loop checkpoints directly. Branch `5826e097`, epic `5cb8b3a0`.
+- [x] [Review][Patch] #6, `artifact_selection.py:66`: the session-scoped `_edges` lost A(S)->B(R)->C(S), which upstream's unscoped walk restores (`register_in_session` allows cross-session parents). `choose_artifact` now walks the chosen artifact's lineage one frontier at a time, ancestors by `child_artifact_id IN frontier` and descendants by `parent_artifact_id IN frontier`, in any session. Each step is a chunked indexed read (primary key and `idx_artifact_edges_child_parent`), so it reads only reachable edges. The descendant set replaces the closure check for later selections, and `_edges` is back to upstream's form for the other three callers. The tests compare against the full-graph walk:
+  - one and two foreign hops (fail without the fix);
+  - a later selection derived through two foreign hops is kept;
+  - every edge read is an `IN` over the chosen lineage and never touches an unrelated session's artifacts.
+
+  Branch `d6b24102`, epic `b0f38e4b`.
+- [x] [Review][Patch] #7, `generation_plan_store.py:202` (Major): prepared rows matched records only by list identity. They now carry `records_key`, a fingerprint of the cleaned records and the settings. The store rebuilds them under the writer when it no longer matches: a list changed in place, other settings, or equal content in another list (now reused rather than refused). Rebuilding was chosen over refusing so that a stale preparation still stores correct rows instead of failing the job.
+- [x] [Review][Patch] #7, `:273` (Minor): rows a committed store inserted are marked `consumed` and rebuilt with fresh ids if stored again (for example `force_new=True`). After a rollback they stay usable. The commit is watched on the session's connection (`commit`/`rollback` events, first end wins), because `Database.immediate_session` commits the connection rather than the Session. The listeners are instance-local, and a check showed none on the engine. Five new tests fail on the old store. Branch `34933587`, epic `472a3ed6`.
+
+Checks (uv env):
+- **PR branches:** each passes `check_pr_branch.py`, ruff and the lane check. Their focused tests pass under SQLAlchemy 2.0.52 and 2.1.8: recast 35, selection 19, plan store 169, bulk copy 52, listing 125 (`%USERPROFILE%\pandrator-perf\work-2-15-pr-round2\`).
+- **Epic branch:** the focused files (250 tests) pass under both versions; ruff is clean; types are clean except the known `nemo_normalizer.py:98`.
+- **Pushed to `origin`** (fork only): the three PR branches and `epic-large-project-responsiveness` (`472a3ed6`). #8 and #9 are unchanged.
+- **Not re-measured:** the plan-store fingerprint adds one JSON encoding of the cleaned records under the writer, and the selection walk's statement count now follows lineage depth. Neither was re-measured on the real copy.
