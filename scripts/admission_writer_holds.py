@@ -15,6 +15,17 @@ run itself stubbed out, with the payload, resolved snapshot and settings hash th
 resolves (as the workflow's `generate_audio` stage does), and times that route's writer holds and whether any of them
 contains the speech freeze or the identity pass.
 
+`--mode missing-only --missing <n>` first deactivates the active takes of the large
+plan's first n segments on the copy (so they are missing), then admits missing-only
+generation instead of a regenerate: the commit transaction then copies every other
+segment's preserved take into the run.
+
+`--route selection` times the stage selection save (`PUT .../stages/prepare_text/selection`,
+switching between the large project's two newest prepared texts) and `--route plan-store`
+times storing the active revision's records as a new plan revision inside one write
+transaction, the way Prepare text stores its plan (rows prepared before the writer when
+the checkout can). Both report each run's longest writer hold.
+
 Results hold timings, counts and function names only: no paths, titles or text.
 The root must be a copy outside any install. The JSON lands beside the root in
 `results/`, like the timing script's.
@@ -38,6 +49,7 @@ from typing import Any, Callable
 SLOW_HOLD_SECONDS = 0.25
 TARGET_MEDIAN_SECONDS = 0.75
 COMMIT_MARKER = "start_in_session (total)"
+ROUTE_TARGETS = {"selection": 0.25, "plan-store": 0.75}
 ADMISSION_FUNCTION = "run_generation_admission"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -179,6 +191,16 @@ def instrument_admission(recorder: HoldRecorder) -> None:
     recorder.instrument(workspace.GenerationService, "_start_source", "_start_source")
     recorder.instrument(GenerationSpeechPreparation, "publish", "speech preparation publish")
     recorder.instrument(workspace.GenerationService, "start_in_session", COMMIT_MARKER)
+    import pandrator.web.generation_selection as selection
+    from pandrator.web.jobs import JobQueue
+    from pandrator.web.workspace_settings import WorkspaceSettingsService
+
+    recorder.instrument(selection, "collect_row_state", "collect_row_state")
+    recorder.instrument(workspace.GenerationService, "_run_payload", "_run_payload")
+    recorder.instrument(JobQueue, "enqueue_in_session", "enqueue_in_session")
+    recorder.instrument(WorkspaceSettingsService, "resolve_in_session", "settings.resolve_in_session")
+    if hasattr(workspace, "_clone_preserved_takes"):
+        recorder.instrument(workspace, "_clone_preserved_takes", "_clone_preserved_takes")
     recorder.instrument(Session, "flush", "session.flush")
     recorder.instrument(Session, "commit", "session.commit")
 
@@ -375,6 +397,146 @@ def run_reviewable(args: argparse.Namespace, large: Any, output: Path) -> int:
     return 0
 
 
+def deactivate_first_segments(database_path: Path, revision_id: str, count: int) -> int:
+    """Make the first ``count`` segments of a revision missing: deactivate their active takes."""
+    import sqlite3
+
+    raw = sqlite3.connect(database_path)
+    try:
+        ids = [row[0] for row in raw.execute(
+            "select id from generation_segments where plan_revision_id=? and removed=0 "
+            "order by ordinal limit ?", (revision_id, count))]
+        marks = ",".join("?" * len(ids))
+        changed = raw.execute(
+            f"update audio_takes set is_active=0 where is_active=1 and generation_segment_id in ({marks})",
+            ids).rowcount
+        raw.commit()
+        return changed
+    finally:
+        raw.close()
+
+
+def plan_records(database: Any, revision_id: str) -> list[dict[str, Any]]:
+    """The active revision's segments as the records Prepare text would store."""
+    from sqlalchemy import select
+
+    from pandrator.web.models import GenerationSegment
+
+    records = []
+    with database.snapshot_session() as session:
+        for segment in session.scalars(select(GenerationSegment).where(
+                GenerationSegment.plan_revision_id == revision_id,
+                GenerationSegment.removed.is_(False)).order_by(GenerationSegment.ordinal)):
+            plan = dict(segment.speech_plan_json or {})
+            records.append({
+                "text": segment.text, "tts_optimized_sentence": segment.optimized_text or "",
+                "speech_plan": plan, "speech_xml": plan.get("speech_xml"),
+                "paragraph": "yes" if segment.paragraph_break_after else "no",
+                "speaker": segment.speaker, "language": segment.language,
+                "source_segment_ids": list(segment.source_segment_ids_json or []),
+            })
+    return records
+
+
+def run_route(args: argparse.Namespace, large: Any, output: Path) -> int:
+    """Time the selection save or the plan store's writer hold, ``args.runs`` times."""
+    import sqlite3
+
+    from pandrator.web.jobs import JobQueue
+    from pandrator.web.workflow_handlers import WorkflowHandlers
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    results: dict[str, Any] = {
+        "schema_version": 1, "label": args.label or args.root.name, "mode": f"{args.route}-holds",
+        "started_at": datetime.now(UTC).isoformat(), "checkout": timing.git_revision(),
+        "target_median_seconds": ROUTE_TARGETS[args.route],
+        "projects": {"large": timing.describe_project(large)}, "runs": [],
+    }
+
+    def save() -> None:
+        output.write_text(json.dumps(results, indent=2), encoding="utf-8")
+
+    app, token, _worker, gpu_probe = timing.build_services(args.root, hold_seconds=0.0,
+                                                            cancel_in_process=True)
+    services = app.extensions["pandrator"]
+    database = services["database"]
+    recorder = HoldRecorder(database.engine)
+    client = app.test_client()
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        if args.route == "selection":
+            raw = sqlite3.connect(f"file:{args.root / 'pandrator.sqlite3'}?mode=ro", uri=True)
+            prepared = [row[0] for row in raw.execute(
+                "select id from artifacts where session_id=? and role='prepared_text' "
+                "and state!='deleted' order by created_at", (large.session_id,))]
+            raw.close()
+            if len(prepared) < 2:
+                print("Refused: the large project needs two prepared texts to switch between.",
+                      file=sys.stderr)
+                return 2
+        else:
+            handlers = WorkflowHandlers(database, services["paths"], jobs=JobQueue(database))
+            records = plan_records(database, large.active_revision_id)
+            results["records"] = len(records)
+            results["records_with_markup"] = sum(1 for item in records if item.get("speech_xml"))
+        for run in range(1, args.runs + 1):
+            recorder.take()
+            started = time.perf_counter()
+            if args.route == "selection":
+                current = client.get(
+                    f"/api/v1/sessions/{large.session_id}/stages/prepare_text/artifacts",
+                    headers=headers).get_json() or {}
+                selected = current.get("selected_artifact_id")
+                target = next(item for item in reversed(prepared) if item != selected)
+                started = time.perf_counter()
+                response = client.put(
+                    f"/api/v1/sessions/{large.session_id}/stages/prepare_text/selection",
+                    json={"artifact_id": target},
+                    headers={**headers, "If-Match": f'"{current.get("revision", 0)}"',
+                             "Idempotency-Key": str(uuid.uuid4())})
+                status = response.status_code
+                holds = [item for item in recorder.take()
+                         if "workflow_stage_selection" in item["where"]]
+            else:
+                prepare = getattr(handlers, "_prepare_generation_plan_rows", None)
+                prepared_rows = (prepare(large.session_id, records, settings={})
+                                 if prepare is not None else None)
+                recorder.take()
+                extra = {"prepared_rows": prepared_rows} if prepared_rows is not None else {}
+                with database.immediate_session() as unit:
+                    handlers._store_generation_plan(
+                        large.session_id, records, settings={},
+                        source_artifact_id=f"holds-{uuid.uuid4()}", db_session=unit,
+                        force_new=True, **extra)
+                status = 200
+                holds = recorder.take()
+            elapsed = time.perf_counter() - started
+            longest = max((item["seconds"] for item in holds), default=0.0)
+            entry = {"run": run, "status": status, "seconds": round(elapsed, 3),
+                     "writer_holds": len(holds), "longest_hold_seconds": round(longest, 3)}
+            results["runs"].append(entry)
+            print(f"{args.route} run {run}: HTTP {status}, {elapsed:.2f}s, "
+                  f"{len(holds)} writer holds, longest {longest:.3f}s", flush=True)
+            save()
+        longest = [item["longest_hold_seconds"] for item in results["runs"]]
+        median = statistics.median(longest)
+        results["summary"] = {
+            "longest_hold_median_seconds": round(median, 3),
+            "within_target": median <= ROUTE_TARGETS[args.route],
+        }
+        results["finished_at"] = datetime.now(UTC).isoformat()
+        save()
+        print(f"{args.route}: longest hold median {median:.3f}s "
+              f"(target {ROUTE_TARGETS[args.route]}s: "
+              f"{'met' if median <= ROUTE_TARGETS[args.route] else 'NOT met'})")
+        print(f"Results: {output.name}")
+    finally:
+        recorder.close()
+        gpu_probe.stop()
+        database.dispose()
+    return 0
+
+
 def describe(holds: list[dict[str, Any]]) -> dict[str, Any]:
     commit = [item for item in holds if item["admission_commit"]]
     fallback = not commit
@@ -451,9 +613,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--large-segments", type=int, default=5000, help="Target size of the large plan.")
     parser.add_argument("--small-segments", type=int, default=189, help="Target size of the small plan.")
     parser.add_argument("--large-session", help="Session id of the large project.")
-    parser.add_argument("--route", choices=("admission", "reviewable"), default="admission",
-                        help="Which start route to time (default: generation admission).")
+    parser.add_argument("--route", choices=("admission", "reviewable", "selection", "plan-store"),
+                        default="admission",
+                        help="Which route to time (default: generation admission).")
+    parser.add_argument("--mode", choices=("regenerate", "missing-only"), default="regenerate",
+                        help="Admission kind (default: regenerate the first --sizes segments).")
+    parser.add_argument("--missing", type=int, default=8,
+                        help="With --mode missing-only: segments made missing before the admissions.")
     args = parser.parse_args(argv)
+    if args.mode == "missing-only":
+        if args.route != "admission":
+            parser.error("--mode missing-only applies to the admission route only.")
+        if args.missing < 1:
+            parser.error("--missing must be at least 1.")
+        args.sizes = str(args.missing)
     args.root = args.root.expanduser().resolve()
     if args.runs < 1:
         parser.error("--runs must be at least 1.")
@@ -482,6 +655,16 @@ def main(argv: list[str] | None = None) -> int:
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         return run_reviewable(args, large, args.out or args.root.parent / "results"
                               / f"{label}-reviewable-holds-{stamp}.json")
+    if args.route in ROUTE_TARGETS:
+        label = args.label or args.root.name
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        return run_route(args, large, args.out or args.root.parent / "results"
+                         / f"{label}-{args.route}-holds-{stamp}.json")
+    missing_only = args.mode == "missing-only"
+    if missing_only:
+        made = deactivate_first_segments(args.root / "pandrator.sqlite3",
+                                         large.active_revision_id, args.missing)
+        print(f"Made {args.missing} segments missing ({made} active takes deactivated).", flush=True)
     sizes = args.sizes
     if max(sizes) > len(large.first_segment_ids):
         # A larger size would admit only the ids there are, under a misleading label.
@@ -494,6 +677,7 @@ def main(argv: list[str] | None = None) -> int:
     output.parent.mkdir(parents=True, exist_ok=True)
     results: dict[str, Any] = {
         "schema_version": 1, "label": label, "mode": "writer-holds",
+        "admission": "missing-only" if missing_only else "regenerate",
         "started_at": datetime.now(UTC).isoformat(), "checkout": timing.git_revision(),
         "slow_hold_seconds": SLOW_HOLD_SECONDS, "target_median_seconds": TARGET_MEDIAN_SECONDS,
         "projects": {"large": timing.describe_project(large)}, "runs": [],
@@ -514,7 +698,8 @@ def main(argv: list[str] | None = None) -> int:
             for run in range(1, args.runs + 1):
                 response = client.post(
                     f"/api/v1/sessions/{large.session_id}/generation-admissions",
-                    json={"operation": "regenerate", "segment_ids": large.first_segment_ids[:size]},
+                    json=({"missing_only": True} if missing_only else
+                          {"operation": "regenerate", "segment_ids": large.first_segment_ids[:size]}),
                     headers={**headers, "Idempotency-Key": str(uuid.uuid4())},
                 )
                 if response.status_code != 202:
