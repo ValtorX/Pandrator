@@ -3,7 +3,7 @@ title: 'Re-preparing text and MCP generation stay responsive'
 type: bugfix
 ticket: 15
 created: '2026-11-13'
-status: built
+status: done
 baseline_revision: '9f0d0441375a5af5d876dbe1106064f5867ae6b8'
 route: full
 route_source: auto
@@ -147,3 +147,43 @@ The `operation_json` cut uses a size rule, not a key list, so later operations w
 - `uvx ruff@0.17.3 check .`, `<uv env> --with sqlalchemy==2.0.52 python scripts/check_types.py`, `<uv env> python scripts/test_lanes.py check`, `<uv env> python scripts/check_docs.py` -- expected: clean (except the known `nemo_normalizer.py:98`)
 - `python scripts/generate_web_contract.py`, `npm --prefix web run generate-api`, `npm --prefix web run build`, `npm --prefix web run check:assets`, `npm --prefix web run quality`, `npm --prefix web run test:unit` -- expected: regenerated files differ only by the new parameter, and the checks pass
 - `<uv env> python _bmad-output/scripts/admission_writer_holds.py --root <fresh real copy> --mode missing-only --missing 8 --runs 3` and the `selection` and `plan-store` routes -- expected: targets above met; recorded in `baseline-2-1.md`
+
+## Code Review
+
+### 2026-11-13
+
+**Code review complete.** 4 `decision-needed`, 5 `patch`, 0 `defer`, 22 rejected. Lenses: blind-hunter, edge-case-hunter, verification-gap and intent-alignment, on `9f0d0441..4d3ea915`.
+
+- [x] [Review][Decision] MCP listing has no way to request the whole operation_json — MCP's default view is `full`, which used to pass the whole operation_json through. The server now defaults to `operation=summary`, and the MCP client never sends `operation`, so an MCP caller cannot ask for `mapping`/`lineage`. For example, a resegmentation draft's mapping over a 24,000-character range exceeds 4 KB. Options: (a) add `operation: "summary"|"full"` (default summary) to the MCP `list_generation_segments` input, pass it through, and name it in the tool description and audiobook guide; (b) send `operation=full` when `view=full`, which brings back the 900 KB MCP pages; (c) keep as is: MCP gets the summary plus `operation_json_omitted`. Recommended: (a) — it matches the intent's "unless asked for it"; the new MCP field is public surface. **Owner (2026-11-13): (a).** Done: `operation` on the MCP tool input, client and registration, with the tool description; tests in `tests/test_generation_segment_operation_summary.py`; fork release note extended.
+- [x] [Review][Decision] Missing-only admission commit hold 1.204 s against AC 1's 0.75 s — carried over from the first review (triage #1) with no recorded answer. Options: (a) accept 1.204 s and amend AC 1; (b) keep AC 1 and add a story for runs that own preserved takes without copying them; (c) keep this story open. Recommended: (b) — the remaining cost is SQLite's own write of 5,159 indexed rows on story 9's floor, which this plan's approach cannot remove. **Owner (2026-11-13): (b).** Story 2.16 added to the epic's `tickets.toml` and now owns AC 1's target.
+- [x] [Review][Decision] Upstream task open — carried over from the first review (triage #2). The work is now committed one commit per change (`c01fc544`, `230b5d73`, `59e69e9f`, `c810a683`, `4d3ea915`), so section 3 can run. Options: (a) build the focused branches now and run `check_pr_branch.py`, with pushes and PRs left to the owner; (b) close the story without them and track upstream separately. Recommended: (a). **Owner (2026-11-13): (a).** Done: on the owner's word the fixes were committed on the epic branch (`19179f5d`, `ce005f3f`, `ec5b3c81`). Five branches were built in `Pandrator-pr` from upstream `f449f03f` (see `upstream-pr-drafts.md` section 12). All pass `check_pr_branch.py`, ruff and the lane check, and their focused tests pass under SQLAlchemy 2.0.52 and 2.1.8 (`%USERPROFILE%\pandrator-perf\work-2-15-pr\`). Pushes, PRs, the pre-review and the fork PR review stay owner steps (section 3, steps 5, 8 and 9).
+- [x] [Review][Decision] Scoped edge read may cut lineage through a session-less or foreign artifact — `Artifact.session_id` is nullable. `_edges(session, session_id)` drops edges whose child has no session, where the old walk continued through them. Unverified (maybe-false); if real, the selection save restores fewer stages. Options: (a) widen the scoped read to children in the session or with no session, and add a test with a session-less ancestor; (b) leave it, recording why no such lineage exists. Recommended: (a) — cheap, and it keeps the hold small. **Owner (2026-11-13): (a).** Done: `_edges` reads children in the session or with no session; `test_selection_walk_passes_through_a_session_less_ancestor` fails without the change.
+- [x] [Review][Patch] Bulk copy untested past one 500-take chunk [tests/test_generation_preserved_take_clones.py]
+- [x] [Review][Patch] Conflict tests skip the artifact-mismatch, deleted-artifact and stale-identity branches [tests/test_generation_preserved_take_clones.py]
+- [x] [Review][Patch] MCP non-full view forwards the server's `operation_json_omitted` without its own projection [pandrator_mcp/tools/generation.py:208]
+- [x] [Review][Patch] `_clone_preserved_takes` docstring misstates the statement count (one INSERT, not one per 500) [pandrator/web/workspace.py:2768]
+- [x] [Review][Patch] Test reference loop omits the original `plan_revision_id` check [tests/test_generation_preserved_take_clones.py:31]
+
+Patches applied (2026-11-13), uncommitted. Focused tests (`test_generation_preserved_take_clones`, `test_generation_segment_operation_summary`, `test_web_artifact_selection`, `test_mcp_preview_and_generation`, `test_mcp_generation_registration`, `test_mcp_application_client`, `test_generation_missing_only`, `test_web_workflow_selection_concurrency`, `test_mcp_architecture`): 197 passed, 1 skipped under SQLAlchemy 2.0.52 and 2.1.8 (uv env); ruff clean; types clean except the known `nemo_normalizer.py:98`; `test_lanes.py check` passes. The fixes are committed and the upstream branches are built, so the story is marked `done` under the owner's closing rule. The plan's Upstream task stays open for the push and the PRs.
+
+Rejected:
+- Selection save still in the writer, with no writer-hold test (false: hold 0.133 s measured; the 28.6 s was preview contention, fixed in replay-4).
+- 20-52 s Run waits not shown gone (false: replay-4 has 0.78-4.06 s).
+- No admission-path hunk for MCP regenerate (false: the cause was abandoned previews; replay-4 has 0.216 s).
+- No evidence for R1/R5 (false: replay-4 has locked 0 and WAL 7-12 MB).
+- Clone checks use pre-captured row_state (false: rechecked equal at the writer's start; changed columns read fresh).
+- REST default changed with no release note (false: `fork-release-notes.md` line 15; the default is the frozen intent).
+- OpenAPI response lacks `operation_json_omitted` (false: the response schema declares no page fields).
+- Summary still loads the whole column (low; the payload goal is met; a deferred column adds complexity).
+- Restore mutation response still returns the whole operation (low, pre-existing; would add a mutation parameter).
+- Other plan-store callers parse inside the writer (low; they get the bulk insert; moving the parse restructures four callers the plan scoped out).
+- Prepared rows unchecked against settings (false: the only caller passes the same settings and does not mutate records).
+- Row preparation not cancellable mid-way (low; checked before and after; plumbing is extra complexity).
+- Hand-coded column defaults drift silently (false: the bulk tests compare against ORM references that apply the defaults).
+- Two bulk-insert paths (low; both measured; the change log explains `render_nulls`).
+- `identities[segment_id]` KeyError, raised twice (false: same subscript as the replaced loop).
+- Read-only POST allowlist unenforced or path mismatch (low; no URL prefix is served; an architecture test is extra machinery).
+- Unscoped `_edges` in three sibling functions (low; recorded in the change log as outside the measured hold).
+- Test hygiene (low; ruff passes; follows existing patterns).
+- waitress request without `path` (false: the real-waitress preview test would fail).
+- Commit `4d3ea915` message says chunked reads and per-chunk inserts (low; already committed; rewording is the owner's call).

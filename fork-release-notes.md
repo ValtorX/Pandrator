@@ -12,7 +12,7 @@ once an upstream release ships it.
   - The app no longer slows to a crawl after a while of agent (MCP) use or with the Cast panel open on a long book, the slowdown that only a restart used to clear. A recast preview checked every character line against a freshly rebuilt speech provider list, so on a long book it ran for minutes, and it kept running after the Cast panel or MCP had stopped waiting; a few of them left over made every other request, writes included, many times slower. A preview is now much faster and stops as soon as its client gives up.
   - Starting missing-only generation on a long book that already has most of its audio no longer blocks other requests' writes for several seconds while it carries the existing takes over.
   - Re-running Segment narration on a long book no longer blocks other requests' writes while it saves the new segments, and switching a stage's selected result no longer reads every artifact link in the database.
-  - A page of segments no longer carries a restored plan revision's whole per-segment mapping: large values of the revision's operation are left out and named in `operation_json_omitted`, and `operation=full` returns them.
+  - A page of segments no longer carries a restored plan revision's whole per-segment mapping: large values of the revision's operation are left out and named in `operation_json_omitted`, and `operation=full` returns them. The MCP `pandrator_list_generation_segments` tool takes the same `operation` option, and its shorter views name every operation key they leave out.
 
 ## Merged upstream, not yet released
 

@@ -524,3 +524,17 @@ On the owner's go-ahead (2026-11-13) we timed it on fresh copies of `real`, alte
 Response bodies were not compared; #146's own tests check that identities and reuse are unchanged. #146 reaches the fork with whichever upstream merge follows its merge.
 
 The maintainer merged #146 unchanged on 2026-11-13 (`5997edb5`, merged as `f449f03f`; `git range-diff` shows it identical to the `a7190f98` we timed, only rebased onto 0.14.4) and closed #145 as completed, quoting our timing (6.55 s to 5.85 s, -10.7%) and saying it ships in 0.14.5. It reaches the fork with the 0.14.5 merge.
+
+## 12. Story 15: five focused branches (built, not pushed)
+
+Built 2026-11-13 from upstream `main` at `f449f03f` in `%USERPROFILE%\Source\Pandrator-pr`, by cherry-picking the epic branch's commits. Each branch has its code review's fix picked onto the change it belongs to. All five pass `check_pr_branch.py`, and no release-notes hunk is involved. They are independent of each other; the one conflict, a neighbouring line in `scripts/test_lanes.py` on the bulk-copy branch, was resolved by keeping only that branch's line. Nothing is pushed, and no PR is opened without the owner's go-ahead. Still to do by section 3: the pre-review (step 5), the fork PR review (step 8), drafting the bodies (step 9) and, for the speed claims, before and after runs on upstream `main`. Story 15's before runs were made on `9f0d0441`, whose product code equals `f449f03f` except `version.py` and `identity.py`; see `baseline-2-1.md`, "Story 15".
+
+| Branch | Commits (from epic branch) | Size | Timing to quote |
+|---|---|---|---|
+| `abandoned-recast-previews-stop` | `9ded97d3` (`c01fc544`) | 8 files, +294 / -7 | preview 317-348 s to about 5 s; an abandoned preview answers 499 within about 1 s |
+| `selection-save-reads-its-own-lineage` | `bb0be4d6` (`230b5d73`), `da1fe078` (`19179f5d`) | 2 files, +136 / -10 | selection save writer hold 0.541 to 0.133 s |
+| `prepare-text-builds-plan-rows-first` | `398cd4fe` (`59e69e9f`) | 9 files, +542 / -117 | plan store writer hold 0.779 to 0.199 s |
+| `missing-only-start-copies-takes-in-bulk` | `50bc2c02` (`4d3ea915`), `a84601d5` (`ec5b3c81`) | 4 files, +447 / -37 | missing-only commit hold 3.734 to 1.204 s |
+| `segment-listing-leaves-out-large-operations` | `02f2aef9` (`c810a683`, without the rebuilt `pandrator/web/static/`), `b3f52f1b` (`ce005f3f`) | 14 files, +267 / -7 | one-row page 876,840 to 3,640 bytes |
+
+The listing branch keeps the regenerated `openapi.json` and `api.generated.ts`, because its new query parameter changes them. It leaves out the rebuilt `pandrator/web/static/`: `npm --prefix web run build` regenerates it, and the PR body should say so.

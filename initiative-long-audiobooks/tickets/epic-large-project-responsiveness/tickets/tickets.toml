@@ -174,3 +174,15 @@ after = [14]
 hitl = false
 risk = "medium"
 notes = ["Added by the owner (2026-11-13) from story 14's findings. Losing reuse when Segment narration is re-run, and the UI's Run again (no feedback, skipped confirmation, repeated clicks), went to epic 4 (R15, R16) instead."]
+
+[[entry]]
+id = 16
+type = "story"
+title = "A missing-only start's preserved takes stop costing the writer"
+description = "Story 15 cut a missing-only admission's commit hold on the real 5,167-segment book from 3.734 s to 1.204 s (median of 3), but its 0.75 s target was not met. What is left is SQLite's own insert of 5,159 copies and the update of their sources, each row carrying five secondary indexes and four foreign keys (about 0.45 s), on top of story 9's 0.65 s floor. Meeting the target changes how a run owns its preserved takes: either the copies leave the commit transaction (the run exists before its preserved takes do), or the run points at the preserved takes without copying them. Take reuse, selection, assembly and history keep their results."
+verify = "On a fresh copy of the real data with 8 segments missing, a missing-only admission's commit transaction holds the writer for at most 0.75 s (median of 3) and the run preserves the same 5,159 takes; tests count statements and writer holds, not time; the result is recorded in baseline-2-1.md."
+covers = ["R6"]
+after = [15]
+hitl = false
+risk = "high"
+notes = ["Added from story 15's code review (2026-11-13): the owner chose a new story over amending story 15's AC 1. Evidence: baseline-2-1.md, 'Story 15', 'Why missing-only misses 0.75 s'."]
