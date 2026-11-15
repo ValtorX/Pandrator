@@ -37,6 +37,7 @@ from .schemas import (
     OutputMixPreviewRequest,
 )
 from .settings_policy import RevisionConflict as WorkspaceRevisionConflict
+from .workspace import copy_preserved_takes_after_start
 
 
 def register_generation_routes(
@@ -697,6 +698,7 @@ def register_generation_routes(
                         resource_kind="generation_run",
                         resource_id=str(result["id"]),
                     )
+                copy_preserved_takes_after_start(database, prepared, result)
             except (IdempotencyConflict, IdempotencyInProgress) as error:
                 return idempotency_failure(error)
             except KeyError:

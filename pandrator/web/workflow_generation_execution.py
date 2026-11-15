@@ -298,6 +298,15 @@ def _run_generation(
         raise ValueError("The selected speech plan changed after generation was queued. Review and submit it again.")
     if audio_identity_changed:
         raise ValueError("A voice reference changed after generation was queued. Start a new run to use the current voice consistently.")
+    if settings_snapshot.get("missing_only") or settings_snapshot.get("stale_only"):
+        # The start copies its preserved takes after its commit; complete any
+        # copy a crash or a failed copy left unmade before generating, so
+        # reuse, assembly and finalization see every one. A no-op once done.
+        from .workspace import copy_preserved_takes
+
+        copy_preserved_takes(
+            context.database, run_id, None, prove=prove, snapshot=settings_snapshot
+        )
     workflow_kind = context._session_record(session_id).workflow_kind
     completion_progress = progress
     second_pass = None if is_audio_version else context._voiceover_second_pass(

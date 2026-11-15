@@ -29,7 +29,11 @@ from .project_settings_policy import validate_project_speech_preferences
 from .schemas import GenerationStartRequest
 from .settings_identity import settings_workspace_id
 from .settings_policy import stable_hash
-from .workspace import GenerationService, _settings_source_mode
+from .workspace import (
+    GenerationService,
+    _settings_source_mode,
+    copy_preserved_takes_after_start,
+)
 from .workspace_settings import WorkspaceSettingsService
 
 STALE_INPUTS_MESSAGE = (
@@ -356,6 +360,9 @@ def run_generation_admission(
         if stale:
             raise GenerationAdmissionStaleInputs(STALE_INPUTS_MESSAGE)
         assert marker is not None
+        copy_preserved_takes_after_start(
+            database, prepared, {"id": marker["generation_run_id"]}
+        )
         progress(1.0, "Generation queued")
         return marker
     finally:
