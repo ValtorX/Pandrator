@@ -482,7 +482,10 @@ class PreservedTakeCloneTests(unittest.TestCase):
             session_id=session_id, metadata={},
         )
         with self.database.session() as session:
-            session.get(Artifact, deleted.id).state = "deleted"
+            gone = session.get(Artifact, deleted.id)
+            gone.state = "deleted"
+            # As both deletion paths record it: deleted before the start.
+            gone.metadata_json = {"deleted_at": "2000-01-01T00:00:00+00:00"}
             session.add(AudioTake(
                 generation_segment_id=ids[0], status="failed", is_active=True,
             ))
@@ -536,6 +539,44 @@ class PreservedTakeCloneTests(unittest.TestCase):
             sorted(ids[1:3]), sorted(take.generation_segment_id for take in self._run_owned(run_id)),
         )
         self.assertEqual([later_id], self._active(ids[:1])[ids[0]])
+
+    def test_the_derived_map_never_stands_in_for_a_take_that_lost_its_audio(self):
+        # Two active completed takes: an older one, then the one the start
+        # preserves. The preserved take's audio is deleted before the job
+        # runs. The prepared map skips that segment; the derived one must not
+        # copy the older take in its place, which is other audio.
+        session_id, _revision, ids = self._create_case(
+            texts=[f"Block number {index}." for index in range(4)],
+        )
+        older_artifact = self.services["artifacts"].register(
+            self._wave_path("older"), kind="audio", role="generation_take",
+            session_id=session_id, metadata={},
+        )
+        with self.database.session() as session:
+            older = AudioTake(
+                generation_segment_id=ids[0], artifact_id=older_artifact.id,
+                status="completed", is_active=True, duration_ms=100,
+            )
+            session.add(older)
+            session.flush()
+            older_id = older.id
+        self._seed_completed(session_id, ids[:3], self._override())
+        run_id, items, _writers = self._start_without_copy(session_id, missing_only=True)
+        self.assertNotEqual(older_id, items[ids[0]])
+        with self.database.session() as session:
+            artifact = session.get(Artifact, session.get(AudioTake, items[ids[0]]).artifact_id)
+            artifact.state = "deleted"
+            artifact.metadata_json = {
+                **dict(artifact.metadata_json or {}),
+                "deleted_at": workspace.utcnow().isoformat(),
+            }
+        with self.assertLogs("pandrator.web.workspace", level="WARNING") as logs:
+            derived = self._derived(run_id)
+        self.assertIn(f"{run_id} left 1 preserved segments uncopied", "\n".join(logs.output))
+        self.assertEqual({key: items[key] for key in ids[1:3]}, derived)
+        self.assertEqual(2, copy_preserved_takes(self.database, run_id, None))
+        self.assertEqual(0, copy_preserved_takes(self.database, run_id, None))
+        self.assertIn(older_id, self._active(ids[:1])[ids[0]])
 
     def test_the_derived_map_prefers_the_guarded_take_over_its_earlier_copy(self):
         # A second missing-only run preserves the first run's copies; their
