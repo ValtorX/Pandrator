@@ -2834,7 +2834,10 @@ def copy_preserved_takes_after_start(
         copy_preserved_takes(database, run_id, preserved_items)
     except Exception:
         _LOGGER.exception(
-            "Copying preserved takes after the start failed; the generation job copies them."
+            "Copying %d preserved takes after the start of generation run %s failed; "
+            "its generation job copies them.",
+            len(preserved_items),
+            run_id,
         )
 
 
@@ -2846,12 +2849,23 @@ def _preserved_copy_context(
     Only a run whose snapshot is missing-only or stale-only preserves takes.
     Without ``snapshot`` the keys are extracted in SQL, so the stored snapshot
     (megabytes on a long book) is never fetched or decoded whole.
+
+    A missing-only or stale-only start is always a ``generate`` with no source
+    run. A regenerate of selected segments merges its source run's snapshot,
+    flags included, so a run with a source run or another operation never
+    preserves, whatever its snapshot says.
     """
-    plan_revision_id = session.scalar(
-        select(GenerationRun.plan_revision_id).where(GenerationRun.id == run_id)
-    )
-    if plan_revision_id is None:
+    run = session.execute(
+        select(
+            GenerationRun.plan_revision_id,
+            GenerationRun.operation,
+            GenerationRun.source_generation_run_id,
+        ).where(GenerationRun.id == run_id)
+    ).one_or_none()
+    if (run is None or run.plan_revision_id is None or run.operation != "generate"
+            or run.source_generation_run_id is not None):
         return None
+    plan_revision_id = run.plan_revision_id
     extracted: dict[str, Any]
     if snapshot is None:
         column = GenerationRun.settings_snapshot_json
@@ -3056,9 +3070,9 @@ def _copyable_preserved_takes(
             continue
         if not missing_only:
             identity = identities.get(segment_id)
-            if not isinstance(identity, dict) or stored_take_reuse_reason(
+            if not isinstance(identity, Mapping) or stored_take_reuse_reason(
                 source.segment_status, source.status, source.artifact_state,
-                source.artifact_metadata, identity,
+                source.artifact_metadata, dict(identity),
             ) != "reusable":
                 continue
         if source.is_active:

@@ -235,6 +235,48 @@ class PreservedTakeCloneTests(unittest.TestCase):
                 session, run_id, revision_id, request_ids, guards,
             )
 
+    def _run_job(self, run_id: str, calls: list[str] | None = None) -> dict[str, Any]:
+        """Run the run's ``generation.run`` job in process with a silent provider."""
+        from pydub import AudioSegment
+
+        with self.database.session() as session:
+            job_id = session.get(GenerationRun, run_id).job_id
+        payload = missing_tests.GenerationMissingOnlyTests._job_payload(self, job_id)
+        capabilities = TtsCapabilities(batch_synthesis=False, streaming_batch=False)
+
+        def synthesize(text, _settings, **_kwargs):
+            if calls is not None:
+                calls.append(text)
+            return AudioSegment.silent(duration=20)
+
+        with (
+            patch.object(self.handlers.tts_providers, "synthesize", side_effect=synthesize),
+            patch.object(
+                self.handlers.tts_providers, "synthesis_capabilities", return_value=capabilities,
+            ),
+        ):
+            return self.handlers.run_generation(
+                {
+                    "generation_run_id": run_id,
+                    "segment_ids": payload["segment_ids"],
+                    "operation": payload["operation"],
+                },
+                lambda *_: None,
+                threading.Event(),
+            )
+
+    def _active(self, ids: list[str]) -> dict[str, list[str]]:
+        """Each segment's active take ids."""
+        active: dict[str, list[str]] = {segment_id: [] for segment_id in ids}
+        with self.database.session() as session:
+            for take in session.scalars(
+                select(AudioTake).where(
+                    AudioTake.generation_segment_id.in_(ids), AudioTake.is_active.is_(True),
+                )
+            ):
+                active[take.generation_segment_id].append(take.id)
+        return {segment_id: sorted(values) for segment_id, values in active.items()}
+
     def _reference_start(self, session_id: str, **mode: bool) -> None:
         run_id, items, _writers = self._start_without_copy(session_id, **mode)
         with self.database.session() as session:
@@ -387,7 +429,7 @@ class PreservedTakeCloneTests(unittest.TestCase):
     def test_concurrent_copiers_make_each_copy_once(self):
         session_id, ids = self._case(preserved=6, missing=1)
         run_id, items, _writers = self._start_without_copy(session_id, missing_only=True)
-        barrier = threading.Barrier(2)
+        barrier = threading.Barrier(2, timeout=30)
         results: list[int] = []
         errors: list[BaseException] = []
 
@@ -404,6 +446,7 @@ class PreservedTakeCloneTests(unittest.TestCase):
                 thread.start()
             for thread in threads:
                 thread.join(60)
+        self.assertEqual([], [thread.name for thread in threads if thread.is_alive()])
         self.assertEqual([], errors)
         self.assertEqual(6, sum(results))
         owned = self._run_owned(run_id)
@@ -583,8 +626,6 @@ class PreservedTakeCloneTests(unittest.TestCase):
     # --- a crash between the commit and the copy ---
 
     def test_the_run_completes_every_copy_a_crash_left_unmade(self):
-        from pydub import AudioSegment
-
         reference_id, reference_ids = self._case(preserved=4, missing=2)
         self._reference_start(reference_id, missing_only=True)
         session_id, ids = self._case(preserved=4, missing=2)
@@ -592,32 +633,9 @@ class PreservedTakeCloneTests(unittest.TestCase):
         # Part of the copies were made before the crash.
         first = dict(list(items.items())[:1])
         self.assertEqual(1, copy_preserved_takes(self.database, run_id, first))
-        with self.database.session() as session:
-            job_id = session.get(GenerationRun, run_id).job_id
-        payload = missing_tests.GenerationMissingOnlyTests._job_payload(self, job_id)
-        capabilities = TtsCapabilities(batch_synthesis=False, streaming_batch=False)
-        calls = []
-
-        def synthesize(text, _settings, **_kwargs):
-            calls.append(text)
-            return AudioSegment.silent(duration=20)
-
-        with (
-            patch.object(self.handlers.tts_providers, "synthesize", side_effect=synthesize),
-            patch.object(
-                self.handlers.tts_providers, "synthesis_capabilities", return_value=capabilities,
-            ),
-            self._writers() as writers,
-        ):
-            finished = self.handlers.run_generation(
-                {
-                    "generation_run_id": run_id,
-                    "segment_ids": payload["segment_ids"],
-                    "operation": payload["operation"],
-                },
-                lambda *_: None,
-                threading.Event(),
-            )
+        calls: list[str] = []
+        with self._writers() as writers:
+            finished = self._run_job(run_id, calls)
         self.assertEqual("completed", finished["status"])
         self.assertEqual(["Block number 4.", "Block number 5."], calls)
         # The job made the three remaining copies in one transaction.
@@ -633,6 +651,99 @@ class PreservedTakeCloneTests(unittest.TestCase):
         self.assertEqual(
             [row[:3] + row[4:] for row in expected], [row[:3] + row[4:] for row in actual],
         )
+
+    def test_a_failed_copy_after_the_commit_leaves_the_start_to_its_job(self):
+        session_id, ids = self._case(preserved=3, missing=1)
+        with (
+            patch.object(workspace, "copy_preserved_takes", side_effect=RuntimeError("copy")),
+            self.assertLogs("pandrator.web.workspace", level="ERROR") as logs,
+        ):
+            result = self._start(session_id, missing_only=True)
+        self.assertEqual("queued", result["status"])
+        self.assertIn(result["id"], "\n".join(logs.output))
+        self.assertEqual([], self._run_owned(result["id"]))
+        self.assertEqual("completed", self._run_job(result["id"])["status"])
+        preserved = [
+            take for take in self._run_owned(result["id"]) if take.generation_segment_id in ids[:3]
+        ]
+        self.assertEqual(3, len(preserved))
+
+    # --- the route and the admission copy right after their commit ---
+
+    def test_the_start_route_copies_after_its_commit(self):
+        session_id, ids = self._case(preserved=3, missing=1)
+        response = self.client.post(
+            f"/api/v1/sessions/{session_id}/generation-runs",
+            json={"run_override": self._override(), "missing_only": True},
+            headers={**self.headers, "Idempotency-Key": "preserved-copy-route-0001"},
+        )
+        self.assertEqual(202, response.status_code, response.get_json())
+        owned = self._run_owned(response.get_json()["id"])
+        self.assertEqual(sorted(ids[:3]), sorted(take.generation_segment_id for take in owned))
+        self.assertTrue(all(take.is_active for take in owned))
+
+    def test_the_admission_copies_after_its_commit(self):
+        from pandrator.web.job_execution import current_job_lease
+
+        session_id, ids = self._case(preserved=3, missing=1)
+        response = self.client.post(
+            f"/api/v1/sessions/{session_id}/generation-admissions",
+            json={"run_override": self._override(), "missing_only": True},
+            headers={**self.headers, "Idempotency-Key": "preserved-copy-admission-0001"},
+        )
+        self.assertEqual(202, response.status_code, response.get_json())
+        job = self.services["jobs"].claim("preserved-copy-worker")
+        self.assertEqual(response.get_json()["id"], job.id)
+        token = current_job_lease.set({
+            "job_id": job.id, "owner_id": job.lease_owner,
+            "lease_generation": job.lease_generation,
+        })
+        try:
+            marker = self.handlers.run_generation_admission(
+                job.payload_json, lambda *_: None, threading.Event(),
+            )
+        finally:
+            current_job_lease.reset(token)
+        owned = self._run_owned(marker["generation_run_id"])
+        self.assertEqual(sorted(ids[:3]), sorted(take.generation_segment_id for take in owned))
+        self.assertTrue(all(take.is_active for take in owned))
+
+    # --- a run that inherits the flags from its source run ---
+
+    def test_a_regenerate_after_a_missing_or_stale_only_run_copies_nothing(self):
+        for flag in ("missing_only", "stale_only"):
+            for explicit_source in (True, False):
+                with self.subTest(flag=flag, explicit_source=explicit_source):
+                    session_id, ids = self._case(preserved=3, missing=1)
+                    source = self._start(session_id, **{flag: True})
+                    self.assertEqual("completed", self._run_job(source["id"])["status"])
+                    targeted = self.generation.start(
+                        session_id,
+                        run_override=self._override(),
+                        segment_ids=ids[:1],
+                        operation="regenerate",
+                        **({"generation_run_id": source["id"]} if explicit_source else {}),
+                    )
+                    with self.database.session() as session:
+                        snapshot = session.get(GenerationRun, targeted["id"]).settings_snapshot_json
+                    # What this guards against: the regenerate merged its source
+                    # run's snapshot, flag included.
+                    self.assertIs(True, snapshot.get(flag))
+                    untouched = self._active(ids[1:])
+                    with self._writers() as writers:
+                        self.assertEqual(
+                            0, copy_preserved_takes(self.database, targeted["id"], None),
+                        )
+                    self.assertEqual([], writers.transactions)
+                    self._run_job(targeted["id"])
+                    self.assertEqual(untouched, self._active(ids[1:]))
+                    self.assertEqual(
+                        [], [
+                            take.generation_segment_id
+                            for take in self._run_owned(targeted["id"])
+                            if take.generation_segment_id != ids[0]
+                        ],
+                    )
 
 
 @pytest.fixture
