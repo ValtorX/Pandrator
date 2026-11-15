@@ -2786,22 +2786,26 @@ def copy_preserved_takes(
         # Read outside the writer which chunks could copy anything, so a chunk
         # with nothing to copy (copies already made, or every source gone)
         # opens no write transaction. The writer checks again.
-        chunks = [
-            chunk
-            for offset in range(0, len(pending), _CLONE_CHUNK)
-            if (chunk := pending[offset : offset + _CLONE_CHUNK])
-            and _copyable_preserved_takes(
+        chunks: list[list[tuple[str, str]]] = []
+        skipped = 0
+        for offset in range(0, len(pending), _CLONE_CHUNK):
+            chunk = pending[offset : offset + _CLONE_CHUNK]
+            copies, _active, chunk_skipped = _copyable_preserved_takes(
                 session, run_id, plan_revision_id, chunk, missing_only, identities
-            )[0]
-        ]
+            )
+            if copies:
+                chunks.append(chunk)
+            else:
+                skipped += chunk_skipped
     copied = 0
     for chunk in chunks:
         with database.immediate_session() as session:
             if prove is not None:
                 prove(session)
-            copies, active_sources = _copyable_preserved_takes(
+            copies, active_sources, chunk_skipped = _copyable_preserved_takes(
                 session, run_id, plan_revision_id, chunk, missing_only, identities
             )
+            skipped += chunk_skipped
             if not copies:
                 continue
             if active_sources:
@@ -2814,6 +2818,14 @@ def copy_preserved_takes(
             # SQLite does, and no ORM object stands for a copy.
             session.execute(insert(cast(Table, AudioTake.__table__)), copies)
             copied += len(copies)
+    if skipped:
+        # The run finalizes as partial without these; say why.
+        _LOGGER.warning(
+            "Generation run %s left %d preserved segments uncopied: their take was "
+            "deselected, failed, lost its audio or is no longer reusable since the start.",
+            run_id,
+            skipped,
+        )
     return copied
 
 
@@ -2832,7 +2844,7 @@ def copy_preserved_takes_after_start(
         return
     try:
         copy_preserved_takes(database, run_id, preserved_items)
-    except Exception:
+    except Exception:  # The start is committed; any copy error is the job's to retry.
         _LOGGER.exception(
             "Copying %d preserved takes after the start of generation run %s failed; "
             "its generation job copies them.",
@@ -2937,10 +2949,16 @@ def _derive_preserved_items(
     completed take with a live artifact), then the newest. A guard keeps the last
     active take it saw, which on a segment with several active takes can be a
     failed or deleted one: with no live match, the segment's candidate is used.
-    Takes this run owns are never sources.
+    Takes this run owns are never sources, and neither is a take created after
+    the run: the job derives on every attempt, so a resume days later must not
+    copy (and deactivate) a take a later run or edit made on a segment this run
+    left uncopied.
     """
     from .generation_selection import _resolve_takes
 
+    started = session.scalar(select(GenerationRun.created_at).where(GenerationRun.id == run_id))
+    if started is None:
+        return {}
     requested = set(request_ids)
     wanted: dict[str, Mapping[str, Any]] = {}
     for segment_id in session.scalars(
@@ -2975,6 +2993,7 @@ def _derive_preserved_items(
             .where(
                 AudioTake.generation_segment_id.in_(segment_ids[offset : offset + _CLONE_CHUNK]),
                 AudioTake.status == "completed",
+                AudioTake.created_at <= started,
             )
         ):
             take = {
@@ -3023,8 +3042,9 @@ def _copyable_preserved_takes(
     chunk: list[tuple[str, str]],
     missing_only: bool,
     identities: Mapping[str, Any],
-) -> tuple[list[dict[str, Any]], list[str]]:
-    """The copies one chunk still needs and the active sources they replace.
+) -> tuple[list[dict[str, Any]], list[str], int]:
+    """The copies one chunk still needs, the active sources they replace, and
+    how many of its segments the run does not own and cannot copy.
 
     Two reads: the segments the run already owns a take on, and the chunk's
     sources with their segments and artifacts.
@@ -3059,14 +3079,18 @@ def _copyable_preserved_takes(
     now = utcnow()
     copies: list[dict[str, Any]] = []
     active_sources: list[str] = []
+    skipped = 0
     for segment_id, take_id in chunk:
+        if segment_id in owned:
+            continue
         source = sources.get(take_id)
-        if (segment_id in owned or source is None
+        if (source is None
                 or source.generation_segment_id != segment_id
                 or source.plan_revision_id != plan_revision_id
                 or source.segment_status != "completed"
                 or source.status != "completed"
                 or source.artifact_state == "deleted"):
+            skipped += 1
             continue
         if not missing_only:
             identity = identities.get(segment_id)
@@ -3074,6 +3098,7 @@ def _copyable_preserved_takes(
                 source.segment_status, source.status, source.artifact_state,
                 source.artifact_metadata, dict(identity),
             ) != "reusable":
+                skipped += 1
                 continue
         if source.is_active:
             active_sources.append(take_id)
@@ -3091,4 +3116,4 @@ def _copyable_preserved_takes(
             "revision": 1,
             "created_at": now,
         })
-    return copies, active_sources
+    return copies, active_sources, skipped

@@ -508,6 +508,35 @@ class PreservedTakeCloneTests(unittest.TestCase):
             sorted(take.parent_take_id for take in self._run_owned(run_id)),
         )
 
+    def test_a_resume_never_copies_a_take_made_after_the_run(self):
+        # The run's copy skipped a segment whose guarded audio was deleted; a
+        # later run then regenerated it. The job derives again on every
+        # attempt, so a resume must leave that later take alone rather than
+        # copy and deactivate it.
+        session_id, ids = self._case(preserved=3, missing=1)
+        run_id, items, _writers = self._start_without_copy(session_id, missing_only=True)
+        later_artifact = self.services["artifacts"].register(
+            self._wave_path("later"), kind="audio", role="generation_take",
+            session_id=session_id, metadata={},
+        )
+        with self.database.session() as session:
+            source = session.get(AudioTake, items[ids[0]])
+            session.get(Artifact, source.artifact_id).state = "deleted"
+            source.is_active = False
+            later = AudioTake(
+                generation_segment_id=ids[0], artifact_id=later_artifact.id,
+                status="completed", is_active=True,
+            )
+            session.add(later)
+            session.flush()
+            later_id = later.id
+        self.assertNotIn(ids[0], self._derived(run_id))
+        self.assertEqual(2, copy_preserved_takes(self.database, run_id, None))
+        self.assertEqual(
+            sorted(ids[1:3]), sorted(take.generation_segment_id for take in self._run_owned(run_id)),
+        )
+        self.assertEqual([later_id], self._active(ids[:1])[ids[0]])
+
     def test_the_derived_map_prefers_the_guarded_take_over_its_earlier_copy(self):
         # A second missing-only run preserves the first run's copies; their
         # sources share the artifact, and neither may stand in for the copy.
@@ -583,7 +612,9 @@ class PreservedTakeCloneTests(unittest.TestCase):
             session.get(Artifact, deleted.artifact_id).state = "deleted"
             session.get(AudioTake, items[ids[1]]).status = "failed"
             session.get(GenerationSegment, ids[2]).status = "ready"
-        self.assertEqual(1, copy_preserved_takes(self.database, run_id, items))
+        with self.assertLogs("pandrator.web.workspace", level="WARNING") as logs:
+            self.assertEqual(1, copy_preserved_takes(self.database, run_id, items))
+        self.assertIn(f"{run_id} left 3 preserved segments uncopied", "\n".join(logs.output))
         self.assertEqual([ids[3]], [take.generation_segment_id for take in self._run_owned(run_id)])
         with self.database.session() as session:
             # A skipped source keeps its activity.
