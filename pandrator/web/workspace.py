@@ -7,7 +7,6 @@ import logging
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Mapping
 from copy import deepcopy
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -2942,21 +2941,22 @@ def _derive_preserved_items(
     The run preserved every non-removed segment it does not generate
     (``generation_request_segment_ids``), each with the take that the start's
     ``generation_selection_guards`` names by artifact and revision; only the
-    segments it does not own a take on yet are mapped. Selecting
-    a take since then bumps the revision of every take on its segment, so a take
-    matches on its artifact, live and completed. Among several (a take and its
+    segments it does not own a take on yet are mapped. Selecting a take since
+    then bumps the revision of every take on its segment, so a take matches on
+    the guard's artifact, live and completed. Among several (a take and its
     earlier copies share one artifact), the one whose revision still equals the
     guard's comes first, then the ``_resolve_takes`` candidate (the newest active
-    completed take with a live artifact), then the newest. A guard keeps the last
-    active take it saw, which on a segment with several active takes can be a
-    failed or deleted one: with no live match, the segment's candidate is used,
-    but only when none of the segment's takes lost its audio since the start.
-    Otherwise the take the start preserved may be the one that lost it, and the
-    candidate would be other audio; the segment is left uncopied, as the
-    prepared map would leave it. Takes this run owns are never sources, and
-    neither is a take created after the run: the job derives on every attempt,
-    so a resume days later must not copy (and deactivate) a take a later run or
-    edit made on a segment this run left uncopied.
+    completed take with a live artifact), then the newest.
+
+    Only the guard's audio is ever copied. A guard keeps the last active take it
+    saw, which on a segment with several active takes can be a failed or deleted
+    one; such a segment, like one whose preserved audio was deleted since the
+    start (``delete_run`` removes takes and artifacts outright and reactivates an
+    older take), is left uncopied and counted in a warning, as the prepared map
+    would leave a source it can no longer copy. Takes this run owns are never
+    sources, and neither is a take created after the run: the job derives on
+    every attempt, so a resume days later must not copy (and deactivate) a take
+    a later run made.
     """
     from .generation_selection import _resolve_takes
 
@@ -2981,7 +2981,6 @@ def _derive_preserved_items(
     matches: dict[str, list[dict[str, Any]]] = {}
     actives: dict[str, list[dict[str, Any]]] = {}
     artifacts: dict[str, dict[str, Any]] = {}
-    lost_audio: set[str] = set()
     for offset in range(0, len(segment_ids), _CLONE_CHUNK):
         for row in session.execute(
             select(
@@ -2993,7 +2992,6 @@ def _derive_preserved_items(
                 AudioTake.created_at,
                 AudioTake.generation_run_id,
                 Artifact.state,
-                Artifact.metadata_json["deleted_at"].as_string().label("deleted_at"),
             )
             .join(Artifact, Artifact.id == AudioTake.artifact_id)
             .where(
@@ -3010,8 +3008,6 @@ def _derive_preserved_items(
                 "created_at": str(row.created_at),
             }
             artifacts[row.artifact_id] = {"state": row.state}
-            if row.state == "deleted" and not _deleted_before(row.deleted_at, started):
-                lost_audio.add(row.generation_segment_id)
             if row.is_active:
                 actives.setdefault(row.generation_segment_id, []).append(take)
             guard_artifact = wanted[row.generation_segment_id].get("artifact_id")
@@ -3025,14 +3021,12 @@ def _derive_preserved_items(
     })
     derived: dict[str, str] = {}
     for segment_id in segment_ids:
+        takes = matches.get(segment_id)
+        if not takes:
+            continue
         revision = wanted[segment_id].get("revision")
         candidate = candidates.get(segment_id)
         candidate_id = candidate["id"] if candidate is not None else None
-        takes = matches.get(segment_id)
-        if not takes:
-            if candidate_id is not None and segment_id not in lost_audio:
-                derived[segment_id] = candidate_id
-            continue
         best = max(takes, key=lambda take: (
             take["revision"] == revision,
             take["id"] == candidate_id,
@@ -3040,35 +3034,15 @@ def _derive_preserved_items(
             take["id"],
         ))
         derived[segment_id] = best["id"]
-    lost = sum(1 for segment_id in segment_ids
-               if segment_id not in derived and segment_id in lost_audio)
-    if lost:
+    unmatched = len(segment_ids) - len(derived)
+    if unmatched:
         _LOGGER.warning(
-            "Generation run %s left %d preserved segments uncopied: a take on each "
-            "lost its audio since the start.",
+            "Generation run %s left %d preserved segments uncopied: the audio its "
+            "start preserved there is gone or no longer identifiable.",
             run_id,
-            lost,
+            unmatched,
         )
     return derived
-
-
-def _deleted_before(deleted_at: str | None, started: datetime) -> bool:
-    """Whether an artifact's recorded ``deleted_at`` is before ``started``.
-
-    Unknown or unreadable times count as after, so a fallback never stands in
-    for audio that may have been the start's.
-    """
-    if not deleted_at:
-        return False
-    try:
-        removed = datetime.fromisoformat(deleted_at)
-    except ValueError:
-        return False
-
-    def utc(value: datetime) -> datetime:
-        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
-
-    return utc(removed) < utc(started)
 
 
 def _copyable_preserved_takes(
