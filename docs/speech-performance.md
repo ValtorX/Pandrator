@@ -180,8 +180,12 @@ Alignment, verification, subtitle text and spoken-length calculations use the
 clean transcript, not Fish tags or Gemini's prompt envelope. Effective compiled
 requests contribute to audio identity. Changing a reason/confidence/lock alone
 does not stale audio, while changed applied delivery or supplied context does.
-History remains inspectable when a performance plan becomes stale; generation
-requires a new valid adoption or disabling performance.
+History remains inspectable when a performance plan becomes stale. An adopted
+plan is judged block by block after an edit: unchanged blocks keep their
+directions, and so does an edited block whose markup still fits its new text
+(the change lies inside one stretch of it). A block whose markup no longer fits
+needs a new speaker plan review, and a generation run that includes it is
+refused with that block named; a run without it can still start.
 
 Automatic post-generation split repair can use read-only semantic context,
 including configurable preceding and following blocks (for example one of

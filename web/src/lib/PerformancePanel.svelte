@@ -75,6 +75,9 @@
     steered_count: number;
     locked_count: number;
     stale: boolean;
+    changed_segment_count?: number | null;
+    review_segment_count?: number | null;
+    review_segments?: { ordinal: number; id: string }[] | null;
     job_id?: string;
     job_status?: string;
     items?: Unit[];
@@ -223,6 +226,24 @@
     selected?.items?.find((item) => item.id === unitId)
   );
   const editable = $derived(selected?.status === 'draft' && !selected.stale);
+
+  function blockCount(count: number): string {
+    return `${count} block${count === 1 ? '' : 's'}`;
+  }
+
+  function changedLine(plan: Plan): string {
+    return `${blockCount(plan.changed_segment_count ?? 0)} changed since adoption.`;
+  }
+
+  function reviewLine(plan: Plan): string {
+    const count = plan.review_segment_count ?? 0;
+    const listed = (plan.review_segments ?? []).map(
+      (segment) => `#${segment.ordinal + 1}`
+    );
+    const more =
+      count > listed.length ? ` and ${count - listed.length} more` : '';
+    return `${count} ${count === 1 ? 'needs' : 'need'} a new speaker plan review before generation: ${count === 1 ? 'block' : 'blocks'} ${listed.join(', ')}${more}.`;
+  }
   const blocked = $derived(pending || busy);
   const settingsKey = $derived(
     JSON.stringify({
@@ -1137,7 +1158,16 @@
       {#if selected.job_id}<a class="text-sm underline" href="/activity"
           >Open analysis job</a
         >{/if}
-      {#if selected.stale}<p role="status" class="text-sm text-amber-700">
+      {#if selected.stale && selected.status === 'adopted' && (selected.changed_segment_count ?? 0) > 0}<p
+          role="status"
+          class="text-sm text-amber-700"
+        >
+          {changedLine(selected)}{#if (selected.review_segment_count ?? 0) > 0}
+            {reviewLine(selected)}{/if}
+        </p>{:else if selected.stale}<p
+          role="status"
+          class="text-sm text-amber-700"
+        >
           Accepted speech changed. Create a new matching draft before adopting
           directions.
         </p>{/if}

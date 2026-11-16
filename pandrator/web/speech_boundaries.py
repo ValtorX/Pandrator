@@ -134,6 +134,7 @@ def freeze_boundaries(
         else get_generation_controls(session, record.id)["characters"]
     )
     annotations = frozen.get("annotations") or {}
+    review_ids = set(frozen.get("review_segment_ids") or ())
     result = {}
     voices = {}
     # One catalogue for this freeze; cast spans would otherwise each rebuild it.
@@ -193,6 +194,10 @@ def freeze_boundaries(
                 settings["voice"] = settings["speaker"] = row.voice
             if row.language:
                 settings["language"] = row.language
+            if row.id in review_ids:
+                # Its speaker plan entry no longer fits and is not frozen; only
+                # its voices matter here, and those come from the cast freeze.
+                settings["performance_enabled"] = False
             settings = segment_performance_settings(
                 settings, snapshot, row.id, text, _service_config_cache=service_config_cache,
             )

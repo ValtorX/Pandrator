@@ -38,6 +38,7 @@ from .performance_read_projections import (
     summary_settings,
 )
 from .performance_schemas import PerformancePlanCreateRequest, PerformanceResult
+from .performance_validity import plan_validity
 from .settings_policy import RevisionConflict
 from .speech_analysis_policy import assert_pass_result
 from .speech_annotation_records import (
@@ -611,11 +612,39 @@ def describe_plan(
         if batch.status == "completed":
             annotations.update(deepcopy(batch.annotations_json or {}))
     annotations.update(deepcopy(plan.manual_annotations_json or {}))
+    selected_plan = session.scalar(
+        select(m.GenerationPlan).where(m.GenerationPlan.session_id == plan.session_id)
+    )
+    on_revision = (
+        selected_plan is not None
+        and selected_plan.active_revision_id == plan.plan_revision_id
+    )
+    signature = plan_signature(session, plan.plan_revision_id) if on_revision else None
     try:
-        _assert_current(session, plan)
+        _assert_current(
+            session, plan, selected_plan=selected_plan, base_signature=signature
+        )
         stale = False
     except RevisionConflict:
         stale = True
+    # Per-segment state, judged only for a plan on the active revision. A
+    # matching signature means nothing changed; null means "not judged".
+    changed_count: int | None = None
+    review_count: int | None = None
+    review_segments: list[dict[str, Any]] | None = None
+    if on_revision:
+        changed_count, review_count, review_segments = 0, 0, []
+        if signature != plan.base_signature:
+            validity = plan_validity(
+                session, plan, plan.plan_revision_id, annotations=annotations,
+                counts_only=True,
+            )
+            changed_count = len(validity.changed_ids)
+            review_count = len(validity.review)
+            review_segments = [
+                {"ordinal": ordinal, "id": segment_id}
+                for ordinal, segment_id in validity.review[:20]
+            ]
     job = session.get(m.Job, plan.job_id) if plan.job_id else None
     candidate_units = [
         unit
@@ -678,6 +707,9 @@ def describe_plan(
         "job_status": job.status if job else None,
         "settings": deepcopy(plan.settings_json) if is_full else summary_settings(plan.settings_json),
         "stale": stale,
+        "changed_segment_count": changed_count,
+        "review_segment_count": review_count,
+        "review_segments": review_segments,
         "created_at": plan.created_at.isoformat(),
         "adopted_at": plan.adopted_at.isoformat() if plan.adopted_at else None,
         "total": len(plan.units_json),
@@ -1098,7 +1130,10 @@ def freeze_performance_snapshot(
     """Freeze adopted performance, reusing guarded reads from the same snapshot.
 
     Optional arguments may only be supplied by callers that read them in the
-    same transaction.  Staleness is still checked against ``base_signature``.
+    same transaction.  When ``base_signature`` differs from the plan's, the
+    plan is judged per segment: unchanged and fitted entries are frozen, and
+    the segments that need a new review are listed in ``review_segment_ids``.
+    Refusing a run that includes one is the run-start freeze's job.
     """
     if plan is not None and (
         plan.plan_revision_id != revision_id or plan.status != "adopted"
@@ -1120,13 +1155,22 @@ def freeze_performance_snapshot(
         if base_signature is not None
         else plan_signature(session, revision_id)
     )
-    if plan.base_signature != signature:
-        raise ValueError(
-            "The adopted performance plan is stale after a speech edit. Review a new performance plan before synthesis."
-        )
     if annotations is None:
         annotations = _annotations(session, plan)
-    snapshot["performance_snapshot"] = {
+    review_ids: list[str] | None = None
+    if plan.base_signature != signature:
+        validity = plan_validity(session, plan, revision_id, annotations=annotations)
+        frozen_annotations = validity.entries
+        review_ids = list(validity.review_ids)
+    else:
+        frozen_annotations = {
+            unit["id"]: {
+                "text_hash": unit["text_hash"],
+                "annotation": deepcopy(annotations[unit["id"]]),
+            }
+            for unit in plan.units_json
+        }
+    frozen: dict[str, Any] = {
         "schema_version": 1,
         "id": plan.id,
         "version": plan.version,
@@ -1139,14 +1183,13 @@ def freeze_performance_snapshot(
         "character_dictionary_revision": plan.settings_json.get(
             "character_dictionary_revision", 0
         ),
-        "annotations": {
-            unit["id"]: {
-                "text_hash": unit["text_hash"],
-                "annotation": deepcopy(annotations[unit["id"]]),
-            }
-            for unit in plan.units_json
-        },
+        "annotations": frozen_annotations,
     }
+    if review_ids is not None:
+        # Only a changed plan carries the key, so an unchanged plan freezes
+        # exactly as before.
+        frozen["review_segment_ids"] = review_ids
+    snapshot["performance_snapshot"] = frozen
 
 
 def performance_for_segment(
