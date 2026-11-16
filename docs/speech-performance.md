@@ -185,7 +185,8 @@ plan is judged block by block after an edit: unchanged blocks keep their
 directions, and so does an edited block whose markup still fits its new text
 (the change lies inside one stretch of it). A block whose markup no longer fits
 needs a new speaker plan review, and a generation run that includes it is
-refused with that block named; a run without it can still start.
+refused with that block named; a run without it can still start. A project copy
+carries such a plan too: the blocks that need review still need it in the copy.
 
 Automatic post-generation split repair can use read-only semantic context,
 including configurable preceding and following blocks (for example one of
