@@ -355,6 +355,52 @@ def test_copy_keeps_an_adopted_plan_with_a_fitted_and_a_review_segment(performan
         assert target_identities[ordinal] == source_identities[ordinal]
 
 
+def test_a_new_draft_on_a_judged_adopted_plan_keeps_its_baseline_in_the_copy(performance):
+    p, f, u = performance, performance.f, performance.u
+    edit_in_place(p, 1, "The second, better line.")
+    edit_in_place(p, 0, "The first line!")
+    # The review asks for a new speaker plan: a draft on the same revision.
+    review = command(u.alice, u.ah, p.root, "", {
+        "expected_plan_revision_id": p.speech["active_revision_id"], "mode": "manual",
+        "purpose": "speakers", "annotation_format": "xml"}, status=201)
+    assert review["settings"]["base_adopted_plan_id"] == p.adopted["id"]
+
+    snapshot = capture_source(f, p.source)
+    assert snapshot.ready, snapshot.blockers
+    rows = json.loads(snapshot.state_json)["rows"]["performance_plans"]
+    assert sorted(row["id"] for row in rows) == sorted([p.adopted["id"], review["id"]])
+
+    copied, _preview = _copy(f, p.source, u.alice, u.ah, u.workspace_id, "copy-judged-draft")
+    target = copied["source_session_id"]
+    with f.case.database.snapshot_session() as unit:
+        plans = {plan.status: plan for plan in unit.scalars(select(m.PerformancePlan)
+            .where(m.PerformancePlan.session_id == target))}
+        assert set(plans) == {"adopted", "draft"}
+        draft = plans["draft"]
+        assert draft.settings_json["base_adopted_plan_id"] == plans["adopted"].id
+        assert draft.base_signature == plan_signature(unit, draft.plan_revision_id)
+        assert plans["adopted"].base_signature != draft.base_signature
+        assert len(draft.units_json) == 3
+
+
+def test_an_adopted_plan_on_a_fully_removed_revision_is_copied_without_units(performance):
+    p, f = performance, performance.f
+    with f.case.database.immediate_session() as unit:
+        for key in p.ids:
+            unit.get_one(m.GenerationSegment, key).removed = True
+    snapshot = capture_source(f, p.source)
+    assert snapshot.ready, snapshot.blockers
+    (row,) = adopted_rows(snapshot)
+    assert row["units_json"] == [] and row["manual_annotations_json"] == {}
+    assert len(json.loads(snapshot.state_json)["rows"]["performance_plans"]) == 1
+    copied, _preview = _copy(f, p.source, p.u.alice, p.u.ah, p.u.workspace_id,
+        "copy-removed-performance")
+    with f.case.database.snapshot_session() as unit:
+        (plan,) = unit.scalars(select(m.PerformancePlan)
+            .where(m.PerformancePlan.session_id == copied["source_session_id"]))
+        assert plan.status == "adopted" and plan.units_json == []
+
+
 def test_stale_draft_and_historical_body_are_not_loaded_or_copied(performance):
     p, f = performance, performance.f
     with f.case.database.immediate_session() as unit:

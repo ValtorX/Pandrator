@@ -388,7 +388,9 @@ def _freeze(
     if type(raw_units) is not list or len(raw_units) > MAX_PERFORMANCE_UNITS:
         raise _invalid()
     canonical = [unit for segment in segments[rid] if (unit := _unit(segment)) is not None]
-    if not canonical:
+    # An adopted plan outlives an edit that removes or blanks every segment; it
+    # then carries no unit, as each removed or blank segment carries none.
+    if not canonical and status != "adopted":
         raise _invalid()
     if type(annotations) is not dict or any(type(key) is not str for key in annotations):
         raise _invalid()

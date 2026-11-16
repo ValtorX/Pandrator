@@ -1085,3 +1085,111 @@ def test_a_plan_with_every_spoken_segment_needing_review_freezes_empty():
     assert frozen["units_json"] == [] and frozen["manual_annotations_json"] == {}
     assert frozen["base_signature"] == review_signature(current_signature(rows))
     round_trip(rows, frozen)
+
+
+def test_a_plan_whose_segments_are_all_removed_or_blank_freezes_empty_and_fresh():
+    rows = judged_rows()
+    raw, annotations = stale_adopted(rows)
+    rows["generation_segments"][0]["removed"] = True
+    edit(rows, s1="  ", s4="")
+    frozen = freeze(rows, raw, annotations)
+    assert frozen["status"] == "adopted"
+    assert frozen["units_json"] == [] and frozen["manual_annotations_json"] == {}
+    assert frozen["base_signature"] == current_signature(rows)
+    assert "Go on now." not in json.dumps(frozen)
+    round_trip(rows, frozen)
+    # A draft still needs a spoken segment.
+    raw.update(status="draft", id="draft", base_signature=current_signature(rows))
+    raw["units_json"] = []
+    with pytest.raises(ValueError):
+        freeze(rows, raw, {})
+
+
+LEGACY_CHOICE = {
+    "decision": "steer",
+    "delivery": {"pace": "slower"},
+    "spans": [{"anchor": {"quote": "Second"}, "delivery": {"emphasis": "light"}}],
+    "reason": "Legacy choice",
+}
+
+
+def legacy_adopted(rows, *, xml):
+    """A stale adopted plan whose segment-1 entry is a legacy (non-XML) choice."""
+    raw, annotations = stale_adopted(rows)
+    raw["units_json"][1].pop("speech_xml")
+    if xml:
+        raw["units_json"][1]["legacy_annotation"] = True
+        annotations["segment-1"] = validate_annotation("Second line here.", LEGACY_CHOICE)
+        return raw, annotations
+    raw["settings_json"]["annotation_format"] = "pssml"
+    for unit in raw["units_json"]:
+        unit.pop("speech_xml", None)
+    annotations = {
+        unit["id"]: validate_annotation(
+            unit["spoken_text"], LEGACY_CHOICE if unit["id"] == "segment-1" else {}
+        )
+        for unit in raw["units_json"]
+    }
+    return raw, annotations
+
+
+@pytest.mark.parametrize("xml", [True, False], ids=["xml", "pssml"])
+def test_a_legacy_entry_is_fitted_when_its_anchors_survive_the_edit(xml):
+    rows = judged_rows()
+    raw, annotations = legacy_adopted(rows, xml=xml)
+    edit(rows, s1="Second line there.")
+    frozen = freeze(rows, raw, annotations)
+    assert unit_ids(frozen) == ["segment-0", "segment-1", "segment-4"]
+    assert frozen["base_signature"] == current_signature(rows)
+    unit = frozen["units_json"][1]
+    assert unit["spoken_text"] == "Second line there."
+    assert "speech_xml" not in unit
+    assert unit.get("legacy_annotation", False) is xml
+    assert frozen["manual_annotations_json"]["segment-1"] == validate_annotation(
+        "Second line there.", LEGACY_CHOICE
+    )
+    assert "Second line here." not in json.dumps(frozen)
+    round_trip(rows, frozen)
+
+
+@pytest.mark.parametrize("xml", [True, False], ids=["xml", "pssml"])
+def test_a_legacy_entry_whose_anchor_is_gone_is_left_for_review(xml):
+    rows = judged_rows()
+    raw, annotations = legacy_adopted(rows, xml=xml)
+    edit(rows, s1="The line here.")
+    frozen = freeze(rows, raw, annotations)
+    assert unit_ids(frozen) == ["segment-0", "segment-4"]
+    assert "segment-1" not in frozen["manual_annotations_json"]
+    assert frozen["base_signature"] == review_signature(current_signature(rows))
+    round_trip(rows, frozen)
+
+
+def test_a_judged_entry_follows_the_spoken_text_not_the_display_text():
+    rows = judged_rows()
+    raw, annotations = stale_adopted(rows)
+    # The display text changes while the spoken (optimized) text stays the same.
+    rows["generation_segments"][1].update(
+        text="Second line, as displayed.", optimized_text="Second line here."
+    )
+    frozen = freeze(rows, raw, annotations)
+    unit = frozen["units_json"][1]
+    assert unit["text"] == "Second line, as displayed."
+    assert unit["spoken_text"] == "Second line here."
+    assert frozen["manual_annotations_json"]["segment-1"] == annotations["segment-1"]
+    assert frozen["base_signature"] == current_signature(rows)
+    round_trip(rows, frozen)
+
+
+def test_a_judged_entry_is_fitted_to_a_changed_optimized_text():
+    rows = judged_rows()
+    raw, annotations = stale_adopted(rows)
+    rows["generation_segments"][1]["optimized_text"] = "Second line there."
+    frozen = freeze(rows, raw, annotations)
+    unit = frozen["units_json"][1]
+    assert unit["text"] == "Second line here."
+    assert unit["spoken_text"] == "Second line there."
+    assert frozen["manual_annotations_json"]["segment-1"]["_speech_xml"] == (
+        '<segment id="segment-1">Second line there.</segment>'
+    )
+    assert frozen["base_signature"] == current_signature(rows)
+    round_trip(rows, frozen)
