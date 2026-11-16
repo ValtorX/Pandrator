@@ -232,7 +232,10 @@
   }
 
   function changedLine(plan: Plan): string {
-    return `${blockCount(plan.changed_segment_count ?? 0)} changed since adoption.`;
+    const changed = `${blockCount(plan.changed_segment_count ?? 0)} changed since adoption.`;
+    return (plan.review_segment_count ?? 0) > 0
+      ? `${changed} ${reviewLine(plan)}`
+      : changed;
   }
 
   function reviewLine(plan: Plan): string {
@@ -1162,8 +1165,7 @@
           role="status"
           class="text-sm text-amber-700"
         >
-          {changedLine(selected)}{#if (selected.review_segment_count ?? 0) > 0}
-            {reviewLine(selected)}{/if}
+          {changedLine(selected)}
         </p>{:else if selected.stale}<p
           role="status"
           class="text-sm text-amber-700"

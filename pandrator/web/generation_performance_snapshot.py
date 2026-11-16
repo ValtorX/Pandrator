@@ -55,7 +55,10 @@ def refuse_review_segments(
         .where(m.GenerationSegment.id.in_(review))
     ).tuples().all())
     named = sorted((ordinals.get(segment_id, 0), segment_id) for segment_id in review)
-    listed = ", ".join(f"block {ordinal} ({segment_id})" for ordinal, segment_id in named[:5])
+    # Blocks are numbered from 1, as the speaker plan panel lists them.
+    listed = ", ".join(
+        f"block {ordinal + 1} ({segment_id})" for ordinal, segment_id in named[:5]
+    )
     more = f" and {len(named) - 5} more" if len(named) > 5 else ""
     raise ValueError(
         f"{len(named)} block(s) changed after the speaker plan was adopted and their "

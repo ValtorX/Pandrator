@@ -627,12 +627,13 @@ def describe_plan(
         stale = False
     except RevisionConflict:
         stale = True
-    # Per-segment state, judged only for a plan on the active revision. A
-    # matching signature means nothing changed; null means "not judged".
+    # Per-segment state, judged only for an adopted plan on the active
+    # revision. A matching signature means nothing changed; null means "not
+    # judged" (a draft or superseded plan, or another revision).
     changed_count: int | None = None
     review_count: int | None = None
     review_segments: list[dict[str, Any]] | None = None
-    if on_revision:
+    if on_revision and plan.status == "adopted":
         changed_count, review_count, review_segments = 0, 0, []
         if signature != plan.base_signature:
             validity = plan_validity(

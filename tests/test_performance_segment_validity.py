@@ -21,6 +21,7 @@ from pandrator.web import models as m
 from pandrator.web import performance_plans as plans
 from pandrator.web import performance_validity as validity
 from pandrator.web.generation_audio_identity import IDENTITY_KEY, AudioIdentityContext
+from pandrator.web.generation_performance_snapshot import refuse_review_segments
 from pandrator.web.performance_validity import REVIEW_MESSAGE, fit_entry
 from pandrator.web.projects.artifact_identity import resolve_artifact_ownership
 from pandrator.web.speech_annotation_records import normalized_record, record_markup
@@ -114,6 +115,20 @@ def test_narration_at_the_edge_of_a_dialogue_does_not_fit():
     assert fit(quote, record, "He said, “Bah!”") is None
     fitted = fit(quote, record, "“Pah!”")
     assert fitted is not None and parsed(fitted, "“Pah!”").spans[0].dialogue
+
+
+def test_text_at_the_edge_of_a_voiced_span_does_not_fit():
+    text = "He said hello"
+    record = xml_record(text, '<segment id="s">He said <span voice="Puck">hello</span></segment>')
+    # Appended text could be narration after the voiced words, so it is not
+    # rebased into the span's voice; a change inside the span still fits.
+    assert fit(text, record, "He said hello there.") is None
+    fitted = fit(text, record, "He said hallo")
+    assert fitted is not None
+    assert [(span.text, span.voice) for span in parsed(fitted, "He said hallo").spans] == [
+        ("He said ", None),
+        ("hallo", "Puck"),
+    ]
 
 
 def test_a_carriage_return_survives_the_rebase():
@@ -220,6 +235,53 @@ def test_plan_not_on_the_active_revision_is_not_judged(case):
             read["review_segments"]) == (None, None, None)
 
 
+def test_a_draft_plan_is_not_judged(case):
+    adopt(case, create(case))
+    draft = create(case)
+    set_text(case, 1, "Yet this defeat would be brief.")
+    read = get(case, draft)
+    assert read["status"] == "draft" and read["stale"] is True
+    assert (read["changed_segment_count"], read["review_segment_count"],
+            read["review_segments"]) == (None, None, None)
+
+
+def test_review_lists_are_bounded(case, monkeypatch):
+    adopted = adopt(case, create(case))
+    set_text(case, 1, "Yet this defeat would be brief.")
+    review = tuple((ordinal, f"seg-{ordinal}") for ordinal in range(25))
+    monkeypatch.setattr(
+        plans, "plan_validity",
+        lambda *_args, **_kwargs: validity.PlanValidity({}, (), review),
+    )
+    read = get(case, adopted)
+    assert read["review_segment_count"] == 25
+    assert read["review_segments"] == [
+        {"ordinal": ordinal, "id": f"seg-{ordinal}"} for ordinal in range(20)
+    ]
+
+
+def test_run_refusal_names_five_blocks_from_one(case):
+    seeded = case["services"]["generation"].create_plan(
+        case["session_id"], source_revision_id=None, settings={},
+        segments=[{"text": f"Line {index}.", "speaker": "A"} for index in range(7)],
+    )
+    with case["services"]["database"].session() as session:
+        ids = list(session.scalars(
+            select(m.GenerationSegment.id)
+            .where(m.GenerationSegment.plan_revision_id == seeded["active_revision_id"])
+            .order_by(m.GenerationSegment.ordinal)
+        ))
+        snapshot = {"performance_snapshot": {"review_segment_ids": list(reversed(ids))}}
+        with pytest.raises(ValueError) as refused:
+            refuse_review_segments(session, snapshot, None)
+        # A scope without any review block starts.
+        refuse_review_segments(session, snapshot, [])
+    message = str(refused.value)
+    assert message.startswith("7 block(s) changed")
+    assert ", ".join(f"block {index + 1} ({ids[index]})" for index in range(5)) in message
+    assert ids[5] not in message and " and 2 more." in message
+
+
 # The ticket's check on a cast fixture -----------------------------------------
 
 
@@ -318,6 +380,13 @@ def start_run(case, segment_ids=None):
     )
 
 
+# A listing pass freezes the adopted plan a fixed number of times, whatever
+# the segment count: a per-segment judgement would multiply it.
+LISTING_FREEZES = 1
+# The edit resets the flagged segment itself, so its own take is not reused.
+FLAGGED_REASON = "not_completed"
+
+
 @pytest.fixture
 def cast_case(case):
     plan, _xml = seed_cast(case)
@@ -336,6 +405,7 @@ def test_fitting_edit_keeps_every_other_reuse_reason(cast_case):
     assert {sid: after[sid] for sid in others} == {sid: before[sid] for sid in others}
     assert after[case["segment_ids"][1]] == "not_completed"
     # The judgement is made once per listing pass, never once per segment.
+    assert work["freeze"] == LISTING_FREEZES
     assert work_after["freeze"] == work["freeze"]
     assert work_after["validity"] == work_after["freeze"]
     read = get(case, plan)
@@ -369,7 +439,8 @@ def test_edit_that_no_longer_fits_flags_only_that_segment(cast_case):
     after, work_after = reasons(case)
     others = case["segment_ids"][1:]
     assert {sid: after[sid] for sid in others} == {sid: before[sid] for sid in others}
-    assert work_after["freeze"] == work["freeze"]
+    assert work_after["freeze"] == work["freeze"] == LISTING_FREEZES
+    assert after[flagged] == FLAGGED_REASON
     current = identities(case)
     assert current[flagged]["performance_error"] == REVIEW_MESSAGE
     assert all("performance_error" not in current[sid] for sid in others)
@@ -382,7 +453,7 @@ def test_edit_that_no_longer_fits_flags_only_that_segment(cast_case):
     assert refused.status_code == 409, refused.get_json()
     error = refused.get_json()["error"]
     assert error["code"] == "generation_unavailable"
-    assert f"block 0 ({flagged})" in error["message"]
+    assert f"block 1 ({flagged})" in error["message"]
     refused = start_run(case, [flagged, others[0]])
     assert refused.status_code == 409, refused.get_json()
     started = start_run(case, [others[0]])
@@ -400,7 +471,7 @@ def test_voice_change_pauses_do_not_refuse_a_run_without_the_flagged_segment(cas
     edit_segment(case, 0, "He said, “Bah,” then left.")
     refused = start_run(case, [flagged])
     assert refused.status_code == 409, refused.get_json()
-    assert f"block 0 ({flagged})" in refused.get_json()["error"]["message"]
+    assert f"block 1 ({flagged})" in refused.get_json()["error"]["message"]
     started = start_run(case, [case["segment_ids"][2]])
     assert started.status_code == 202, started.get_json()
 

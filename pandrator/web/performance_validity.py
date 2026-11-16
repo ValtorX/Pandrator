@@ -74,36 +74,39 @@ def _changed_range(old: str, new: str) -> tuple[int, int, str]:
 def _text_slots(
     root: ET.Element,
 ) -> tuple[str, list[tuple[ET.Element, str, int, int, bool]]]:
-    """List every non-empty spoken string as (owner, attribute, start, end, dialogue).
+    """List every non-empty spoken string as (owner, attribute, start, end, voiced).
 
-    ``dialogue`` is the string's voice scope as ``speech_markup._scope_for``
-    reads it: inside a ``dialogue`` or ``speaker`` element, unless a nearer
+    ``voiced`` is true when ``speech_markup._scope_for`` gives the string a
+    voice other than the narration's: inside a ``dialogue`` or ``speaker``
+    element, or a ``span`` with its own ``voice``, unless a nearer
     ``narrator`` resets it.
     """
 
     slots: list[tuple[ET.Element, str, int, int, bool]] = []
     offset = 0
 
-    def add(owner: ET.Element, attribute: str, value: str | None, dialogue: bool) -> None:
+    def add(owner: ET.Element, attribute: str, value: str | None, voiced: bool) -> None:
         nonlocal offset
         if not value:
             return
-        slots.append((owner, attribute, offset, offset + len(value), dialogue))
+        slots.append((owner, attribute, offset, offset + len(value), voiced))
         offset += len(value)
 
     def walk(element: ET.Element, inherited: bool) -> None:
         if element.tag not in _SPOKEN_TEXT_TAGS:
             return
         if element.tag == "narrator":
-            dialogue = False
-        elif element.tag in _DIALOGUE_TAGS:
-            dialogue = True
+            voiced = False
+        elif element.tag in _DIALOGUE_TAGS or (
+            element.tag == "span" and "voice" in element.attrib
+        ):
+            voiced = True
         else:
-            dialogue = inherited
-        add(element, "text", element.text, dialogue)
+            voiced = inherited
+        add(element, "text", element.text, voiced)
         for child in element:
-            walk(child, dialogue)
-            add(child, "tail", child.tail, dialogue)
+            walk(child, voiced)
+            add(child, "tail", child.tail, voiced)
 
     walk(root, False)
     transcript = "".join(
@@ -126,11 +129,12 @@ def _fit_markup(xml: str, old: str, new: str, segment_id: str) -> str | None:
     matches = [slot for slot in slots if slot[2] <= start and end <= slot[3]]
     if len(matches) != 1:
         return None
-    owner, attribute, slot_start, slot_end, dialogue = matches[0]
-    # Text added or removed at the edge of a spoken line could be the
-    # narration around it (an attribution after a closing quote, say), so a
-    # change that reaches a dialogue string's edge needs review.
-    if dialogue and (start == slot_start or end == slot_end):
+    owner, attribute, slot_start, slot_end, voiced = matches[0]
+    # Text added or removed at the edge of a spoken line, or of a span with
+    # its own voice, could be the narration around it (an attribution after a
+    # closing quote, say), so a change that reaches such a string's edge needs
+    # review.
+    if voiced and (start == slot_start or end == slot_end):
         return None
     value = str(getattr(owner, attribute))
     setattr(
