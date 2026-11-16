@@ -1573,6 +1573,11 @@ class GenerationTopologyService:
             boundary_mapping=boundary_mapping,
             activate=activate,
         )
+        carried = None
+        if action == "restore" and activate and not (revision_source.operation_json or {}).get("draft"):
+            from .performance_carry_over import carry_adopted_plan
+
+            carried = carry_adopted_plan(session, revision_source.id, revision.id, lineage)
         return {
             "id": plan.id,
             "lineage": lineage,
@@ -1585,7 +1590,11 @@ class GenerationTopologyService:
             "is_draft": not activate,
             "active_plan_revision_id": plan.active_revision_id,
             "preview": mappings[0] if action == "resegment" else None,
-            "review_required": {"performance": True, "changed_audio": len(affected_ids)},
+            "performance_plan_id": carried[0].id if carried else None,
+            "review_required": {
+                "performance": not (carried and carried[1]),
+                "changed_audio": len(affected_ids),
+            },
         }
 
 

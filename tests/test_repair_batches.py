@@ -133,6 +133,36 @@ def test_undo_creates_one_restore_and_preserves_original_and_repaired_audio(work
     assert batch(w)['can_undo'] is False
 
 
+def test_undo_keeps_the_base_revisions_adopted_speaker_plan(workspace):
+    from pandrator.logic.speech_performance import content_hash
+    from pandrator.web.models import PerformancePlan
+    from pandrator.web.speech_plan_context import plan_signature
+
+    w = workspace
+    with w['database'].session() as session:
+        rows = list(session.scalars(select(GenerationSegment).where(
+            GenerationSegment.plan_revision_id == w['base_id']).order_by(GenerationSegment.ordinal)))
+        session.add(PerformancePlan(
+            session_id=w['sid'], plan_revision_id=w['base_id'],
+            base_signature=plan_signature(session, w['base_id']),
+            settings_json={'annotation_format': 'pssml'}, status='adopted',
+            units_json=[{'id': row.id, 'ordinal': row.ordinal, 'spoken_text': row.text,
+                         'text_hash': content_hash(row.text)} for row in rows],
+        ))
+    apply_repair(w)
+    response = undo(w)
+    assert response.status_code == 201, response.get_json()
+    body = response.get_json()
+    assert body['performance_plan_id'] and body['review_required']['performance'] is False
+    with w['database'].session() as session:
+        carried = session.get(PerformancePlan, body['performance_plan_id'])
+        restored_ids = list(session.scalars(select(GenerationSegment.id).where(
+            GenerationSegment.plan_revision_id == body['plan_revision_id']).order_by(GenerationSegment.ordinal)))
+        assert carried.status == 'adopted' and carried.plan_revision_id == body['plan_revision_id']
+        assert [unit['id'] for unit in carried.units_json] == restored_ids
+        assert carried.base_signature == plan_signature(session, body['plan_revision_id'])
+
+
 @pytest.mark.parametrize('change', ['text', 'take', 'base', 'work', 'plan'])
 def test_changes_after_acceptance_block_undo_without_mutation(workspace, change):
     w = workspace
