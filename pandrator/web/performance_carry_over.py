@@ -1,10 +1,13 @@
 """Carry an adopted speaker plan onto the revision a restore creates.
 
-A restore (and so an edit copy) writes every segment again under a new id. The
-target revision's adopted plan is written again as an adopted plan on the new
-revision, with each entry as stored and each segment id mapped through the
-restore's lineage. Story 2's per-segment judgement then decides, at read and
-freeze time, which entries still fit; nothing is judged here.
+A restore, including the one behind an edit copy, writes every segment again
+under a new id. The target revision's adopted plan is written again as an
+adopted plan on the new revision, with each entry as stored and each segment id
+mapped through the restore's lineage. No entry is judged here: per-segment
+validity (``performance_validity.plan_validity``) decides at read and freeze
+time which entries still fit. The one check made here is whole-plan freshness:
+a plan that matched the target revision is based on the new revision's
+signature, and a stale one keeps its own, so it stays stale in the same way.
 """
 
 from __future__ import annotations

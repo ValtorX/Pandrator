@@ -73,9 +73,10 @@ to inspect provenance, alignment groups, and the active plan revision. Apply
 only typed immutable topology edits with
 `pandrator_revise_speech_block_plan` (split, merge, restore, or resegment), then follow
 its next action to re-list the new revision.
-A restore, and an edit copy that restores, keeps the speaker plan the target revision had
-adopted (the result's `performance_plan_id`); split, merge, resegment and topology batches do not, so use
-`copy_from_id` there.
+A restore, including the one behind an edit copy, keeps the speaker plan the
+target revision had adopted (the result's `performance_plan_id`). Split, merge,
+resegment and topology batches do not; for those, pass `copy_from_id` to
+`pandrator_create_performance_plan`.
 
 Use `pandrator_update_generation_segment` for a single wording change or
 `removed=true` to exclude a block from synthesis; `removed=false` restores it.

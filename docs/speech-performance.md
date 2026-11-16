@@ -187,10 +187,15 @@ directions, and so does an edited block whose markup still fits its new text
 needs a new speaker plan review, and a generation run that includes it is
 refused with that block named; a run without it can still start. A project copy
 carries such a plan too: the blocks that need review still need it in the copy.
-A restore, and so an edit copy, keeps the speaker plan the target revision had adopted: the
-new revision gets its own adopted plan with every entry, so no adopt step is needed and every
-other block stays reusable. Split, merge, re-segment and topology batches do not carry the plan over; use
-`copy_from_id` for those.
+A restore, including the one behind an edit copy, keeps the speaker plan the
+target revision had adopted: the new revision gets its own adopted plan with
+every entry, so no adopt step is needed and every other block stays reusable.
+A plan that was already stale stays stale in the same way: the same blocks have
+changed or need review, and the restore still reports that a speaker plan
+review is needed. Split, merge, re-segment and topology batches do not carry
+the plan over. For those, create a speaker plan on the new revision with
+`copy_from_id` set to the earlier plan, which copies the annotations of
+unchanged blocks into a draft to review and adopt.
 
 Automatic post-generation split repair can use read-only semantic context,
 including configurable preceding and following blocks (for example one of

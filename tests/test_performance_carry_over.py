@@ -9,13 +9,15 @@ from __future__ import annotations
 from contextlib import contextmanager
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from pandrator.web import models as m
 from pandrator.web import performance_carry_over as carry
 from pandrator.web import speech_plan_context as context
 from pandrator.web.generation_audio_identity import AudioIdentityContext
+from pandrator.web.speech_annotation_records import record_markup
 from pandrator.web.speech_plan_context import plan_signature
+from pandrator.web.speech_plan_workspace import freeze_speech_snapshot
 from tests.test_performance_plans import case as case  # noqa: F401
 from tests.test_performance_plans import get
 from tests.test_performance_segment_validity import (
@@ -158,6 +160,14 @@ def test_edit_copy_keeps_the_adopted_plan_and_every_other_reuse(cast_case, how):
     copied = revision_identities(case, new_revision)
     assert len(copied) == 3
     assert all("performance_error" not in value for value in copied)
+    # The edited entry is fitted onto the copy's new text under the copy's id.
+    edited_id = segment_ids(case, new_revision)[1]
+    snapshot = live_snapshot(case)
+    with case["services"]["database"].session() as session:
+        freeze_speech_snapshot(session, new_revision, snapshot)
+    record = snapshot["performance_snapshot"]["annotations"][edited_id]["annotation"]
+    markup = record_markup(record)
+    assert f'id="{edited_id}"' in markup and "Yet this defeat would be brief." in markup
     # The source plan is unchanged.
     source = adopted_plans(case, source_revision)
     assert len(source) == 1 and source[0].units_json == source_units
@@ -296,12 +306,58 @@ def test_restore_swaps_root_ids_without_parsing(cast_case, monkeypatch):
             f'id="{old["id"]}"', f'id="{new["id"]}"', 1
         )
     key = carry.SPEECH_XML_KEY
+    compared = 0
     for old_id, new_id in zip(case["segment_ids"], new_ids, strict=True):
         old_record = source.manual_annotations_json.get(old_id)
         if old_record is not None and key in old_record:
             assert carried.manual_annotations_json[new_id][key] == old_record[key].replace(
                 f'id="{old_id}"', f'id="{new_id}"', 1
             )
+            compared += 1
+    assert compared >= 1
+
+
+def test_restore_carries_directions_from_completed_batches(cast_case):
+    """Entries that came from analysis batches survive, folded into the new plan."""
+    case, plan, before, _work = cast_case
+    source_revision = case["revision_id"]
+    with case["services"]["database"].session() as session:
+        row = session.get_one(m.PerformancePlan, plan["id"])
+        analysed = dict(row.manual_annotations_json or {})
+        assert set(analysed) == set(case["segment_ids"])
+        # Move every record into a completed batch, as an analysis run leaves it.
+        last = session.scalar(
+            select(func.max(m.PerformanceBatch.ordinal)).where(
+                m.PerformanceBatch.performance_plan_id == row.id
+            )
+        )
+        session.add(m.PerformanceBatch(
+            performance_plan_id=row.id, ordinal=(last if last is not None else -1) + 1,
+            segment_ids_json=list(analysed),
+            status="completed", annotations_json=analysed,
+        ))
+        row.manual_annotations_json = {}
+    source_identities = revision_identities(case, source_revision)
+    assert reuse_reasons(case) == list(before.values())
+    split = split_last(case, source_revision)
+    result = restore(case, source_revision)
+    assert split["plan_revision_id"] != result["plan_revision_id"]
+    new_ids = segment_ids(case, result["plan_revision_id"])
+    carried = adopted_plans(case, result["plan_revision_id"])[0]
+    key = carry.SPEECH_XML_KEY
+    assert set(carried.manual_annotations_json) == set(new_ids)
+    for old_id, new_id in zip(case["segment_ids"], new_ids, strict=True):
+        assert carried.manual_annotations_json[new_id][key] == analysed[old_id][key].replace(
+            f'id="{old_id}"', f'id="{new_id}"', 1
+        )
+    with case["services"]["database"].session() as session:
+        assert session.scalar(
+            select(m.PerformanceBatch.id).where(
+                m.PerformanceBatch.performance_plan_id == carried.id
+            )
+        ) is None
+    assert revision_identities(case, result["plan_revision_id"]) == source_identities
+    assert reuse_reasons(case) == ["reusable"] * 3
 
 
 def test_split_merge_and_topology_batch_carry_nothing(cast_case):
