@@ -76,7 +76,13 @@ its next action to re-list the new revision.
 A restore, including the one behind an edit copy, keeps the speaker plan the
 target revision had adopted (the result's `performance_plan_id`). Split, merge,
 resegment and topology batches do not; for those, pass `copy_from_id` to
-`pandrator_create_performance_plan`.
+`pandrator_create_performance_plan`. The source may be an ancestor's plan, the
+plan active before a restore, or a stale plan. Each block whose entry is
+unchanged, or still fits its edited text, is copied; split, merged and other
+changed blocks are skipped. The result reports `copied_count` and
+`skipped_count`. A copy keeps every valid entry in every mode, so `passive` or
+`llm` analysis of it covers only the skipped and new blocks; create without
+`copy_from_id` to reanalyse everything (only locked entries are kept).
 
 Use `pandrator_update_generation_segment` for a single wording change or
 `removed=true` to exclude a block from synthesis; `removed=false` restores it.
@@ -109,7 +115,7 @@ not changed and the session is idle. Drafts cannot be generated directly.
 This operation changes boundaries, not wording: correct invented punctuation
 separately. Unchanged blocks outside the range retain take lineage; affected
 blocks need generation and fresh performance review. A new performance plan
-can use `copy_from_id` to retain annotations on demonstrably unchanged blocks.
+can use `copy_from_id` to retain annotations on unchanged blocks.
 If trimming would discard a vocal event, the edit is rejected for explicit repair.
 
 Performance previews report the generation revision and source artifact. Verify

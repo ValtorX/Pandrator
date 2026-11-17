@@ -26,7 +26,7 @@ from .speech_annotation_records import SPEECH_XML_KEY
 _ROOT_ID = re.compile(r"""\A(\s*<segment\b[^>]*?\bid\s*=\s*)(["'])([^"']*)\2""")
 
 
-def _rebind_markup(xml: str, old_id: str, new_id: str, text: str, characters) -> str:
+def rebind_markup(xml: str, old_id: str, new_id: str, text: str, characters) -> str:
     """Swap the root id by string when the first start tag names ``old_id``.
 
     The markup already validated against ``text`` under the old id and nothing
@@ -71,7 +71,7 @@ def remap_plan_entries(
         if old_id in ordinals:
             mapped["ordinal"] = ordinals[old_id]
         if isinstance(mapped.get("speech_xml"), str):
-            mapped["speech_xml"] = _rebind_markup(
+            mapped["speech_xml"] = rebind_markup(
                 mapped["speech_xml"], old_id, new_id, mapped["spoken_text"], characters
             )
         spoken[old_id] = mapped["spoken_text"]
@@ -83,7 +83,7 @@ def remap_plan_entries(
         new_id = id_map[old_id]
         copied = deepcopy(dict(record))
         if isinstance(copied.get(SPEECH_XML_KEY), str):
-            copied[SPEECH_XML_KEY] = _rebind_markup(
+            copied[SPEECH_XML_KEY] = rebind_markup(
                 copied[SPEECH_XML_KEY], old_id, new_id, spoken[old_id], characters
             )
         records[new_id] = copied

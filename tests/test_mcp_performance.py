@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch
 import pytest
 from pydantic import ValidationError
 
+from pandrator.web import models as m
 from pandrator.web.openapi import build_openapi_document
 from pandrator_mcp.catalog import ACTION_CATALOG
 from pandrator_mcp.clients.application import ApplicationClient
@@ -31,6 +32,7 @@ from pandrator_mcp.tools.performance import (
     performance_action,
     register_performance_tools,
 )
+from tests.test_performance_plans import case as case  # noqa: F401
 
 try:
     from mcp import Client
@@ -373,6 +375,44 @@ def test_performance_submit_next_claim_then_complete_review_and_terminal_shape()
         session_id="session", plan_id="plan"
     ))
     assert reviewed.next_actions == []
+
+
+def _application_over(case):
+    """The real MCP application client, with its transport routed to the test app."""
+
+    client = object.__new__(ApplicationClient)
+
+    def request_json(path, *, method="GET", parameters=None, body=None,
+                     idempotency_key=None, **_options):
+        headers = dict(case["headers"])
+        if idempotency_key:
+            headers["Idempotency-Key"] = idempotency_key
+        response = case["client"].open(
+            path, method=method, query_string=parameters, json=body, headers=headers
+        )
+        assert response.status_code < 400, response.get_json()
+        return response.get_json()
+
+    client._request_json = request_json
+    return client
+
+
+def test_mcp_copy_reports_copied_and_skipped_counts(case):
+    from tests.test_performance_plans import adopt, create
+
+    source = adopt(case, create(case))
+    with case["services"]["database"].session() as session:
+        # A changed speaker leaves that block's entry behind.
+        session.get(m.GenerationSegment, case["segment_ids"][2]).speaker = "B"
+    application = _application_over(case)
+    runtime = SimpleNamespace(require_application=lambda: application)
+    outcome = performance_action(runtime, "create", CreatePerformancePlanInput(
+        session_id=case["session_id"], expected_plan_revision_id=case["revision_id"],
+        mode="manual", copy_from_id=source["id"], idempotency_key="performance-mcp-copy",
+    ))
+    assert (outcome.result["copied_count"], outcome.result["skipped_count"]) == (2, 1)
+    assert outcome.result["analysed_count"] == 2
+    assert outcome.next_actions[0].tool == "pandrator_get_performance_plan"
 
 
 @unittest.skipIf(

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
-from collections import Counter
-from copy import deepcopy
 
 from sqlalchemy import select
 
@@ -22,100 +20,6 @@ from .project_speech_references import (
     normalize_speech_reference_slot,
     segment_speech_reference_identity,
 )
-
-
-def copy_unchanged_annotations(
-    session, previous, revision_id: str, units: list[dict], characters: list[dict]
-) -> dict:
-    """Follow immutable lineage, retaining only exact one-to-one annotation targets."""
-    from .performance_annotations import plan_annotations as _annotations
-    from .speech_annotation_records import normalized_record, record_markup
-
-    chain, visited = [], set()
-    cursor = revision_id
-    while cursor != previous.plan_revision_id:
-        if cursor in visited or len(chain) >= 100:
-            raise ValueError(
-                "The performance source is not an ancestor of this speech plan."
-            )
-        visited.add(cursor)
-        revision = session.get(m.GenerationPlanRevision, cursor)
-        if revision is None:
-            raise ValueError(
-                "The performance source is not an ancestor of this speech plan."
-            )
-        operation = revision.operation_json or {}
-        chain.append(operation.get("lineage") or {})
-        cursor = (
-            operation.get("target_revision_id")
-            if operation.get("action") == "restore"
-            else revision.parent_revision_id
-        )
-    mapping = {unit["id"]: [unit["id"]] for unit in previous.units_json}
-    for lineage in reversed(chain):
-        mapping = {
-            old: list(
-                dict.fromkeys(
-                    child for parent in ids for child in lineage.get(parent, [])
-                )
-            )
-            for old, ids in mapping.items()
-        }
-    source_units = {unit["id"]: unit for unit in previous.units_json}
-    targets = {unit["id"]: unit for unit in units}
-    annotations = _annotations(session, previous)
-    segment_rows = {
-        row.id: row
-        for row in session.scalars(
-            select(m.GenerationSegment).where(
-                m.GenerationSegment.plan_revision_id.in_(
-                    [previous.plan_revision_id, revision_id]
-                ),
-            )
-        )
-    }
-
-    def structure_key(row):
-        xml = (row.speech_plan_json or {}).get("speech_xml")
-        return (
-            row.voice_id,
-            row.node_kind,
-            row.silence_after_ms,
-            row.paragraph_break_after,
-            remap_markup(xml, "comparison", row.optimized_text or row.text, characters)
-            if xml
-            else None,
-        )
-
-    target_counts = Counter(child for ids in mapping.values() for child in ids)
-    seed = {}
-    for old, ids in mapping.items():
-        if len(ids) != 1 or target_counts[ids[0]] != 1:
-            continue
-        source, target = source_units[old], targets.get(ids[0])
-        if target is None or any(
-            source.get(key) != target.get(key)
-            for key in ("spoken_text", "speaker", "voice", "language")
-        ):
-            continue
-        if structure_key(segment_rows[old]) != structure_key(segment_rows[ids[0]]):
-            continue
-        record = deepcopy(annotations.get(old))
-        if record is None:
-            continue
-        xml = record_markup(record)
-        if xml:
-            projected = remap_markup(
-                xml, target["id"], target["spoken_text"], characters
-            )
-            record = normalized_record(
-                target["spoken_text"],
-                target["id"],
-                {"speech_xml": projected, "locked": record.get("locked", False)},
-                characters,
-            )
-        seed[target["id"]] = record
-    return seed
 
 
 def _reviewed_annotations(session, revision_id: str) -> dict:

@@ -397,6 +397,7 @@ TEST_LANES: dict[str, tuple[str, ...]] = {
     ),
     "web-17-serial": (
         "tests/test_performance_carry_over.py",
+        "tests/test_performance_copy.py",
         "tests/test_performance_markup.py",
         "tests/test_performance_plans.py",
         "tests/test_performance_read_projections.py",

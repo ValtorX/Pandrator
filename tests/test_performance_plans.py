@@ -346,12 +346,27 @@ def test_preview_returns_compiled_request_without_synthesis(case):
     assert result["transcript"] == "Yet this defeat would be temporary."
 
 
-def test_passive_reanalysis_preserves_locked_entries(case):
+def test_passive_copy_seeds_every_valid_entry_and_analyses_the_rest(case):
     adopted = adopt(case, edit(case, create(case)))
     new = create(case, mode="passive", copy_from_id=adopted["id"])
-    assert new["locked_count"] == 1 and new["analysed_count"] == 1
-    batch = case["post"]("/" + new["id"] + "/claim").get_json()["batch"]
-    assert case["segment_ids"][1] not in [item["segment_id"] for item in batch["items"]]
+    # Every entry is still valid, so the copy keeps all three and leaves
+    # nothing to analyse; the locked choice stays locked.
+    assert new["locked_count"] == 1 and new["analysed_count"] == 3
+    assert (new["copied_count"], new["skipped_count"]) == (3, 0)
+    claim = case["post"]("/" + new["id"] + "/claim").get_json()
+    assert claim["batch"] is None and claim["complete"]
+    # A block whose entry is no longer valid (its speaker changed) is the only
+    # one analysed.
+    with case["services"]["database"].session() as session:
+        session.get(m.GenerationSegment, case["segment_ids"][2]).speaker = "B"
+    changed = create(case, mode="passive", copy_from_id=adopted["id"])
+    assert (changed["copied_count"], changed["skipped_count"]) == (2, 1)
+    batch = case["post"]("/" + changed["id"] + "/claim").get_json()["batch"]
+    assert [item["segment_id"] for item in batch["items"]] == [case["segment_ids"][2]]
+    # Reanalysis without a copy keeps only the locked choice.
+    fresh = create(case, mode="passive")
+    assert fresh["copied_count"] is None and fresh["skipped_count"] is None
+    assert fresh["locked_count"] == 1 and fresh["analysed_count"] == 1
 
 
 def test_llm_job_is_queued_not_run_in_request(case):

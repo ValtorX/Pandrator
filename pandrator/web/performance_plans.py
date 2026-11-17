@@ -30,6 +30,7 @@ from . import models as m
 from .generation_controls import get_generation_controls, merge_character_proposals
 from .performance_annotations import performance_batches as _batches
 from .performance_annotations import plan_annotations as _annotations
+from .performance_copy import copy_plan_entries
 from .performance_read_projections import (
     PERFORMANCE_PLAN_VIEWS,
     annotation_unit,
@@ -53,6 +54,8 @@ from .speech_plan_context import (
 )
 
 PLANNER_VERSION = "contextual-performance-1"
+# Settings key holding a copy_from_id draft's copied and skipped entry counts.
+COPY_COUNTS_KEY = "copy_counts"
 ANNOTATION_FILTERS = {
     "all",
     "directed",
@@ -422,13 +425,24 @@ def create_plan(
             m.PerformancePlan.status == "adopted",
         )
     )
-    adopted_xml = {}
-    if adopted and adopted.base_signature == signature:
-        adopted_xml = {
-            key: xml
-            for key, value in _annotations(session, adopted).items()
-            if (xml := record_markup(value)) is not None
-        }
+    # The adopted plan's still-valid entries: every entry while its signature
+    # matches, otherwise the unchanged and still-fitting ones (an in-place edit).
+    adopted_entries: dict[str, dict[str, Any]] = {}
+    if adopted is not None:
+        if adopted.base_signature == signature:
+            adopted_entries = _annotations(session, adopted)
+        else:
+            adopted_entries = {
+                key: entry["annotation"]
+                for key, entry in plan_validity(
+                    session, adopted, selected.active_revision_id
+                ).entries.items()
+            }
+    adopted_xml = {
+        key: xml
+        for key, value in adopted_entries.items()
+        if (xml := record_markup(value)) is not None
+    }
     context_units = {
         item["id"]: item
         for item in semantic_context_units(session, selected.active_revision_id)
@@ -478,33 +492,22 @@ def create_plan(
         units.append(unit)
     if not units:
         raise ValueError("The selected plan has no spoken blocks.")
-    seed = {}
+    seed: dict[str, dict[str, Any]] = {}
+    copy_counts: dict[str, int] | None = None
     if request.copy_from_id:
+        # A copy seeds every entry that is still valid on this revision, in
+        # every mode; analysis then covers only the blocks left without one.
         previous = get_plan(session, session_id, request.copy_from_id)
-        if previous.base_signature != plan_signature(session, previous.plan_revision_id):
-            raise RevisionConflict(
-                "The source performance plan no longer matches its saved speech revision."
-            )
-        if previous.plan_revision_id != selected.active_revision_id:
-            from .audiobook_resegmentation import copy_unchanged_annotations
-            all_previous = copy_unchanged_annotations(session, previous, selected.active_revision_id, units, characters)
-        else:
-            all_previous = _annotations(session, previous)
-        # A manual copy retains every choice; reanalysis preserves only locked
-        # choices and allows the remaining decisions to be reconsidered.
-        seed = {
-            key: value
-            for key, value in all_previous.items()
-            if request.mode == "manual" or value.get("locked")
-        }
+        copied = copy_plan_entries(
+            session, previous, selected.active_revision_id, units, characters
+        )
+        seed = copied.entries
+        copy_counts = {"copied": copied.copied, "skipped": copied.skipped}
     elif request.mode != "manual":
-        previous = adopted
-        if previous and previous.base_signature == signature:
-            seed = {
-                key: value
-                for key, value in _annotations(session, previous).items()
-                if value.get("locked")
-            }
+        # Reanalysis without a copy reconsiders everything but locked choices.
+        seed = {
+            key: value for key, value in adopted_entries.items() if value.get("locked")
+        }
     for unit in units:
         if unit["id"] in seed and not record_markup(seed[unit["id"]]):
             # Protected legacy choices remain inspectable/editable in their
@@ -522,6 +525,8 @@ def create_plan(
             "base_adopted_plan_version": adopted.version if adopted else None,
         }
     )
+    if copy_counts is not None:
+        settings[COPY_COUNTS_KEY] = copy_counts
     if annotation_format == "xml" or any(record_markup(value) for value in seed.values()):
         settings["character_dictionary"] = deepcopy(characters)
         settings["character_dictionary_revision"] = int(controls.get("revision") or 0)
@@ -646,6 +651,8 @@ def describe_plan(
                 {"ordinal": ordinal, "id": segment_id}
                 for ordinal, segment_id in validity.review[:20]
             ]
+    stored_counts = (plan.settings_json or {}).get(COPY_COUNTS_KEY)
+    copy_counts = stored_counts if isinstance(stored_counts, dict) else None
     job = session.get(m.Job, plan.job_id) if plan.job_id else None
     candidate_units = [
         unit
@@ -711,6 +718,8 @@ def describe_plan(
         "changed_segment_count": changed_count,
         "review_segment_count": review_count,
         "review_segments": review_segments,
+        "copied_count": copy_counts.get("copied") if copy_counts is not None else None,
+        "skipped_count": copy_counts.get("skipped") if copy_counts is not None else None,
         "created_at": plan.created_at.isoformat(),
         "adopted_at": plan.adopted_at.isoformat() if plan.adopted_at else None,
         "total": len(plan.units_json),

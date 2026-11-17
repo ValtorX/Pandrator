@@ -78,6 +78,8 @@
     changed_segment_count?: number | null;
     review_segment_count?: number | null;
     review_segments?: { ordinal: number; id: string }[] | null;
+    copied_count?: number | null;
+    skipped_count?: number | null;
     job_id?: string;
     job_status?: string;
     items?: Unit[];
@@ -629,6 +631,12 @@
       pending = false;
     }
   }
+  function copiedMessage(copied: number, skipped: number) {
+    const summary = `Editable copy created: ${copied} copied, ${skipped} skipped.`;
+    return skipped
+      ? `${summary} Skipped blocks changed since the source plan and start without its directions.`
+      : summary;
+  }
   async function create(mode: 'manual' | 'passive' | 'llm', copy = false) {
     if (!validWindows || !validAnalysis) return;
     if (settingsDirty && !(await saveSettings())) return;
@@ -658,11 +666,13 @@
       filter = 'all';
       await load(result.id, 0, false);
       message =
-        mode === 'llm'
-          ? `${purposeLabel(analysisPurpose)} analysis queued. Review the result before adopting it.`
-          : mode === 'passive'
-            ? 'Passive analysis is ready for an MCP worker to claim. No model or speech service was started.'
-            : 'Editable speech-direction draft created.';
+        copy && typeof result.copied_count === 'number'
+          ? copiedMessage(result.copied_count, result.skipped_count ?? 0)
+          : mode === 'llm'
+            ? `${purposeLabel(analysisPurpose)} analysis queued. Review the result before adopting it.`
+            : mode === 'passive'
+              ? 'Passive analysis is ready for an MCP worker to claim. No model or speech service was started.'
+              : 'Editable speech-direction draft created.';
     } catch (caught) {
       error = errorMessage(caught);
     } finally {
@@ -1122,7 +1132,7 @@
               analysisSection.scrollIntoView({ block: 'start' });
             }
           }}>AI / MCP analysis</button
-        >{/if}{#if selected && !selected.stale}<button
+        >{/if}{#if selected}<button
           class="btn btn-secondary"
           disabled={blocked}
           onclick={() => navigate(() => create('manual', true))}

@@ -194,8 +194,22 @@ A plan that was already stale stays stale in the same way: the same blocks have
 changed or need review, and the restore still reports that a speaker plan
 review is needed. Split, merge, re-segment and topology batches do not carry
 the plan over. For those, create a speaker plan on the new revision with
-`copy_from_id` set to the earlier plan, which copies the annotations of
-unchanged blocks into a draft to review and adopt.
+`copy_from_id` set to the earlier plan, which copies its still-valid entries
+into a draft to review and adopt.
+
+The source plan may be on an earlier revision, on the revision that was active
+before a restore, or on an edit copy's original, and it may be stale. Its
+blocks are matched to the new revision through the revisions they share. A
+block's entry is copied when the block has exactly one counterpart and its
+speaker, voice, language, pause and paragraph break are unchanged. An edited
+block keeps its entry while the markup still fits the new text, as above.
+Split, merged and other changed blocks are skipped. The plan read reports
+`copied_count` and `skipped_count` for such a draft (both null for a draft made
+without `copy_from_id`). A copy keeps every valid entry whichever analysis mode
+it uses, so AI or MCP analysis of a copy covers only the blocks left without
+one; to reanalyse everything, create a draft without `copy_from_id`, which keeps
+only locked entries. A draft made without a copy also starts from the adopted
+plan's still-valid entries after an in-place edit.
 
 Automatic post-generation split repair can use read-only semantic context,
 including configurable preceding and following blocks (for example one of
