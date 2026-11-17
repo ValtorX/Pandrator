@@ -1174,6 +1174,7 @@ class GenerationService(GenerationHistoryReader):
         stale_only: bool = False,
         missing_only: bool = False,
         expected_selection_hash: str | None = None,
+        allow_without_speaker_plan: bool = False,
         before_io: Callable[[], None] | None = None,
         retain_speech_inputs: bool = True,
     ) -> dict[str, Any]:
@@ -1489,6 +1490,14 @@ class GenerationService(GenerationHistoryReader):
                         if retained and not has_selected_voice_override(snapshot):
                             carried_cast = candidate
 
+                if operation != "rvc" and not allow_without_speaker_plan:
+                    # Before the freeze, so a refused start does no heavy work.
+                    from .generation_performance_snapshot import performance_runtime_settings
+                    from .performance_plans import refuse_missing_speaker_plan
+
+                    refuse_missing_speaker_plan(
+                        session, revision_id, performance_runtime_settings(snapshot)
+                    )
                 freeze_speech_snapshot(
                     session,
                     revision_id,
@@ -1549,6 +1558,7 @@ class GenerationService(GenerationHistoryReader):
         stale_only: bool = False,
         missing_only: bool = False,
         expected_selection_hash: str | None = None,
+        allow_without_speaker_plan: bool = False,
     ) -> dict[str, Any]:
         prepared = self.prepare_start(
             session_id,
@@ -1563,6 +1573,7 @@ class GenerationService(GenerationHistoryReader):
             stale_only=stale_only,
             missing_only=missing_only,
             expected_selection_hash=expected_selection_hash,
+            allow_without_speaker_plan=allow_without_speaker_plan,
         )
         try:
             with self.database.immediate_session() as session:
@@ -1674,6 +1685,12 @@ class GenerationService(GenerationHistoryReader):
             else:
                 resolved, _ = self.settings.resolve(session_id, run_override=run_override)
             selection = compute_selection(session, bound_revision_id, resolved, mode)
+            from .generation_performance_snapshot import performance_runtime_settings
+            from .performance_plans import missing_speaker_plan
+
+            speaker_plan = missing_speaker_plan(
+                session, bound_revision_id, performance_runtime_settings(resolved)
+            )
         public = {
             key: selection[key]
             for key in (
@@ -1692,6 +1709,8 @@ class GenerationService(GenerationHistoryReader):
         }
         if selection["blocked_reason"] is not None:
             public["blocked_reason"] = selection["blocked_reason"]
+        # A start without allow_without_speaker_plan is refused while this is set.
+        public["missing_speaker_plan"] = speaker_plan
         from .generation_provider_preflight import generation_provider_preflight
 
         public["provider_preflight"] = generation_provider_preflight(
