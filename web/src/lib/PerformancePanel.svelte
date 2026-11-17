@@ -634,7 +634,7 @@
   function copiedMessage(copied: number, skipped: number) {
     const summary = `Editable copy created: ${copied} copied, ${skipped} skipped.`;
     return skipped
-      ? `${summary} Skipped blocks changed since the source plan and start without its directions.`
+      ? `${summary} Skipped blocks changed since the source plan, or their directions no longer validate, and start without them.`
       : summary;
   }
   async function create(mode: 'manual' | 'passive' | 'llm', copy = false) {
@@ -669,7 +669,9 @@
         copy && typeof result.copied_count === 'number'
           ? copiedMessage(result.copied_count, result.skipped_count ?? 0)
           : mode === 'llm'
-            ? `${purposeLabel(analysisPurpose)} analysis queued. Review the result before adopting it.`
+            ? result.job_id
+              ? `${purposeLabel(analysisPurpose)} analysis queued. Review the result before adopting it.`
+              : 'Nothing left to analyse: every block already has a speech direction. Review the draft before adopting it.'
             : mode === 'passive'
               ? 'Passive analysis is ready for an MCP worker to claim. No model or speech service was started.'
               : 'Editable speech-direction draft created.';

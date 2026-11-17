@@ -31,7 +31,10 @@ NO_COMMON_ANCESTOR = (
     "The performance source shares no ancestor with this speech plan within "
     f"{MAX_LINEAGE_STEPS} revisions."
 )
-# Unit fields an entry depends on besides its text.
+# Unit fields an entry depends on besides its text, compared as the source plan
+# recorded them with the target unit's. Across revisions the segment rows are
+# compared too (voice reference, node kind, pause, paragraph break, and markup
+# when the text is equal).
 _UNIT_FIELDS = ("speaker", "voice", "language", "node_kind", "paragraph_break_after")
 _COMPARISON_ID = "comparison"
 
@@ -254,9 +257,13 @@ def copy_plan_entries(
 
     ``units`` are the new plan's units (current spoken text and ``text_hash``
     per target segment). An entry is copied when its segment maps 1:1 to a
-    target unit, the unit's speaker, voice and language and the row's voice
-    reference, node kind, pause and paragraph break are unchanged, and its text
-    is unchanged or its markup still fits the new text.
+    target unit; the source unit's speaker, voice, language, node kind and
+    paragraph break, as recorded when the source plan was made, equal the target
+    unit's; across two revisions, the two segment rows have the same voice
+    reference, node kind, pause and paragraph break, and the same segment markup
+    when their text is equal; and the entry's text is unchanged or its markup
+    still fits the new text. An entry that no longer validates against
+    ``characters`` is skipped.
     """
 
     target_of = map_segments(session, source.plan_revision_id, revision_id)

@@ -245,7 +245,8 @@ def register_performance_routes(app, context) -> None:
             plan = plans.create_plan(
                 session, session_id, payload, settings(session, session_id)
             )
-            # A copy that left nothing to analyse has no batch and needs no job.
+            # A plan with no batch has nothing to analyse, so no job is queued
+            # (a copy that seeded every block, or a draft locking them all).
             if payload.mode == "llm" and session.scalar(
                 select(m.PerformanceBatch.id)
                 .where(m.PerformanceBatch.performance_plan_id == plan.id)

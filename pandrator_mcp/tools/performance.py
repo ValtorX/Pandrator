@@ -18,6 +18,22 @@ from ..schemas import performance as schemas
 from ..work_mapping import application_work_reference
 
 
+def _has_open_batch(payload: dict[str, Any]) -> bool:
+    """Whether a created plan still has a batch for a worker to claim.
+
+    The plan's batches cover exactly the blocks left without an entry, so a
+    passive copy that seeded every block has none. A response without the
+    list keeps the claim as the next step.
+    """
+
+    batches = payload.get("batches")
+    if not isinstance(batches, list):
+        return True
+    return any(
+        isinstance(batch, dict) and batch.get("status") != "completed" for batch in batches
+    )
+
+
 def performance_action(runtime: McpRuntime, action: str, arguments) -> ToolOutcome:
     values = arguments.model_dump(mode="json", exclude_none=True)
     for field in ("packet_format", "known_manifest_hash"):
@@ -37,7 +53,11 @@ def performance_action(runtime: McpRuntime, action: str, arguments) -> ToolOutco
             projected["batch"] = {"items": batch["items"]} if "items" in batch else {}
     next_actions = []
     plan_id = payload.get("id") or payload.get("plan_id") or getattr(arguments, "plan_id", None)
-    if (action == "create" and arguments.mode == "passive") or action == "submit":
+    if (
+        action == "create"
+        and arguments.mode == "passive"
+        and _has_open_batch(payload)
+    ) or action == "submit":
         claim_identity = json.dumps(
             [arguments.session_id, plan_id, arguments.idempotency_key],
             ensure_ascii=False, separators=(",", ":"),

@@ -77,9 +77,15 @@ A restore, including the one behind an edit copy, keeps the speaker plan the
 target revision had adopted (the result's `performance_plan_id`). Split, merge,
 resegment and topology batches do not; for those, pass `copy_from_id` to
 `pandrator_create_performance_plan`. The source may be an ancestor's plan, the
-plan active before a restore, or a stale plan. Each block whose entry is
-unchanged, or still fits its edited text, is copied; split, merged and other
-changed blocks are skipped. The result reports `copied_count` and
+plan active before a restore, or a stale plan. A block's entry is copied when
+the block has exactly one counterpart; the source unit's speaker, voice,
+language, node kind and paragraph break (as recorded when the source plan was
+made) equal the target unit's; and, across two revisions, the segment rows have
+the same voice reference, node kind, pause and paragraph break, and the same
+segment markup when their text is equal. An edited block keeps its entry while
+the markup still fits. Every other block is skipped: split and merged blocks,
+changed blocks, and blocks whose entry no longer validates (for example it names
+a removed character). The result reports `copied_count` and
 `skipped_count`. A copy keeps every valid entry in every mode, so `passive` or
 `llm` analysis of it covers only the skipped and new blocks; create without
 `copy_from_id` to reanalyse everything (only locked entries are kept).

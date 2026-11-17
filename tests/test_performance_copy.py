@@ -36,6 +36,7 @@ MODES = ["manual", "llm"]
 FITTING_EDIT = "Yet this defeat would be brief."
 # Crosses the end of the dialogue, so the entry needs a new review.
 NON_FITTING_EDIT = "He said, “Bah,” then left."
+THIRD_BLOCK_EDIT = "Membership doubled soon after."
 
 
 def copy(case, source_id: str, mode: str, **extra) -> dict:
@@ -143,6 +144,44 @@ def test_sibling_source_is_mapped_through_the_common_ancestor(cast_case, mode):
     assert plan_snapshot(case, sibling["id"]) == before
 
 
+def select_revision(case, revision_id: str) -> None:
+    """Make an existing revision active again through the select route."""
+    response = case["client"].post(
+        f"/api/v1/sessions/{case['session_id']}/generation-plan/select",
+        json={"revision_id": revision_id, "expected_plan_revision_id": active_revision(case)},
+        headers={**case["headers"], "Idempotency-Key": f"copy-select-{revision_id}"},
+    )
+    assert response.status_code == 200, response.get_json()
+    assert active_revision(case) == revision_id
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_descendant_source_is_copied_onto_its_selected_ancestor(cast_case, mode):
+    case, plan, _before, _work = cast_case
+    original = case["revision_id"]
+    split = split_last(case, original)["plan_revision_id"]
+    case["revision_id"] = split
+    descendant = adopt(case, create(case, copy_from_id=plan["id"], annotation_format="xml"))
+    split_ids = segment_ids(case, split)
+    descendant_records = seeded(case, descendant["id"])
+    before = plan_snapshot(case, descendant["id"])
+    # The target is the common ancestor itself: an older revision made active again.
+    select_revision(case, original)
+    copied = copy(case, descendant["id"], mode)
+    assert copied["plan_revision_id"] == original
+    # Blocks 1 and 2 return under the original ids; the split halves have no
+    # 1:1 counterpart on the original block 3.
+    assert counts(copied) == (2, 2)
+    assert seeded(case, copied["id"]) == {
+        case["segment_ids"][index]: rebound(
+            descendant_records[split_ids[index]], split_ids[index], case["segment_ids"][index]
+        )
+        for index in (0, 1)
+    }
+    assert batched(case, copied["id"]) == [case["segment_ids"][2]]
+    assert plan_snapshot(case, descendant["id"]) == before
+
+
 @pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("how", ["review", "run"])
 def test_edit_copy_copies_unchanged_and_rebases_a_fitting_edit(cast_case, mode, how):
@@ -198,6 +237,33 @@ def test_stale_source_is_copied_onto_its_revision_and_its_restore(cast_case, mod
     assert counts(onto_restore) == (2, 1)
     assert set(seeded(case, onto_restore["id"])) == set(new_ids[1:])
     assert batched(case, onto_restore["id"]) == [new_ids[0]]
+    assert plan_snapshot(case, plan["id"]) == before
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_stale_source_is_copied_across_an_edit_copy(cast_case, mode):
+    case, plan, _before, _work = cast_case
+    source_revision = case["revision_id"]
+    edit_segment(case, 1, FITTING_EDIT)
+    edit_segment(case, 0, NON_FITTING_EDIT)
+    assert get(case, plan)["stale"] is True
+    before = plan_snapshot(case, plan["id"])
+    # A third block edited through an edit copy: the copy carries both in-place edits.
+    edit_through_copy(case, 2, THIRD_BLOCK_EDIT, "review")
+    copy_revision = active_revision(case)
+    assert copy_revision != source_revision
+    copied = copy(case, plan["id"], mode)
+    new_ids = segment_ids(case, copy_revision)
+    # Block 1 no longer fits; block 2 rebases onto its in-place edit and block 3
+    # onto the edit made in the copy.
+    assert counts(copied) == (2, 1)
+    entries = seeded(case, copied["id"])
+    assert set(entries) == set(new_ids[1:])
+    assert f'id="{new_ids[1]}"' in record_markup(entries[new_ids[1]])
+    assert FITTING_EDIT in record_markup(entries[new_ids[1]])
+    assert f'id="{new_ids[2]}"' in record_markup(entries[new_ids[2]])
+    assert THIRD_BLOCK_EDIT in record_markup(entries[new_ids[2]])
+    assert batched(case, copied["id"]) == [new_ids[0]]
     assert plan_snapshot(case, plan["id"]) == before
 
 
@@ -409,3 +475,82 @@ def test_plan_reads_report_counts_only_for_a_copy(case):
     )
     summary = case["client"].get(f"{case['base']}/{copied['id']}?view=summary").get_json()
     assert counts(summary) == (3, 0)
+
+
+def remove_characters(case) -> None:
+    with case["services"]["database"].session() as session:
+        revision = get_generation_controls(session, case["session_id"])["revision"]
+        save_generation_controls(
+            session, case["session_id"], expected_revision=int(revision),
+            characters=[], cast={"narrator": {"voice": "Kore"}, "characters": {}},
+        )
+
+
+def draft_units(case, plan_id: str) -> list[dict]:
+    with case["services"]["database"].session() as session:
+        return deepcopy(session.get_one(m.PerformancePlan, plan_id).units_json)
+
+
+@pytest.mark.parametrize("stale", [False, True])
+def test_xml_draft_ignores_adopted_markup_naming_a_removed_character(cast_case, stale):
+    case, plan, _before, _work = cast_case
+    adopted = seeded(case, plan["id"])
+    if stale:
+        edit_segment(case, 1, FITTING_EDIT)
+        assert get(case, plan)["stale"] is True
+    remove_characters(case)
+    first = case["segment_ids"][0]
+    # No copy: the dialogue block starts from its own markup, the others from the adopted plan.
+    draft = create(case, annotation_format="xml")
+    markup = [unit["speech_xml"] for unit in draft_units(case, draft["id"])]
+    assert markup[0] == f'<segment id="{first}">He said, “Bah!” Then left.</segment>'
+    assert markup[2] == record_markup(adopted[case["segment_ids"][2]])
+    assert seeded(case, draft["id"]) == {}
+    # The copy skips the same entry instead of failing the whole create.
+    copied = create(case, copy_from_id=plan["id"], annotation_format="xml")
+    assert counts(copied) == (2, 1)
+    assert set(seeded(case, copied["id"])) == set(case["segment_ids"][1:])
+    assert batched(case, copied["id"]) == [first]
+
+
+@pytest.mark.parametrize("annotation_format", ["xml", None])
+@pytest.mark.parametrize("stale", [False, True])
+@pytest.mark.parametrize("mode", ["passive", "llm"])
+def test_reanalysis_does_not_lock_an_entry_naming_a_removed_character(
+    cast_case, mode, stale, annotation_format
+):
+    case, plan, _before, _work = cast_case
+    lock_adopted_entries(case, plan["id"], (0, 1))
+    if stale:
+        edit_segment(case, 2, THIRD_BLOCK_EDIT)
+        assert get(case, plan)["stale"] is True
+    remove_characters(case)
+    # None leaves the default (pSSML) format, where the adopted markup is only a seed.
+    options = {"mode": mode}
+    if annotation_format:
+        options["annotation_format"] = annotation_format
+    if mode == "llm":
+        options["model_name"] = "local/test"
+    draft = create(case, **options)
+    entries = seeded(case, draft["id"])
+    assert list(entries) == [case["segment_ids"][1]]
+    assert entries[case["segment_ids"][1]]["locked"] is True
+    assert batched(case, draft["id"]) == [case["segment_ids"][0], case["segment_ids"][2]]
+
+
+def test_a_carried_plan_does_not_report_its_origin_copy_counts(cast_case):
+    case, plan, _before, _work = cast_case
+    source_revision = case["revision_id"]
+    edit_segment(case, 0, NON_FITTING_EDIT)
+    adopted = adopt(case, create(case, copy_from_id=plan["id"], annotation_format="xml"))
+    assert counts(get(case, adopted)) == (2, 1)
+    split_last(case, source_revision)
+    restored = restore(case, source_revision)
+    carried = restored["performance_plan_id"]
+    assert carried and carried != adopted["id"]
+    read = get(case, {"id": carried})
+    assert (read["copied_count"], read["skipped_count"]) == (None, None)
+    listing = case["client"].get(case["base"]).get_json()
+    by_id = {item["id"]: item for item in listing["items"]}
+    assert counts(by_id[adopted["id"]]) == (2, 1)
+    assert (by_id[carried]["copied_count"], by_id[carried]["skipped_count"]) == (None, None)

@@ -200,10 +200,15 @@ into a draft to review and adopt.
 The source plan may be on an earlier revision, on the revision that was active
 before a restore, or on an edit copy's original, and it may be stale. Its
 blocks are matched to the new revision through the revisions they share. A
-block's entry is copied when the block has exactly one counterpart and its
-speaker, voice, language, pause and paragraph break are unchanged. An edited
-block keeps its entry while the markup still fits the new text, as above.
-Split, merged and other changed blocks are skipped. The plan read reports
+block's entry is copied when the block has exactly one counterpart; the source
+unit's speaker, voice, language, node kind and paragraph break, as recorded when
+the source plan was made, equal the target unit's; and, across two revisions,
+the two revisions' segment rows have the same voice reference, node kind, pause
+and paragraph break, and the same segment markup when their text is equal. An
+edited block keeps its entry while the markup still fits the new text, as
+above. Every other block is skipped: split and merged blocks, blocks that
+changed in one of those fields, and blocks whose entry no longer validates (for
+example it names a character that was removed). The plan read reports
 `copied_count` and `skipped_count` for such a draft (both null for a draft made
 without `copy_from_id`). A copy keeps every valid entry whichever analysis mode
 it uses, so AI or MCP analysis of a copy covers only the blocks left without

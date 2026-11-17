@@ -557,7 +557,7 @@ test('a stale speaker plan can be copied and the copy names its counts', async (
     .click();
   await expect(
     panel.getByText(
-      'Editable copy created: 2 copied, 1 skipped. Skipped blocks changed since the source plan and start without its directions.',
+      'Editable copy created: 2 copied, 1 skipped. Skipped blocks changed since the source plan, or their directions no longer validate, and start without them.',
       { exact: true }
     )
   ).toBeVisible();

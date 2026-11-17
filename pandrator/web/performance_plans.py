@@ -30,6 +30,7 @@ from . import models as m
 from .generation_controls import get_generation_controls, merge_character_proposals
 from .performance_annotations import performance_batches as _batches
 from .performance_annotations import plan_annotations as _annotations
+from .performance_carry_over import CARRIED_FROM_PLAN_KEY
 from .performance_copy import copy_plan_entries
 from .performance_read_projections import (
     PERFORMANCE_PLAN_VIEWS,
@@ -438,6 +439,8 @@ def create_plan(
                     session, adopted, selected.active_revision_id
                 ).entries.items()
             }
+    # The adopted markup is validated against the current characters below;
+    # an entry that no longer validates is dropped from both.
     adopted_xml = {
         key: xml
         for key, value in adopted_entries.items()
@@ -447,6 +450,7 @@ def create_plan(
         item["id"]: item
         for item in semantic_context_units(session, selected.active_revision_id)
     }
+    reanalysis = not request.copy_from_id and request.mode != "manual"
     units = []
     for segment in segments:
         spoken = segment.optimized_text or segment.text
@@ -480,14 +484,30 @@ def create_plan(
                     if key in provenance
                 },
             }
+        source_record = None
+        # The adopted markup is read as an XML draft's starting point and as a
+        # reanalysis's locked seed (in either format).
+        if adopted_xml.get(segment.id) and (annotation_format == "xml" or reanalysis):
+            try:
+                source_record = normalized_record(
+                    spoken,
+                    segment.id,
+                    {"speech_xml": adopted_xml[segment.id]},
+                    characters,
+                )
+            except ValueError:
+                # The adopted markup names something the generation controls
+                # no longer hold: start from the segment's own markup, and
+                # never carry the entry into a locked seed.
+                adopted_entries.pop(segment.id, None)
         if annotation_format == "xml":
-            source_xml = adopted_xml.get(segment.id) or _source_markup(segment, segment.id, spoken)
-            source_record = normalized_record(
-                spoken,
-                segment.id,
-                {"speech_xml": source_xml},
-                characters,
-            )
+            if source_record is None:
+                source_record = normalized_record(
+                    spoken,
+                    segment.id,
+                    {"speech_xml": _source_markup(segment, segment.id, spoken)},
+                    characters,
+                )
             unit["speech_xml"] = record_markup(source_record)
         units.append(unit)
     if not units:
@@ -503,7 +523,7 @@ def create_plan(
         )
         seed = copied.entries
         copy_counts = {"copied": copied.copied, "skipped": copied.skipped}
-    elif request.mode != "manual":
+    elif reanalysis:
         # Reanalysis without a copy reconsiders everything but locked choices.
         seed = {
             key: value for key, value in adopted_entries.items() if value.get("locked")
@@ -651,8 +671,11 @@ def describe_plan(
                 {"ordinal": ordinal, "id": segment_id}
                 for ordinal, segment_id in validity.review[:20]
             ]
+    # A carried plan copies the settings of the plan it was carried from, which
+    # may hold that plan's counts; they describe a different copy, so none show.
     stored_counts = (plan.settings_json or {}).get(COPY_COUNTS_KEY)
-    copy_counts = stored_counts if isinstance(stored_counts, dict) else None
+    carried = CARRIED_FROM_PLAN_KEY in (plan.settings_json or {})
+    copy_counts = stored_counts if isinstance(stored_counts, dict) and not carried else None
     job = session.get(m.Job, plan.job_id) if plan.job_id else None
     candidate_units = [
         unit

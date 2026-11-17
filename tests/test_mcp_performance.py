@@ -415,6 +415,33 @@ def test_mcp_copy_reports_copied_and_skipped_counts(case):
     assert outcome.next_actions[0].tool == "pandrator_get_performance_plan"
 
 
+def test_mcp_passive_create_points_at_a_claim_only_while_a_batch_is_open(case):
+    from tests.test_performance_plans import adopt, create
+
+    source = adopt(case, create(case))
+    application = _application_over(case)
+    runtime = SimpleNamespace(require_application=lambda: application)
+
+    def passive_copy(key):
+        return performance_action(runtime, "create", CreatePerformancePlanInput(
+            session_id=case["session_id"], expected_plan_revision_id=case["revision_id"],
+            mode="passive", copy_from_id=source["id"], idempotency_key=key,
+        ))
+
+    # Every entry copied: no batch is left, so a claim would be a wasted round trip.
+    complete = passive_copy("performance-mcp-passive-complete")
+    assert complete.result["batches"] == []
+    assert [action.tool for action in complete.next_actions] == ["pandrator_get_performance_plan"]
+    with case["services"]["database"].session() as session:
+        session.get(m.GenerationSegment, case["segment_ids"][2]).speaker = "B"
+    # One block left without an entry: a worker has a batch to claim.
+    pending = passive_copy("performance-mcp-passive-pending")
+    assert [batch["status"] for batch in pending.result["batches"]] == ["pending"]
+    assert [action.tool for action in pending.next_actions] == [
+        "pandrator_claim_performance_batch"
+    ]
+
+
 @unittest.skipIf(
     Client is None, "This interpreter does not have the configured MCP SDK."
 )
