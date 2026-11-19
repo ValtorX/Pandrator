@@ -55,7 +55,9 @@ changed; the plan's `total` minus `analysed_count` counts them. In `passive`
 mode, claim and submit the plan's batches for them; `llm` mode queues the
 analysis itself. Review those blocks before adopting the copy. A revision with
 no plan can also run if the user accepts `allow_without_speaker_plan`, which
-voices dialogue from each block's markup.
+voices dialogue from each block's markup. Workflow audio stages and recasts
+refuse such a revision too but have no acknowledgement: point the user to the
+generation start's "Generate without the speaker plan" instead.
 
 New plain-text sources also need deterministic `clean_source` before
 `prepare_text`. Follow the ready stage or orchestration plan; leave agentic

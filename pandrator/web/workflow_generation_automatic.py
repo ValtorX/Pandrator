@@ -172,6 +172,22 @@ def generate_audio(
                         for segment in segments
                     ]
     if not revision_id:
+        if source_artifact.role == "speech_blocks":
+            # A direct dubbing job registers new speech blocks, so its plan
+            # digest and its revision are new on every run. Refuse before
+            # storing one rather than leave a plan-less revision each time.
+            from .performance_plans import refuse_speaker_plan_loss_for_new_revision
+
+            with context.database.session() as session:
+                active_revision_id = session.scalar(
+                    select(GenerationPlan.active_revision_id).where(
+                        GenerationPlan.session_id == session_id
+                    )
+                )
+                if active_revision_id:
+                    refuse_speaker_plan_loss_for_new_revision(
+                        session, active_revision_id, dict(settings)
+                    )
         revision_id, generation_segment_ids = context._store_generation_plan(
             session_id,
             records,
@@ -186,6 +202,7 @@ def generate_audio(
         str(record.get("text") or record.get("original_sentence") or "").strip()
         for record in records
     ]
+    from .performance_plans import refuse_missing_speaker_plan
     from .speech_plan_workspace import (
         freeze_speech_snapshot,
         frozen_semantic_contexts,
@@ -194,6 +211,9 @@ def generate_audio(
 
     performance_snapshot = {"tts": dict(settings)}
     with context.database.session() as session:
+        refuse_missing_speaker_plan(
+            session, revision_id, dict(settings), from_generation_start=False
+        )
         freeze_speech_snapshot(session, revision_id, performance_snapshot)
     performance_contexts = frozen_semantic_contexts(performance_snapshot)
     if performance_snapshot.get("speech_plan_frozen"):

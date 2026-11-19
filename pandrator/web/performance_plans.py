@@ -1443,12 +1443,18 @@ def missing_speaker_plan(
 
 
 def ancestor_adopted_plan(
-    session, revision_id: str, *, session_id: str | None = None
+    session,
+    revision_id: str,
+    *,
+    session_id: str | None = None,
+    include_self: bool = False,
 ) -> dict[str, Any] | None:
     """The nearest ancestor's adopted plan, when this revision adopted none.
 
     ``session_id``, when given, must own the revision; otherwise nothing is
     returned, so a caller cannot learn about another project's plans.
+    ``include_self`` names this revision's own adopted plan when it has one,
+    for a caller about to store a child of it.
     """
     revisions = m.GenerationPlanRevision
     owner = session.execute(
@@ -1468,10 +1474,14 @@ def ancestor_adopted_plan(
             .where(revisions.plan_id == plan_id, m.PerformancePlan.status == "adopted")
         ).tuples().all()
     )
-    if not adopted or revision_id in adopted:
+    if not adopted or (revision_id in adopted and not include_self):
         return None
-    source_revision_id = next(
-        (item for item in _lineage_ancestors(session, revision_id) if item in adopted), None
+    source_revision_id = (
+        revision_id
+        if revision_id in adopted
+        else next(
+            (item for item in _lineage_ancestors(session, revision_id) if item in adopted), None
+        )
     )
     if source_revision_id is None:
         return None
@@ -1489,17 +1499,82 @@ def ancestor_adopted_plan(
     }
 
 
-def refuse_missing_speaker_plan(session, revision_id: str, settings: dict[str, Any]) -> None:
-    """Refuse a cast run that would silently drop an earlier speaker plan."""
+def _lineage_plan_clause(notice: dict[str, Any]) -> str:
+    return (
+        f"Speech plan revision {notice['revision_number']} adopted one "
+        f"(performance plan {notice['plan_id']})."
+    )
+
+
+def refuse_missing_speaker_plan(
+    session,
+    revision_id: str,
+    settings: dict[str, Any],
+    *,
+    from_generation_start: bool = True,
+) -> None:
+    """Refuse a cast run that would silently drop an earlier speaker plan.
+
+    The generation start and regenerate offer to start again with
+    ``allow_without_speaker_plan``; other paths (workflow audio stage,
+    preflight, recast) have no acknowledgement and point to the generation
+    start instead (``from_generation_start=False``).
+    """
     notice = missing_speaker_plan(session, revision_id, settings)
     if notice is None:
         return
+    if from_generation_start:
+        ending = (
+            "Copy it to this revision and adopt it, or start again with "
+            "allow_without_speaker_plan to voice each block from its own markup."
+        )
+    else:
+        ending = (
+            "Copy it to this revision and adopt it, or generate from the generation "
+            'start with "Generate without the speaker plan" '
+            "(allow_without_speaker_plan) to voice each block from its own markup."
+        )
     raise ValueError(
         "Casting is on, but this speech plan has no adopted speaker plan, so its "
-        f"dialogue would be voiced as narration. Speech plan revision "
-        f"{notice['revision_number']} adopted one (performance plan {notice['plan_id']}). "
-        "Copy it to this revision and adopt it, or start again with "
-        "allow_without_speaker_plan to voice each block from its own markup."
+        f"dialogue would be voiced as narration. {_lineage_plan_clause(notice)} {ending}"
+    )
+
+
+def refuse_speaker_plan_loss_for_new_revision(
+    session, parent_revision_id: str, settings: dict[str, Any]
+) -> None:
+    """Refuse a cast job that stores a new plan-less revision on every run.
+
+    A direct dubbing audio job registers new speech blocks each run, so it
+    stores a new revision under ``parent_revision_id`` each run too, and a
+    plan copied to one of them never reaches the next. It is refused before it
+    stores anything and pointed to the generation start, which reuses the
+    current revision.
+    """
+    if not settings.get("casting_enabled") or settings.get("performance_enabled"):
+        return
+    notice = ancestor_adopted_plan(session, parent_revision_id, include_self=True)
+    if notice is None:
+        return
+    raise ValueError(
+        "Casting is on, but this audio job prepares a new speech plan revision on every "
+        "run, with no adopted speaker plan, so its dialogue would be voiced as narration. "
+        f"{_lineage_plan_clause(notice)} Generate from the generation start instead: "
+        "copy that plan to the current revision and adopt it, or use "
+        '"Generate without the speaker plan" (allow_without_speaker_plan) to voice each '
+        "block from its own markup."
+    )
+
+
+def no_adopted_performance_plan_message(session, revision_id: str) -> str:
+    """The performance-on refusal, naming the lineage plan when one exists."""
+    message = "Performance is enabled, but this speech plan has no adopted performance plan."
+    notice = ancestor_adopted_plan(session, revision_id)
+    if notice is None:
+        return f"{message} Adopt one or disable performance."
+    return (
+        f"{message} {_lineage_plan_clause(notice)} "
+        "Copy it to this revision and adopt it, or disable performance."
     )
 
 
@@ -1532,9 +1607,7 @@ def freeze_performance_snapshot(
             )
         )
         if plan is None:
-            raise ValueError(
-                "Performance is enabled, but this speech plan has no adopted performance plan. Adopt one or disable performance."
-            )
+            raise ValueError(no_adopted_performance_plan_message(session, revision_id))
     signature = (
         base_signature
         if base_signature is not None

@@ -286,7 +286,15 @@ example before a split, merge, re-segmentation or batch edit), generation is
 refused and names that plan, so it can be copied and adopted first. The start
 preview reports it as `missing_speaker_plan`, the plan list as
 `ancestor_adopted_plan`, and a caller that really wants the block markup passes
-`allow_without_speaker_plan`.
+`allow_without_speaker_plan`. The workflow audio stage (reviewable and direct
+audiobook and dubbing audio jobs), its preflight and recast apply refuse the
+same way and name the plan, and the recast preview is blocked with that
+message; none of them has an acknowledgement: generate from the generation
+start with "Generate without the speaker plan" (`allow_without_speaker_plan`
+for API and MCP callers) instead. A direct dubbing audio job prepares a new
+revision on every run, so it is refused before it stores one. With
+performance on, the "no adopted performance plan" error names the earlier
+revision's plan too.
 
 Automatic post-generation split repair can use read-only semantic context,
 including configurable preceding and following blocks (for example one of

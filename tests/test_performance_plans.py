@@ -15,6 +15,7 @@ from pandrator.web import performance_plans as plans
 from pandrator.web.api import create_app
 from pandrator.web.auth import BootstrapTokenStore
 from pandrator.web.generation_audio_identity import AudioIdentityContext
+from pandrator.web.speech_plan_preview import preview_speech_segment
 from pandrator.web.speech_plan_workspace import (
     freeze_speech_snapshot,
     frozen_semantic_contexts,
@@ -1062,6 +1063,109 @@ def test_cast_start_is_refused_when_the_revision_lost_its_speaker_plan(case):
         case["session_id"], run_override=_cast_override(), allow_without_speaker_plan=True
     )
     assert started["id"]
+
+
+def test_speaker_plan_refusal_has_one_rule_and_two_endings(case):
+    adopted = _adopted(case)
+    split = case["services"]["generation"].revise_topology(
+        case["session_id"],
+        case["revision_id"],
+        {"action": "split", "segment_id": case["segment_ids"][1], "cursor": 3, "text_layer": "display"},
+    )
+    revision_id = split["plan_revision_id"]
+    settings = {"casting_enabled": True}
+    with case["services"]["database"].session() as session:
+        with pytest.raises(ValueError) as start:
+            plans.refuse_missing_speaker_plan(session, revision_id, settings)
+        with pytest.raises(ValueError) as stage:
+            plans.refuse_missing_speaker_plan(
+                session, revision_id, settings, from_generation_start=False
+            )
+        plans.refuse_missing_speaker_plan(
+            session, revision_id, {}, from_generation_start=False
+        )
+    assert "start again with allow_without_speaker_plan" in str(start.value)
+    assert "Generate without the speaker plan" not in str(start.value)
+    assert 'generation start with "Generate without the speaker plan"' in str(stage.value)
+    assert "(allow_without_speaker_plan)" in str(stage.value)
+    for error in (start, stage):
+        assert adopted["id"] in str(error.value)
+        assert "adopted one (performance plan" in str(error.value)
+
+
+def _set_tts(case, **values):
+    """Merge ``values`` into the session's saved TTS settings at their current revision."""
+    with case["services"]["database"].session() as session:
+        row = session.get(m.SessionSetting, (case["session_id"], "tts"))
+        revision, current = (row.revision, dict(row.value_json)) if row else (0, {})
+    case["services"]["workspace_settings"].update(
+        case["session_id"], "tts", revision, {**current, **values}
+    )
+
+
+def test_performance_on_error_names_the_lineage_plan(case):
+    adopted = _adopted(case)
+    split = case["services"]["generation"].revise_topology(
+        case["session_id"],
+        case["revision_id"],
+        {"action": "split", "segment_id": case["segment_ids"][1], "cursor": 3, "text_layer": "display"},
+    )
+    split_id = split["plan_revision_id"]
+    with case["services"]["database"].session() as session:
+        named = plans.no_adopted_performance_plan_message(session, split_id)
+        bare = plans.no_adopted_performance_plan_message(session, case["revision_id"])
+        # The run-start freeze raises the named message.
+        with pytest.raises(ValueError) as frozen:
+            plans.freeze_performance_snapshot(
+                session, split_id, {"tts": {"performance_enabled": True}}
+            )
+    assert "no adopted performance plan" in named
+    assert adopted["id"] in named
+    assert named.endswith("Copy it to this revision and adopt it, or disable performance.")
+    assert bare == (
+        "Performance is enabled, but this speech plan has no adopted performance plan. "
+        "Adopt one or disable performance."
+    )
+    assert str(frozen.value) == named
+    # So does the block preview on that revision.
+    services = case["services"]
+    _set_tts(case, service="openai", voice="voice-a", language="en", performance_enabled=True)
+    with services["database"].session() as session:
+        segment_id = session.scalar(
+            select(m.GenerationSegment.id)
+            .where(m.GenerationSegment.plan_revision_id == split_id)
+            .order_by(m.GenerationSegment.ordinal)
+        )
+    with pytest.raises(ValueError) as previewed:
+        preview_speech_segment(
+            services, case["session_id"], revision_id=split_id, segment_id=segment_id
+        )
+    assert str(previewed.value) == named
+
+
+def test_a_job_that_stores_a_new_revision_is_refused_before_it_stores_it(case):
+    settings = {"casting_enabled": True}
+    with case["services"]["database"].session() as session:
+        # No adopted plan anywhere yet: nothing to lose.
+        plans.refuse_speaker_plan_loss_for_new_revision(session, case["revision_id"], settings)
+    adopted = _adopted(case)
+    split = case["services"]["generation"].revise_topology(
+        case["session_id"],
+        case["revision_id"],
+        {"action": "split", "segment_id": case["segment_ids"][1], "cursor": 3, "text_layer": "display"},
+    )
+    with case["services"]["database"].session() as session:
+        # A child of the adopted revision itself, and of its plan-less split.
+        for parent in (case["revision_id"], split["plan_revision_id"]):
+            with pytest.raises(ValueError) as refused:
+                plans.refuse_speaker_plan_loss_for_new_revision(session, parent, settings)
+            message = str(refused.value)
+            assert "prepares a new speech plan revision on every run" in message
+            assert adopted["id"] in message
+            assert '"Generate without the speaker plan" (allow_without_speaker_plan)' in message
+        # Casting off, or performance on (which refuses on its own), is left alone.
+        for other in ({}, {"casting_enabled": True, "performance_enabled": True}):
+            plans.refuse_speaker_plan_loss_for_new_revision(session, case["revision_id"], other)
 
 
 def test_copying_the_named_plan_onto_the_split_revision_clears_the_notice(case):
