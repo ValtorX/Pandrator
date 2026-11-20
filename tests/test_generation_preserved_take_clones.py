@@ -24,7 +24,7 @@ from sqlalchemy import event, select
 
 from pandrator.web import workspace
 from pandrator.web.generation_audio_identity import take_reuse_reason
-from pandrator.web.models import Artifact, AudioTake, GenerationRun, GenerationSegment
+from pandrator.web.models import Artifact, AudioTake, GenerationRun, GenerationSegment, Job
 from pandrator.web.tts_providers import TtsCapabilities
 from pandrator.web.workspace import RevisionConflict, copy_preserved_takes
 from tests import test_generation_missing_only as missing_tests
@@ -826,6 +826,149 @@ class PreservedTakeCloneTests(unittest.TestCase):
                             if take.generation_segment_id != ids[0]
                         ],
                     )
+
+    # --- the residuals the 2.16 plan accepted ---
+
+    def test_a_take_failing_its_check_after_the_commit_leaves_the_run_partial(self):
+        session_id, ids = self._case(preserved=4, missing=1)
+        original_after_start = workspace.copy_preserved_takes_after_start
+
+        def break_two_then_copy(database, prepared, result):
+            items = {
+                **dict(prepared.get("reusable_take_ids") or {}),
+                **dict(prepared.get("preserved_take_ids") or {}),
+            }
+            with database.session() as session:
+                deleted = session.get(AudioTake, items[ids[0]])
+                session.get(Artifact, deleted.artifact_id).state = "deleted"
+                session.get(AudioTake, items[ids[1]]).status = "failed"
+            original_after_start(database, prepared, result)
+
+        with (
+            patch.object(workspace, "copy_preserved_takes_after_start", break_two_then_copy),
+            self.assertLogs("pandrator.web.workspace", level="WARNING") as logs,
+        ):
+            result = self._start(session_id, missing_only=True)
+        run_id = result["id"]
+        self.assertEqual("queued", result["status"])
+        self.assertIn(f"{run_id} left 2 preserved segments uncopied", "\n".join(logs.output))
+        self.assertEqual(
+            sorted(ids[2:4]),
+            sorted(take.generation_segment_id for take in self._run_owned(run_id)),
+        )
+        calls: list[str] = []
+        self.assertEqual("partial", self._run_job(run_id, calls)["status"])
+        # The job generates only the segment that never had audio.
+        self.assertEqual(["Block number 4."], calls)
+        with self.database.session() as session:
+            self.assertEqual("partial", session.get(GenerationRun, run_id).status)
+        self.assertEqual(
+            sorted(ids[2:]),
+            sorted(take.generation_segment_id for take in self._run_owned(run_id)),
+        )
+        # Both sources a check refused keep their activity.
+        with self.database.session() as session:
+            for segment_id in ids[:2]:
+                take = session.scalars(
+                    select(AudioTake).where(AudioTake.generation_segment_id == segment_id)
+                ).one()
+                self.assertTrue(take.is_active)
+
+    def test_a_run_cancelled_while_queued_after_a_failed_copy_owns_no_copies(self):
+        session_id, ids = self._case(preserved=3, missing=1)
+        sources = self._active(ids[:3])
+        with (
+            patch.object(workspace, "copy_preserved_takes", side_effect=RuntimeError("copy")),
+            self.assertLogs("pandrator.web.workspace", level="ERROR") as logs,
+        ):
+            result = self._start(session_id, missing_only=True)
+        run_id = result["id"]
+        self.assertIn(run_id, "\n".join(logs.output))
+        self.assertEqual("queued", result["status"])
+        self.assertEqual("canceled", self.generation.cancel(run_id)["status"])
+        with self.database.session() as session:
+            run = session.get(GenerationRun, run_id)
+            job = session.get(Job, run.job_id)
+            self.assertEqual("canceled", run.status)
+            self.assertEqual("canceled", job.status)
+            job_id = job.id
+        claimed = self.services["jobs"].claim("preserved-copy-cancel-worker")
+        self.assertNotEqual(job_id, claimed.id if claimed else None)
+        self.assertEqual([], self._run_owned(run_id))
+        self.assertEqual(sources, self._active(ids[:3]))
+        listing = self.generation.list_segments(session_id, generation_run_id=run_id)
+        by_id = {item["id"]: item for item in listing["items"]}
+        for segment_id in ids[:3]:
+            self.assertIsNone(by_id[segment_id]["effective_take"])
+
+    def test_a_segment_listing_inside_the_copy_window_sees_the_run_without_copies(self):
+        session_id, ids = self._case(preserved=3, missing=1)
+        sources = self._active(ids[:3])
+        run_id, items, _writers = self._start_without_copy(session_id, missing_only=True)
+        scoped = self.generation.list_segments(session_id, generation_run_id=run_id)
+        self.assertEqual(sorted(ids), sorted(item["id"] for item in scoped["items"]))
+        for item in scoped["items"]:
+            self.assertIsNone(item["effective_take"], item["id"])
+        unscoped = self.generation.list_segments(session_id)
+        effective = {item["id"]: item["effective_take"] for item in unscoped["items"]}
+        for segment_id in ids[:3]:
+            self.assertEqual(sources[segment_id], [effective[segment_id]["id"]])
+            self.assertIsNone(effective[segment_id]["generation_run_id"])
+        self.assertEqual(3, copy_preserved_takes(self.database, run_id, items))
+        after = self.generation.list_segments(session_id, generation_run_id=run_id)
+        self.assertEqual(
+            sorted(ids[:3]),
+            sorted(item["id"] for item in after["items"] if item["effective_take"]),
+        )
+        for item in after["items"]:
+            if item["id"] in ids[:3]:
+                take = item["effective_take"]
+                self.assertEqual(run_id, take["generation_run_id"])
+                with self.database.session() as session:
+                    copy = session.get(AudioTake, take["id"])
+                    self.assertEqual(items[item["id"]], copy.parent_take_id)
+
+    def test_a_second_start_inside_the_copy_window_shares_the_first_runs_artifacts(self):
+        for first_copies_first in (True, False):
+            with self.subTest(first_copies_first=first_copies_first):
+                session_id, ids = self._case(preserved=3, missing=1)
+                first_id, first_items, _first = self._start_without_copy(
+                    session_id, missing_only=True,
+                )
+                second_id, second_items, _second = self._start_without_copy(
+                    session_id, missing_only=True,
+                )
+                self.assertNotEqual(first_id, second_id)
+                self.assertEqual(first_items, second_items)
+                order = (
+                    [(first_id, first_items), (second_id, second_items)]
+                    if first_copies_first
+                    else [(second_id, second_items), (first_id, first_items)]
+                )
+                for run_id, items in order:
+                    self.assertEqual(3, copy_preserved_takes(self.database, run_id, items))
+                made_first = order[0][0]
+                with self.database.session() as session:
+                    for segment_id in ids[:3]:
+                        takes = list(session.scalars(
+                            select(AudioTake).where(
+                                AudioTake.generation_segment_id == segment_id
+                            )
+                        ))
+                        source = next(take for take in takes if take.generation_run_id is None)
+                        copies = {
+                            take.generation_run_id: take
+                            for take in takes if take.generation_run_id is not None
+                        }
+                        self.assertEqual({first_id, second_id}, set(copies))
+                        for copy in copies.values():
+                            self.assertEqual(source.id, copy.parent_take_id)
+                            self.assertEqual(source.artifact_id, copy.artifact_id)
+                        self.assertFalse(source.is_active)
+                        self.assertEqual(
+                            [made_first],
+                            [run for run, copy in copies.items() if copy.is_active],
+                        )
 
 
 @pytest.fixture
