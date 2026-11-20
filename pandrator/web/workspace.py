@@ -3019,8 +3019,8 @@ def copy_preserved_takes(
     if skipped:
         # The run finalizes as partial without these; say why.
         _LOGGER.warning(
-            "Generation run %s left %d preserved segments uncopied: their take was "
-            "deselected, failed, lost its audio or is no longer reusable since the start.",
+            "Generation run %s left %d preserved segments uncopied: their take "
+            "failed, lost its audio or is no longer reusable since the start.",
             run_id,
             skipped,
         )

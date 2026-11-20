@@ -857,7 +857,13 @@ class PreservedTakeCloneTests(unittest.TestCase):
             sorted(take.generation_segment_id for take in self._run_owned(run_id)),
         )
         calls: list[str] = []
-        self.assertEqual("partial", self._run_job(run_id, calls)["status"])
+        with self.assertLogs("pandrator.web.workspace", level="WARNING") as job_logs:
+            self.assertEqual("partial", self._run_job(run_id, calls)["status"])
+        # The job's own copy says why the run finalizes partial.
+        self.assertIn(
+            f"{run_id} left 2 preserved segments uncopied: the audio its start preserved",
+            "\n".join(job_logs.output),
+        )
         # The job generates only the segment that never had audio.
         self.assertEqual(["Block number 4."], calls)
         with self.database.session() as session:
@@ -912,6 +918,7 @@ class PreservedTakeCloneTests(unittest.TestCase):
         unscoped = self.generation.list_segments(session_id)
         effective = {item["id"]: item["effective_take"] for item in unscoped["items"]}
         for segment_id in ids[:3]:
+            self.assertIsNotNone(effective[segment_id], segment_id)
             self.assertEqual(sources[segment_id], [effective[segment_id]["id"]])
             self.assertIsNone(effective[segment_id]["generation_run_id"])
         self.assertEqual(3, copy_preserved_takes(self.database, run_id, items))
@@ -955,6 +962,8 @@ class PreservedTakeCloneTests(unittest.TestCase):
                                 AudioTake.generation_segment_id == segment_id
                             )
                         ))
+                        # The source and exactly one copy per run.
+                        self.assertEqual(3, len(takes), segment_id)
                         source = next(take for take in takes if take.generation_run_id is None)
                         copies = {
                             take.generation_run_id: take
