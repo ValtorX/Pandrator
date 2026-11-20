@@ -348,6 +348,11 @@ def test_recast_is_blocked_on_a_split_of_a_revision_with_an_adopted_speaker_plan
     adopted = _adopted(case)
     # Adopting turns performance on; the speaker plan guard is for casting alone.
     _set_tts(case, performance_enabled=False)
+    # Control: casting on with the plan adopted on this revision passes the
+    # guard (nothing is recorded yet, which is the only reason it gives).
+    assert prepare(case)["preview"]["blocked_reason"] == (
+        "No recordings need the selected voice changes."
+    )
     case["services"]["generation"].revise_topology(
         case["session_id"],
         case["revision_id"],

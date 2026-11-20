@@ -55,9 +55,17 @@ changed; the plan's `total` minus `analysed_count` counts them. In `passive`
 mode, claim and submit the plan's batches for them; `llm` mode queues the
 analysis itself. Review those blocks before adopting the copy. A revision with
 no plan can also run if the user accepts `allow_without_speaker_plan`, which
-voices dialogue from each block's markup. Workflow audio stages and recasts
-refuse such a revision too but have no acknowledgement: point the user to the
-generation start's "Generate without the speaker plan" instead.
+voices dialogue from each block's markup. Workflow audio stages, their
+preflight (for a named revision) and recasts refuse such a revision only when
+a spoken block has no speech markup, block voice or speaker label of its own,
+and name those blocks; a revision whose spoken blocks all have one runs from
+them, without the plan's edits. They have no acknowledgement, so they refuse
+even a revision the user ran with `allow_without_speaker_plan` at the
+generation start: copy and adopt the named plan, or point the user to the
+generation start's "Generate without the speaker plan". A direct dubbing audio
+job applies the same rule to its new speech blocks before storing them, even
+when the current revision adopted the plan; when its message says the current
+revision has the plan, point the user to the generation start.
 
 New plain-text sources also need deterministic `clean_source` before
 `prepare_text`. Follow the ready stage or orchestration plan; leave agentic

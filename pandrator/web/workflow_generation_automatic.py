@@ -175,7 +175,8 @@ def generate_audio(
         if source_artifact.role == "speech_blocks":
             # A direct dubbing job registers new speech blocks, so its plan
             # digest and its revision are new on every run. Refuse before
-            # storing one rather than leave a plan-less revision each time.
+            # storing one rather than leave a plan-less revision each time
+            # when a block would fall back to the narrator.
             from .performance_plans import refuse_speaker_plan_loss_for_new_revision
 
             with context.database.session() as session:
@@ -186,7 +187,7 @@ def generate_audio(
                 )
                 if active_revision_id:
                     refuse_speaker_plan_loss_for_new_revision(
-                        session, active_revision_id, dict(settings)
+                        session, active_revision_id, dict(settings), records
                     )
         revision_id, generation_segment_ids = context._store_generation_plan(
             session_id,

@@ -1428,18 +1428,74 @@ def _lineage_ancestors(session, revision_id: str) -> Iterator[str]:
 
 
 def missing_speaker_plan(
-    session, revision_id: str, settings: dict[str, Any]
+    session,
+    revision_id: str,
+    settings: dict[str, Any],
+    *,
+    include_self: bool = False,
 ) -> dict[str, Any] | None:
     """The adopted plan an ancestor had, when casting would run without one.
 
     With casting on and no adopted plan, every block is voiced from its own
     markup, so a revision that lost its plan voices its dialogue as narration.
     ``None`` when casting is off, performance is on (which refuses on its
-    own), this revision has an adopted plan, or no ancestor adopted one.
+    own), or no ancestor adopted one. A revision with its own adopted plan gets
+    ``None`` too, unless ``include_self`` is set: a caller about to store a
+    child of it gets that plan named (see ``ancestor_adopted_plan``).
     """
     if not settings.get("casting_enabled") or settings.get("performance_enabled"):
         return None
-    return ancestor_adopted_plan(session, revision_id)
+    return ancestor_adopted_plan(session, revision_id, include_self=include_self)
+
+
+def _has_own_speech(speech_xml: Any, voice: Any, voice_id: Any, speaker: Any) -> bool:
+    """Whether a block is cast without a speaker plan.
+
+    Without an adopted plan, cast rendering voices a block from its own
+    ``speech_xml``, gives its block voice to the whole block, or casts its
+    source speaker label (through ``source_speakers``, else as dialogue). Only
+    a block with none of them falls back to the narrator.
+    """
+    return any(
+        isinstance(value, str) and value.strip()
+        for value in (speech_xml, voice, voice_id, speaker)
+    )
+
+
+def blocks_without_own_speech(session, revision_id: str) -> list[tuple[int, str]]:
+    """``(ordinal, id)`` of the spoken blocks that would fall back to the narrator.
+
+    These carry no speech markup, block voice or speaker label of their own
+    (``_has_own_speech``). A block is spoken, as the speaker plan validity
+    rules count it, when it is not removed and its spoken text
+    (``optimized_text`` or ``text``) is not blank.
+    """
+    rows = session.execute(
+        select(
+            m.GenerationSegment.ordinal,
+            m.GenerationSegment.id,
+            m.GenerationSegment.text,
+            m.GenerationSegment.optimized_text,
+            m.GenerationSegment.speech_plan_json,
+            m.GenerationSegment.voice,
+            m.GenerationSegment.voice_id,
+            m.GenerationSegment.speaker,
+        )
+        .where(
+            m.GenerationSegment.plan_revision_id == revision_id,
+            m.GenerationSegment.removed.is_(False),
+        )
+        .order_by(m.GenerationSegment.ordinal)
+    ).all()
+    narrated = []
+    for ordinal, segment_id, text, optimized_text, speech_plan, voice, voice_id, speaker in rows:
+        if not str(optimized_text or text or "").strip():
+            continue
+        xml = speech_plan.get("speech_xml") if isinstance(speech_plan, dict) else None
+        if _has_own_speech(xml, voice, voice_id, speaker):
+            continue
+        narrated.append((int(ordinal), str(segment_id)))
+    return narrated
 
 
 def ancestor_adopted_plan(
@@ -1453,8 +1509,8 @@ def ancestor_adopted_plan(
 
     ``session_id``, when given, must own the revision; otherwise nothing is
     returned, so a caller cannot learn about another project's plans.
-    ``include_self`` names this revision's own adopted plan when it has one,
-    for a caller about to store a child of it.
+    With ``include_self``, a revision that adopted a plan names its own
+    instead of ``None``, for a caller about to store a child of it.
     """
     revisions = m.GenerationPlanRevision
     owner = session.execute(
@@ -1515,54 +1571,104 @@ def refuse_missing_speaker_plan(
 ) -> None:
     """Refuse a cast run that would silently drop an earlier speaker plan.
 
-    The generation start and regenerate offer to start again with
-    ``allow_without_speaker_plan``; other paths (workflow audio stage,
-    preflight, recast) have no acknowledgement and point to the generation
-    start instead (``from_generation_start=False``).
+    The generation start and regenerate refuse any revision that lost its
+    lineage's plan and offer to start again with ``allow_without_speaker_plan``.
+    The other paths (workflow audio stage, its preflight, recast) can run from a
+    source that carries its own speech markup, and have no acknowledgement, so
+    with ``from_generation_start=False`` they refuse only when a spoken block
+    would fall back to the narrator (``blocks_without_own_speech``), name those
+    blocks, and point to the generation start instead.
     """
     notice = missing_speaker_plan(session, revision_id, settings)
     if notice is None:
         return
     if from_generation_start:
-        ending = (
-            "Copy it to this revision and adopt it, or start again with "
-            "allow_without_speaker_plan to voice each block from its own markup."
+        raise ValueError(
+            "Casting is on, but this speech plan has no adopted speaker plan, so its "
+            "dialogue would be voiced as narration. "
+            f"{_lineage_plan_clause(notice)} Copy it to this revision and adopt it, "
+            "or start again with allow_without_speaker_plan to voice each block from "
+            "its own markup."
         )
-    else:
-        ending = (
-            "Copy it to this revision and adopt it, or generate from the generation "
-            'start with "Generate without the speaker plan" '
-            "(allow_without_speaker_plan) to voice each block from its own markup."
-        )
+    narrated = blocks_without_own_speech(session, revision_id)
+    if not narrated:
+        return
+    # Blocks are numbered from 1, as the speaker plan panel lists them.
+    listed = ", ".join(
+        f"block {ordinal + 1} ({segment_id})" for ordinal, segment_id in narrated[:5]
+    )
+    more = f" and {len(narrated) - 5} more" if len(narrated) > 5 else ""
     raise ValueError(
-        "Casting is on, but this speech plan has no adopted speaker plan, so its "
-        f"dialogue would be voiced as narration. {_lineage_plan_clause(notice)} {ending}"
+        "Casting is on, but this speech plan has no adopted speaker plan, and "
+        f"{_narrated_blocks_clause(len(narrated), 'spoken block')}: {listed}{more}. "
+        f"{_lineage_plan_clause(notice)} Copy it to this revision and adopt it, or "
+        'generate from the generation start with "Generate without the speaker plan" '
+        "(allow_without_speaker_plan) to voice each block from its own markup."
+    )
+
+
+def _narrated_blocks_clause(count: int, noun: str) -> str:
+    if count == 1:
+        return (
+            f"1 {noun} has no speech markup, block voice or speaker label of its own, "
+            "so it would be voiced by the narrator"
+        )
+    return (
+        f"{count} {noun}s have no speech markup, block voice or speaker label of "
+        "their own, so they would be voiced by the narrator"
     )
 
 
 def refuse_speaker_plan_loss_for_new_revision(
-    session, parent_revision_id: str, settings: dict[str, Any]
+    session,
+    parent_revision_id: str,
+    settings: dict[str, Any],
+    records: list[dict[str, Any]],
 ) -> None:
-    """Refuse a cast job that stores a new plan-less revision on every run.
+    """Refuse a direct dubbing audio job before it stores a plan-less revision.
 
-    A direct dubbing audio job registers new speech blocks each run, so it
-    stores a new revision under ``parent_revision_id`` each run too, and a
-    plan copied to one of them never reaches the next. It is refused before it
-    stores anything and pointed to the generation start, which reuses the
-    current revision.
+    The job registers new speech blocks on every run, so it would store a new
+    revision under ``parent_revision_id`` each time, and a plan copied to one
+    of them never reaches the next. With casting on and an adopted plan in the
+    lineage (``parent_revision_id``'s own included), it applies the workflow
+    stage's rule to its ``records`` before storing them: when a spoken record
+    would fall back to the narrator (``_has_own_speech``), it is refused and
+    pointed to the generation start, which reuses the current revision.
     """
-    if not settings.get("casting_enabled") or settings.get("performance_enabled"):
-        return
-    notice = ancestor_adopted_plan(session, parent_revision_id, include_self=True)
+    notice = missing_speaker_plan(session, parent_revision_id, settings, include_self=True)
     if notice is None:
         return
+    narrated = 0
+    for record in records:
+        if not str(record.get("text") or record.get("original_sentence") or "").strip():
+            continue
+        plan = record.get("speech_plan")
+        xml = record.get("speech_xml") or (
+            plan.get("speech_xml") if isinstance(plan, dict) else None
+        )
+        if not _has_own_speech(
+            xml, record.get("voice"), record.get("voice_id"), record.get("speaker")
+        ):
+            narrated += 1
+    if not narrated:
+        return
+    if notice["plan_revision_id"] == parent_revision_id:
+        remedy = (
+            f"Speech plan revision {notice['revision_number']}, the current one, adopted "
+            f"one (performance plan {notice['plan_id']}). Generate from the generation "
+            "start instead, which uses it."
+        )
+    else:
+        remedy = (
+            f"{_lineage_plan_clause(notice)} Generate from the generation start instead: "
+            "copy that plan to the current revision and adopt it, or use "
+            '"Generate without the speaker plan" (allow_without_speaker_plan) to voice '
+            "each block from its own markup."
+        )
+    clause = _narrated_blocks_clause(narrated, "speech block")
     raise ValueError(
         "Casting is on, but this audio job prepares a new speech plan revision on every "
-        "run, with no adopted speaker plan, so its dialogue would be voiced as narration. "
-        f"{_lineage_plan_clause(notice)} Generate from the generation start instead: "
-        "copy that plan to the current revision and adopt it, or use "
-        '"Generate without the speaker plan" (allow_without_speaker_plan) to voice each '
-        "block from its own markup."
+        f"run, with no adopted speaker plan, and {clause}. {remedy}"
     )
 
 

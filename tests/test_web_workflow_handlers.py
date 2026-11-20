@@ -2343,9 +2343,9 @@ class WebWorkflowHandlerTests(unittest.TestCase):
         )
         context = self.handlers._automatic_generation_context()
 
-        def speech_blocks(name):
+        def speech_blocks(name, blocks=({"text": "A dubbed block."},)):
             path = self.session_dir / name
-            path.write_text(json.dumps([{"text": "A dubbed block."}]), encoding="utf-8")
+            path.write_text(json.dumps(list(blocks)), encoding="utf-8")
             return self.artifacts.register(
                 path, kind="json", role="speech_blocks", session_id=self.session.id
             ), path
@@ -2401,6 +2401,30 @@ class WebWorkflowHandlerTests(unittest.TestCase):
                     threading.Event(), role="dubbing_audio", job_id=job.id,
                 )
         self.assertEqual(before + 1, revisions())
+
+        # Blocks whose diarised speaker labels cast them lose nothing the stage
+        # cannot voice, so a lineage plan does not stop them either.
+        source, source_path = speech_blocks(
+            "blocks-labelled.json",
+            [{"text": "A dubbed block.", "speaker": "SPEAKER_00"},
+             {"text": "Another one.", "speaker": "SPEAKER_01"}],
+        )
+        with (
+            mock.patch(
+                "pandrator.web.performance_plans.ancestor_adopted_plan",
+                return_value=self._lost_speaker_plan_notice(),
+            ),
+            mock.patch(
+                "pandrator.web.speech_plan_workspace.freeze_speech_snapshot",
+                side_effect=PastTheGuard(),
+            ),
+        ):
+            with self.assertRaises(PastTheGuard):
+                generate_audio(
+                    context, self.session.id, source, source_path, settings, self.progress,
+                    threading.Event(), role="dubbing_audio", job_id=job.id,
+                )
+        self.assertEqual(before + 2, revisions())
 
     def test_standalone_generation_start_refuses_a_cast_run_that_lost_its_plan(self):
         from pandrator.web.workflow_generation_start import (
