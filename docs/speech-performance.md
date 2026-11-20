@@ -308,26 +308,20 @@ the workflow stage or recast while a spoken block would fall back to the
 narrator: copy and adopt the named plan, or generate from the generation start.
 A workflow stage that takes its input from a new source stores that source's
 revision first, so a refused source leaves its revision active, beside the
-adopted one; copying the plan to it works, and a retry from the same source
-reuses it.
+adopted one. That revision has no edit lineage, so copying the plan to it
+(`copy_from_id`) carries no entries: the copy needs analysis and review before
+it is adopted. A retry from the same source reuses the revision.
 
-A direct dubbing audio job registers new speech blocks on every run and stores
-them as a new revision, which has no adopted plan and cannot get one before it
-is voiced. So with casting on, performance off and an adopted plan in its
-lineage (the current revision's own included), the job checks its blocks before
-it stores that revision (its speech blocks file is already written): it is
-refused only when a block with no speech markup, block voice or speaker label
-of its own repeats the exact text of a block whose plan entry has speech markup
-beyond its plain text, because that block would lose the entry. The message
-numbers those blocks. A job from different text, such as a corrected or
-re-translated subtitle file, runs without the plan. For a rerun of the plan's
-text, generate from the generation start, which voices the current revision
-with the plan; when the plan belongs to an earlier revision, copy it to the
-current revision and adopt it first. The job cannot use a copied plan, so it
-keeps refusing the same text.
+A direct dubbing audio job is not checked. It registers new speech blocks on
+every run and stores them as a new revision, so a copied plan or an
+acknowledgement has nowhere to live before the job voices it. It runs as it
+does without this guard: with casting on, a block without its own speech
+markup, block voice or speaker label is voiced by the narrator, whether or not
+an earlier revision had a speaker plan. This is a known limit.
 
 With performance on, the "no adopted performance plan" error names the earlier
-revision's plan too.
+revision's plan too, except on a revision a direct dubbing job stored, where it
+keeps its original text because a copied plan cannot help that job.
 
 Automatic post-generation split repair can use read-only semantic context,
 including configurable preceding and following blocks (for example one of

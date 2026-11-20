@@ -171,30 +171,14 @@ def generate_audio(
                         }
                         for segment in segments
                     ]
-    from .performance_plans import (
-        refuse_missing_speaker_plan,
-        refuse_speaker_plan_loss_for_new_revision,
-    )
+    from .performance_plans import refuse_missing_speaker_plan
 
-    # A direct dubbing job registers new speech blocks, so its plan digest and
-    # its revision are new on every run, and no plan can be adopted on that
-    # revision before it is voiced. Its own guard decides before storing it:
-    # refuse only when a block repeats text the adopted speaker plan annotates
-    # and would fall back to the narrator. The stage guard would refuse every
-    # unlabelled block of a new revision, even a re-translated one.
+    # A direct dubbing job registers new speech blocks, so every run stores a
+    # new revision, and no plan or acknowledgement can be placed on it before it
+    # is voiced. The stage rule would refuse every unlabelled block of such a
+    # revision, so the job runs unguarded, as upstream does.
     direct_dubbing = source_artifact.role == "speech_blocks"
     if not revision_id:
-        if direct_dubbing:
-            with context.database.session() as session:
-                active_revision_id = session.scalar(
-                    select(GenerationPlan.active_revision_id).where(
-                        GenerationPlan.session_id == session_id
-                    )
-                )
-                if active_revision_id:
-                    refuse_speaker_plan_loss_for_new_revision(
-                        session, active_revision_id, settings, records
-                    )
         revision_id, generation_segment_ids = context._store_generation_plan(
             session_id,
             records,

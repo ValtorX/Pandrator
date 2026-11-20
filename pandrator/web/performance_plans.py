@@ -1428,24 +1428,18 @@ def _lineage_ancestors(session, revision_id: str) -> Iterator[str]:
 
 
 def missing_speaker_plan(
-    session,
-    revision_id: str,
-    settings: dict[str, Any],
-    *,
-    include_self: bool = False,
+    session, revision_id: str, settings: dict[str, Any]
 ) -> dict[str, Any] | None:
     """The adopted plan an ancestor had, when casting would run without one.
 
     With casting on and no adopted plan, every block is voiced from its own
     markup, so a revision that lost its plan voices its dialogue as narration.
     ``None`` when casting is off, performance is on (which refuses on its
-    own), or no ancestor adopted one. A revision with its own adopted plan gets
-    ``None`` too, unless ``include_self`` is set: a caller about to store a
-    child of it gets that plan named (see ``ancestor_adopted_plan``).
+    own), this revision has an adopted plan, or no ancestor adopted one.
     """
     if not settings.get("casting_enabled") or settings.get("performance_enabled"):
         return None
-    return ancestor_adopted_plan(session, revision_id, include_self=include_self)
+    return ancestor_adopted_plan(session, revision_id)
 
 
 def _has_own_speech(speech_xml: Any, voice: Any, voice_id: Any, speaker: Any) -> bool:
@@ -1499,18 +1493,12 @@ def blocks_without_own_speech(session, revision_id: str) -> list[tuple[int, str]
 
 
 def ancestor_adopted_plan(
-    session,
-    revision_id: str,
-    *,
-    session_id: str | None = None,
-    include_self: bool = False,
+    session, revision_id: str, *, session_id: str | None = None
 ) -> dict[str, Any] | None:
     """The nearest ancestor's adopted plan, when this revision adopted none.
 
     ``session_id``, when given, must own the revision; otherwise nothing is
     returned, so a caller cannot learn about another project's plans.
-    With ``include_self``, a revision that adopted a plan names its own
-    instead of ``None``, for a caller about to store a child of it.
     """
     revisions = m.GenerationPlanRevision
     owner = session.execute(
@@ -1530,14 +1518,10 @@ def ancestor_adopted_plan(
             .where(revisions.plan_id == plan_id, m.PerformancePlan.status == "adopted")
         ).tuples().all()
     )
-    if not adopted or (revision_id in adopted and not include_self):
+    if not adopted or revision_id in adopted:
         return None
-    source_revision_id = (
-        revision_id
-        if revision_id in adopted
-        else next(
-            (item for item in _lineage_ancestors(session, revision_id) if item in adopted), None
-        )
+    source_revision_id = next(
+        (item for item in _lineage_ancestors(session, revision_id) if item in adopted), None
     )
     if source_revision_id is None:
         return None
@@ -1599,8 +1583,10 @@ def refuse_missing_speaker_plan(
     )
     raise ValueError(
         "Casting is on, but this speech plan has no adopted speaker plan, and "
-        f"{_narrated_blocks_clause(len(narrated), 'spoken block')}: {listed}. "
-        f"{_lineage_plan_clause(notice)} Copy it to this revision and adopt it, or "
+        f"{_narrated_blocks_clause(len(narrated))}: {listed}. "
+        f"{_lineage_plan_clause(notice)} Copy it to this revision and adopt it (a "
+        "revision stored from new source text keeps none of its entries, so the copy "
+        "needs analysis and review first), or "
         'generate from the generation start with "Generate without the speaker plan" '
         "(allow_without_speaker_plan) to voice each block from its own markup."
     )
@@ -1612,138 +1598,37 @@ def _listed_blocks(labels: list[str]) -> str:
     return ", ".join(labels[:5]) + more
 
 
-def _narrated_blocks_clause(count: int, noun: str) -> str:
+def _narrated_blocks_clause(count: int) -> str:
     if count == 1:
         return (
-            f"1 {noun} has no speech markup, block voice or speaker label of its own, "
+            "1 spoken block has no speech markup, block voice or speaker label of its own, "
             "so it would be voiced by the narrator"
         )
     return (
-        f"{count} {noun}s have no speech markup, block voice or speaker label of "
+        f"{count} spoken blocks have no speech markup, block voice or speaker label of "
         "their own, so they would be voiced by the narrator"
     )
 
 
-def _adds_to_plain_text(xml: str | None) -> bool:
-    """Whether an entry's speech markup says more than its block's plain text.
-
-    Adoption gives every unreviewed block of an XML plan its plain text as
-    markup, which the narrator reads the same way without the plan.
-    """
-    if not xml:
+def _stored_from_speech_blocks(session, revision_id: str) -> bool:
+    """Whether a direct dubbing job stored this revision itself, not an edit of it."""
+    revision = session.get(m.GenerationPlanRevision, revision_id)
+    if revision is not None and revision.operation_json:
         return False
-    try:
-        root = ET.fromstring(xml)
-    except ET.ParseError:
-        return True
-    return len(root) > 0 or any(key != "id" for key in root.attrib)
-
-
-def _annotated_block_texts(session, plan_id: str) -> tuple[set[str], set[str]]:
-    """The spoken and source texts of the blocks an adopted plan casts.
-
-    With casting on and performance off, a run takes only an entry's speech
-    markup from the plan, so a block counts when its entry's markup says more
-    than its plain text. Blocks are taken from the plan's units, which
-    ``copy_unchanged_annotations`` also matches by text. A unit's
-    ``spoken_text`` is its block's ``optimized_text or text``, so its source
-    ``text`` is returned too.
-    """
-    plan = session.get(m.PerformancePlan, plan_id)
-    if plan is None:
-        return set(), set()
-    annotations = _annotations(session, plan)
-    spoken: set[str] = set()
-    source: set[str] = set()
-    for unit in plan.units_json or []:
-        if not _adds_to_plain_text(record_markup(annotations.get(unit.get("id")))):
-            continue
-        spoken.add(str(unit.get("spoken_text") or "").strip())
-        source.add(str(unit.get("text") or "").strip())
-    spoken.discard("")
-    source.discard("")
-    return spoken, source
-
-
-def refuse_speaker_plan_loss_for_new_revision(
-    session,
-    parent_revision_id: str,
-    settings: dict[str, Any],
-    records: list[dict[str, Any]],
-) -> None:
-    """Refuse a direct dubbing audio job that would drop its speaker plan's entries.
-
-    The job registers new speech blocks on every run and stores them as a new
-    revision under ``parent_revision_id``, which has no adopted plan, and a plan
-    copied to it never reaches the next run. With casting on and an adopted plan
-    in the lineage (``parent_revision_id``'s own included), the job is refused
-    before it stores that revision (its speech blocks artifact is already
-    registered) when a spoken record has no speech of its own
-    (``_has_own_speech``) and repeats the exact text of a block whose plan
-    entry has speech markup beyond its plain text (``_annotated_block_texts``):
-    that record would lose the entry and fall back to the narrator. A job whose
-    text the plan does not mark up, such as a re-translated subtitle file, runs
-    without the plan.
-    """
-    notice = missing_speaker_plan(session, parent_revision_id, settings, include_self=True)
-    if notice is None:
-        return
-    spoken_texts, source_texts = _annotated_block_texts(session, notice["plan_id"])
-    narrated: list[str] = []
-    number = 0
-    for record in records:
-        text = str(record.get("text") or record.get("original_sentence") or "").strip()
-        if not text:
-            # The store drops blank records, so they take no block number.
-            continue
-        number += 1
-        plan = record.get("speech_plan")
-        xml = record.get("speech_xml") or (
-            plan.get("speech_xml") if isinstance(plan, dict) else None
-        )
-        if _has_own_speech(
-            xml, record.get("voice"), record.get("voice_id"), record.get("speaker")
-        ):
-            continue
-        spoken = str(record.get("tts_optimized_sentence") or "").strip() or text
-        if spoken in spoken_texts or text in source_texts:
-            narrated.append(f"block {number}")
-    if not narrated:
-        return
-    clause = (
-        "1 speech block repeats text the speaker plan annotates and has"
-        if len(narrated) == 1
-        else f"{len(narrated)} speech blocks repeat text the speaker plan annotates and have"
-    )
-    pronoun = "its" if len(narrated) == 1 else "their"
-    subject = "it" if len(narrated) == 1 else "they"
-    head = (
-        "Casting is on, but this audio job stores its speech blocks as a new speech "
-        f"plan revision with no adopted speaker plan, and {clause} no speech markup, "
-        f"block voice or speaker label of {pronoun} own, so {subject} would be voiced "
-        f"by the narrator: {_listed_blocks(narrated)}."
-    )
-    adopted = f"adopted speaker plan {notice['plan_id']}."
-    if notice["plan_revision_id"] == parent_revision_id:
-        raise ValueError(
-            f"{head} Speech plan revision {notice['revision_number']}, the current one, "
-            f"has {adopted} Generate from the generation start instead, which voices "
-            "the current revision with it."
-        )
-    raise ValueError(
-        f"{head} Speech plan revision {notice['revision_number']} has {adopted} Copy it "
-        "to the current revision and adopt it, then generate from the generation start, "
-        'or generate there with "Generate without the speaker plan" '
-        "(allow_without_speaker_plan). This job cannot use a copied plan, so running it "
-        "again on the same text is refused again."
-    )
+    source_id = (revision.settings_json or {}).get("_source_artifact_id") if revision else None
+    if not source_id:
+        return False
+    artifact = session.get(m.Artifact, str(source_id))
+    return artifact is not None and artifact.role == "speech_blocks"
 
 
 def no_adopted_performance_plan_message(session, revision_id: str) -> str:
     """The performance-on refusal, naming the lineage plan when one exists."""
     message = "Performance is enabled, but this speech plan has no adopted performance plan."
     notice = ancestor_adopted_plan(session, revision_id)
-    if notice is None:
+    if notice is None or _stored_from_speech_blocks(session, revision_id):
+        # A direct dubbing job stores another revision on its next run, so a
+        # plan copied to this one cannot help it.
         return f"{message} Adopt one or disable performance."
     return (
         f"{message} {_lineage_plan_clause(notice)} "
