@@ -1594,17 +1594,22 @@ def refuse_missing_speaker_plan(
     if not narrated:
         return
     # Blocks are numbered from 1, as the speaker plan panel lists them.
-    listed = ", ".join(
-        f"block {ordinal + 1} ({segment_id})" for ordinal, segment_id in narrated[:5]
+    listed = _listed_blocks(
+        [f"block {ordinal + 1} ({segment_id})" for ordinal, segment_id in narrated]
     )
-    more = f" and {len(narrated) - 5} more" if len(narrated) > 5 else ""
     raise ValueError(
         "Casting is on, but this speech plan has no adopted speaker plan, and "
-        f"{_narrated_blocks_clause(len(narrated), 'spoken block')}: {listed}{more}. "
+        f"{_narrated_blocks_clause(len(narrated), 'spoken block')}: {listed}. "
         f"{_lineage_plan_clause(notice)} Copy it to this revision and adopt it, or "
         'generate from the generation start with "Generate without the speaker plan" '
         "(allow_without_speaker_plan) to voice each block from its own markup."
     )
+
+
+def _listed_blocks(labels: list[str]) -> str:
+    """The first five block labels, then how many more there are."""
+    more = f" and {len(labels) - 5} more" if len(labels) > 5 else ""
+    return ", ".join(labels[:5]) + more
 
 
 def _narrated_blocks_clause(count: int, noun: str) -> str:
@@ -1619,56 +1624,118 @@ def _narrated_blocks_clause(count: int, noun: str) -> str:
     )
 
 
+def _adds_to_plain_text(xml: str | None) -> bool:
+    """Whether an entry's speech markup says more than its block's plain text.
+
+    Adoption gives every unreviewed block of an XML plan its plain text as
+    markup, which the narrator reads the same way without the plan.
+    """
+    if not xml:
+        return False
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError:
+        return True
+    return len(root) > 0 or any(key != "id" for key in root.attrib)
+
+
+def _annotated_block_texts(session, plan_id: str) -> tuple[set[str], set[str]]:
+    """The spoken and source texts of the blocks an adopted plan casts.
+
+    With casting on and performance off, a run takes only an entry's speech
+    markup from the plan, so a block counts when its entry's markup says more
+    than its plain text. Blocks are taken from the plan's units, which
+    ``copy_unchanged_annotations`` also matches by text. A unit's
+    ``spoken_text`` is its block's ``optimized_text or text``, so its source
+    ``text`` is returned too.
+    """
+    plan = session.get(m.PerformancePlan, plan_id)
+    if plan is None:
+        return set(), set()
+    annotations = _annotations(session, plan)
+    spoken: set[str] = set()
+    source: set[str] = set()
+    for unit in plan.units_json or []:
+        if not _adds_to_plain_text(record_markup(annotations.get(unit.get("id")))):
+            continue
+        spoken.add(str(unit.get("spoken_text") or "").strip())
+        source.add(str(unit.get("text") or "").strip())
+    spoken.discard("")
+    source.discard("")
+    return spoken, source
+
+
 def refuse_speaker_plan_loss_for_new_revision(
     session,
     parent_revision_id: str,
     settings: dict[str, Any],
     records: list[dict[str, Any]],
 ) -> None:
-    """Refuse a direct dubbing audio job before it stores a plan-less revision.
+    """Refuse a direct dubbing audio job that would drop its speaker plan's entries.
 
-    The job registers new speech blocks on every run, so it would store a new
-    revision under ``parent_revision_id`` each time, and a plan copied to one
-    of them never reaches the next. With casting on and an adopted plan in the
-    lineage (``parent_revision_id``'s own included), it applies the workflow
-    stage's rule to its ``records`` before storing them: when a spoken record
-    would fall back to the narrator (``_has_own_speech``), it is refused and
-    pointed to the generation start, which reuses the current revision.
+    The job registers new speech blocks on every run and stores them as a new
+    revision under ``parent_revision_id``, which has no adopted plan, and a plan
+    copied to it never reaches the next run. With casting on and an adopted plan
+    in the lineage (``parent_revision_id``'s own included), the job is refused
+    before it stores that revision (its speech blocks artifact is already
+    registered) when a spoken record has no speech of its own
+    (``_has_own_speech``) and repeats the exact text of a block whose plan
+    entry has speech markup beyond its plain text (``_annotated_block_texts``):
+    that record would lose the entry and fall back to the narrator. A job whose
+    text the plan does not mark up, such as a re-translated subtitle file, runs
+    without the plan.
     """
     notice = missing_speaker_plan(session, parent_revision_id, settings, include_self=True)
     if notice is None:
         return
-    narrated = 0
+    spoken_texts, source_texts = _annotated_block_texts(session, notice["plan_id"])
+    narrated: list[str] = []
+    number = 0
     for record in records:
-        if not str(record.get("text") or record.get("original_sentence") or "").strip():
+        text = str(record.get("text") or record.get("original_sentence") or "").strip()
+        if not text:
+            # The store drops blank records, so they take no block number.
             continue
+        number += 1
         plan = record.get("speech_plan")
         xml = record.get("speech_xml") or (
             plan.get("speech_xml") if isinstance(plan, dict) else None
         )
-        if not _has_own_speech(
+        if _has_own_speech(
             xml, record.get("voice"), record.get("voice_id"), record.get("speaker")
         ):
-            narrated += 1
+            continue
+        spoken = str(record.get("tts_optimized_sentence") or "").strip() or text
+        if spoken in spoken_texts or text in source_texts:
+            narrated.append(f"block {number}")
     if not narrated:
         return
+    clause = (
+        "1 speech block repeats text the speaker plan annotates and has"
+        if len(narrated) == 1
+        else f"{len(narrated)} speech blocks repeat text the speaker plan annotates and have"
+    )
+    pronoun = "its" if len(narrated) == 1 else "their"
+    subject = "it" if len(narrated) == 1 else "they"
+    head = (
+        "Casting is on, but this audio job stores its speech blocks as a new speech "
+        f"plan revision with no adopted speaker plan, and {clause} no speech markup, "
+        f"block voice or speaker label of {pronoun} own, so {subject} would be voiced "
+        f"by the narrator: {_listed_blocks(narrated)}."
+    )
+    adopted = f"adopted speaker plan {notice['plan_id']}."
     if notice["plan_revision_id"] == parent_revision_id:
-        remedy = (
-            f"Speech plan revision {notice['revision_number']}, the current one, adopted "
-            f"one (performance plan {notice['plan_id']}). Generate from the generation "
-            "start instead, which uses it."
+        raise ValueError(
+            f"{head} Speech plan revision {notice['revision_number']}, the current one, "
+            f"has {adopted} Generate from the generation start instead, which voices "
+            "the current revision with it."
         )
-    else:
-        remedy = (
-            f"{_lineage_plan_clause(notice)} Generate from the generation start instead: "
-            "copy that plan to the current revision and adopt it, or use "
-            '"Generate without the speaker plan" (allow_without_speaker_plan) to voice '
-            "each block from its own markup."
-        )
-    clause = _narrated_blocks_clause(narrated, "speech block")
     raise ValueError(
-        "Casting is on, but this audio job prepares a new speech plan revision on every "
-        f"run, with no adopted speaker plan, and {clause}. {remedy}"
+        f"{head} Speech plan revision {notice['revision_number']} has {adopted} Copy it "
+        "to the current revision and adopt it, then generate from the generation start, "
+        'or generate there with "Generate without the speaker plan" '
+        "(allow_without_speaker_plan). This job cannot use a copied plan, so running it "
+        "again on the same text is refused again."
     )
 
 

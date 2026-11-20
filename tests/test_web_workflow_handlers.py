@@ -2356,15 +2356,21 @@ class WebWorkflowHandlerTests(unittest.TestCase):
 
         before = revisions()
         source, source_path = speech_blocks("blocks-refused.json")
+        # The lineage plan marks up the job's text, which the job would lose.
+        planned = mock.patch(
+            "pandrator.web.performance_plans._annotated_block_texts",
+            return_value=({"A dubbed block.", "Another one."}, set()),
+        )
         with (
             mock.patch(
                 "pandrator.web.performance_plans.ancestor_adopted_plan",
                 return_value=self._lost_speaker_plan_notice(),
             ) as lineage,
+            planned as annotated,
             mock.patch("pandrator.logic.tts_handler.text_to_audio") as synthesize,
         ):
             with self.assertRaisesRegex(
-                ValueError, "prepares a new speech plan revision on every run"
+                ValueError, "stores its speech blocks as a new speech plan revision"
             ) as raised:
                 generate_audio(
                     context, self.session.id, source, source_path, settings, self.progress,
@@ -2377,6 +2383,7 @@ class WebWorkflowHandlerTests(unittest.TestCase):
         # Checked against the revision the new one would descend from, that
         # revision's own plan included, and refused before storing anything.
         lineage.assert_called_once_with(mock.ANY, active_before, include_self=True)
+        annotated.assert_called_once_with(mock.ANY, "plan-lineage")
         self.assertEqual(before, revisions())
         self.assertEqual(active_before, self._active_revision_id())
         synthesize.assert_not_called()
@@ -2403,7 +2410,7 @@ class WebWorkflowHandlerTests(unittest.TestCase):
         self.assertEqual(before + 1, revisions())
 
         # Blocks whose diarised speaker labels cast them lose nothing the stage
-        # cannot voice, so a lineage plan does not stop them either.
+        # cannot voice, so the plan's markup on the same text does not stop them.
         source, source_path = speech_blocks(
             "blocks-labelled.json",
             [{"text": "A dubbed block.", "speaker": "SPEAKER_00"},
@@ -2414,6 +2421,7 @@ class WebWorkflowHandlerTests(unittest.TestCase):
                 "pandrator.web.performance_plans.ancestor_adopted_plan",
                 return_value=self._lost_speaker_plan_notice(),
             ),
+            planned,
             mock.patch(
                 "pandrator.web.speech_plan_workspace.freeze_speech_snapshot",
                 side_effect=PastTheGuard(),

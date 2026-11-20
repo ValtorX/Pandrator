@@ -63,9 +63,13 @@ them, without the plan's edits. They have no acknowledgement, so they refuse
 even a revision the user ran with `allow_without_speaker_plan` at the
 generation start: copy and adopt the named plan, or point the user to the
 generation start's "Generate without the speaker plan". A direct dubbing audio
-job applies the same rule to its new speech blocks before storing them, even
-when the current revision adopted the plan; when its message says the current
-revision has the plan, point the user to the generation start.
+job stores new speech blocks as a new revision without the plan, so before
+storing them it refuses only when a block with no markup, block voice or
+speaker label of its own repeats the exact text of a block the adopted plan
+marks up; a corrected or re-translated subtitle file runs. Its speech blocks
+file is already registered then. For a refused rerun, point the user to the
+generation start, after copying and adopting the plan when the message names an
+earlier revision; rerunning the job on the same text is refused again.
 
 New plain-text sources also need deterministic `clean_source` before
 `prepare_text`. Follow the ready stage or orchestration plan; leave agentic

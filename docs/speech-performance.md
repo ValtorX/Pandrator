@@ -288,31 +288,46 @@ preview reports it as `missing_speaker_plan`, the plan list as
 `ancestor_adopted_plan`, and a caller that really wants the block markup passes
 `allow_without_speaker_plan`.
 
-The workflow audio stage (reviewable and direct audiobook and dubbing audio
-jobs), its preflight when the request names the revision, and recast refuse
-such a revision too, with a rule per block, because these paths can run from a
-source that carries its own speech (a reviewed speech-optimized narration,
-subtitles with speaker markup, or diarised speaker labels). Without the plan, a
-block is still voiced from its own speech markup, its block voice or its
-speaker label (cast through the source speakers, or as dialogue); only a block
-with none of them falls back to the narrator. So these paths refuse only when
-a spoken block (not removed, with spoken text) has none of them, and name
-those blocks; a revision whose spoken blocks all have one runs from them. The
-recast preview is blocked with that message and recast apply refuses with it.
-Plan edits made on top of a block's own speech are not used on these paths.
-None of them has an acknowledgement, so a revision the generation start ran
-with "Generate without the speaker plan" (`allow_without_speaker_plan` for API
-and MCP callers) still cannot be run by the workflow stage or recast while a
-spoken block would fall back to the narrator: copy and adopt the named plan,
-or generate from the generation start. A workflow stage that takes its input
-from a new source stores that source's revision first, so a refused source
-leaves its revision active, beside the adopted one; copying the plan to it
-works, and a retry from the same source reuses it. A direct dubbing audio job
-registers new speech blocks on every run, so with casting on, performance off
-and an adopted plan in its lineage (the current revision's own included), it
-applies the same rule to its blocks before it stores a new revision, and is
-refused then if one would fall back to the narrator. With performance on, the
-"no adopted performance plan" error names the earlier revision's plan too.
+The workflow audio stage (reviewable and direct audiobook audio jobs), its
+preflight when the request names the revision, and recast refuse such a
+revision too, with a rule per block, because these paths can run from a source
+that carries its own speech (a reviewed speech-optimized narration, subtitles
+with speaker markup, or diarised speaker labels). Without the plan, a block is
+still voiced from its own speech markup, its block voice or its speaker label
+(cast through the source speakers, or as dialogue); only a block with none of
+them falls back to the narrator. So these paths refuse only when a spoken block
+(not removed, with spoken text) has none of them, and name those blocks; a
+revision whose spoken blocks all have one runs from them. A block whose only
+voice is a saved project speech reference counts as having none, so these
+paths refuse it although that reference would voice it. The recast preview is blocked with that message and
+recast apply refuses with it. Plan edits made on top of a block's own speech
+are not used on these paths. None of them has an acknowledgement, so a revision
+the generation start ran with "Generate without the speaker plan"
+(`allow_without_speaker_plan` for API and MCP callers) still cannot be run by
+the workflow stage or recast while a spoken block would fall back to the
+narrator: copy and adopt the named plan, or generate from the generation start.
+A workflow stage that takes its input from a new source stores that source's
+revision first, so a refused source leaves its revision active, beside the
+adopted one; copying the plan to it works, and a retry from the same source
+reuses it.
+
+A direct dubbing audio job registers new speech blocks on every run and stores
+them as a new revision, which has no adopted plan and cannot get one before it
+is voiced. So with casting on, performance off and an adopted plan in its
+lineage (the current revision's own included), the job checks its blocks before
+it stores that revision (its speech blocks file is already written): it is
+refused only when a block with no speech markup, block voice or speaker label
+of its own repeats the exact text of a block whose plan entry has speech markup
+beyond its plain text, because that block would lose the entry. The message
+numbers those blocks. A job from different text, such as a corrected or
+re-translated subtitle file, runs without the plan. For a rerun of the plan's
+text, generate from the generation start, which voices the current revision
+with the plan; when the plan belongs to an earlier revision, copy it to the
+current revision and adopt it first. The job cannot use a copied plan, so it
+keeps refusing the same text.
+
+With performance on, the "no adopted performance plan" error names the earlier
+revision's plan too.
 
 Automatic post-generation split repair can use read-only semantic context,
 including configurable preceding and following blocks (for example one of

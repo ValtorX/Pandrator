@@ -1198,59 +1198,6 @@ def test_performance_on_error_names_the_lineage_plan(case):
     assert inspected["preview_error"] == named
 
 
-def test_a_job_that_stores_a_new_revision_is_refused_before_it_stores_it(case):
-    settings = {"casting_enabled": True}
-    # A diarised block keeps its speaker label without the plan; the other
-    # would fall back to the narrator.
-    records = [{"text": "A dubbed block."}, {"text": "Another.", "speaker": "SPEAKER_01"}]
-    refuse = plans.refuse_speaker_plan_loss_for_new_revision
-    with case["services"]["database"].session() as session:
-        # No adopted plan anywhere yet: nothing to lose.
-        refuse(session, case["revision_id"], settings, records)
-    adopted = _adopted(case)
-    split = case["services"]["generation"].revise_topology(
-        case["session_id"],
-        case["revision_id"],
-        {"action": "split", "segment_id": case["segment_ids"][1], "cursor": 3, "text_layer": "display"},
-    )
-    messages = {}
-    with case["services"]["database"].session() as session:
-        # A child of the adopted revision itself, and of its plan-less split.
-        for parent in (case["revision_id"], split["plan_revision_id"]):
-            with pytest.raises(ValueError) as refused:
-                refuse(session, parent, settings, records)
-            message = messages[parent] = str(refused.value)
-            assert "prepares a new speech plan revision on every run" in message
-            assert (
-                "1 speech block has no speech markup, block voice or speaker label of its "
-                "own, so it would be voiced by the narrator."
-            ) in message
-            assert adopted["id"] in message
-        # Records that each carry markup, a block voice or a speaker label,
-        # and a blank one, lose nothing a stage could not voice.
-        own = [
-            {"text": "A.", "speaker": "SPEAKER_00"},
-            {"text": "B.", "voice": "Puck"},
-            {"text": "C.", "voice_id": "voice-c"},
-            {"text": "D.", "speech_plan": {"speech_xml": '<segment id="1">D.</segment>'}},
-            {"text": "  "},
-        ]
-        for parent in (case["revision_id"], split["plan_revision_id"]):
-            refuse(session, parent, settings, own)
-        # Casting off, or performance on (which refuses on its own), is left alone.
-        for other in ({}, {"casting_enabled": True, "performance_enabled": True}):
-            refuse(session, case["revision_id"], other, records)
-    # The current revision already has the plan: generate from it, nothing to copy.
-    current = messages[case["revision_id"]]
-    assert "the current one, adopted one" in current
-    assert current.endswith("Generate from the generation start instead, which uses it.")
-    assert "copy that plan" not in current
-    # From the split, the plan has to be copied first, or left out on purpose.
-    descendant = messages[split["plan_revision_id"]]
-    assert "copy that plan to the current revision and adopt it" in descendant
-    assert '"Generate without the speaker plan" (allow_without_speaker_plan)' in descendant
-
-
 def test_copying_the_named_plan_onto_the_split_revision_clears_the_notice(case):
     adopted = _adopted(case)
     generation = case["services"]["generation"]
