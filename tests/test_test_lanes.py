@@ -175,15 +175,27 @@ class TestLaneMatrixTests(unittest.TestCase):
         lanes = _manual_windows_lanes(_workflow_text("windows-serial-lanes.yml"))
         self.assertEqual([], sorted(set(lanes) - set(test_lanes.TEST_LANES)))
 
-    def test_windows_jobs_fail_when_ffmpeg_is_not_installed(self):
-        # web-preview.yml installs FFmpeg inline as upstream wrote it; every
-        # Windows install must still fail when ffprobe is missing.
+    def test_windows_jobs_install_the_installer_s_ffmpeg(self):
+        # Every Windows job installs the FFmpeg the installer pins through
+        # upstream's script, which fails when the archive's hash or ffprobe is
+        # wrong; none takes Chocolatey's newest build (9.1 hung a lane).
+        install = "python scripts/ci_install_windows_ffmpeg.py"
         preview = _workflow_text("web-preview.yml")
         self.assertEqual(2, preview.count("- name: Install Windows FFmpeg"))
-        self.assertEqual(2, preview.count("Get-Command ffprobe"))
+        self.assertEqual(2, preview.count(install))
         windows = _workflow_text("windows-serial-lanes.yml")
         self.assertEqual(1, windows.count("uses: ./.github/actions/install-windows-ffmpeg"))
-        self.assertNotIn("choco install", windows)
+        action = (
+            test_lanes.REPO_ROOT / ".github" / "actions" / "install-windows-ffmpeg" / "action.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(install, action)
+        for text in (preview, windows, action):
+            self.assertNotIn("choco install", text)
+        script = (test_lanes.REPO_ROOT / "scripts" / "ci_install_windows_ffmpeg.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("FFMPEG_SUBTITLES_WINDOWS_ZIP_SHA256", script)
+        self.assertIn('"ffprobe.exe"', script)
 
     def test_matrix_check_names_a_missing_lane_and_an_unknown_lane(self):
         manifest_lanes = {"fast-xdist", "web-01-serial", "web-02-serial"}

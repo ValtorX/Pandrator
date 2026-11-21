@@ -1,15 +1,11 @@
 name: Install Windows FFmpeg
-description: Install FFmpeg with Chocolatey and fail if ffprobe is still missing.
+description: Install the FFmpeg build the Windows installer pins, as web-preview.yml does.
 
 runs:
   using: composite
   steps:
-    # Chocolatey can report success having installed nothing, so check the result.
+    # Upstream's script checks the pinned SHA-256 and that ffprobe is present,
+    # and adds the bin directory to the job's PATH. Chocolatey's newest build
+    # (9.1) hung a Windows lane, so it is no longer used.
     - shell: pwsh
-      run: |
-        foreach ($attempt in 1..3) {
-          if ($attempt -gt 1) { Start-Sleep -Seconds (30 * ($attempt - 1)) }
-          choco install ffmpeg --yes --no-progress
-          if (Get-Command ffprobe -ErrorAction SilentlyContinue) { exit 0 }
-        }
-        throw 'FFmpeg did not install: no ffprobe on PATH.'
+      run: python scripts/ci_install_windows_ffmpeg.py
