@@ -28,70 +28,6 @@ from .models import (
 from .workspace_settings import WorkspaceSettingsService
 
 
-def _unresolved_legacy_speaker(error: ValueError) -> bool:
-    message = str(error).lower()
-    return "unresolved speaker" in message or "ambiguous speaker" in message
-
-
-def _freeze_legacy_boundaries(
-    session,
-    revision_id: str,
-    snapshot: dict[str, Any],
-    segments: list[GenerationSegment],
-) -> None:
-    """Freeze available legacy rows without consulting current cast controls.
-
-    Rows whose historical markup refers to a speaker absent from the run's
-    snapshot remain unprojected, so ``assembly_pause`` returns their stored
-    pause. Other rows still use their frozen audio settings and annotations.
-    """
-    from .speech_boundaries import freeze_boundaries
-
-    try:
-        freeze_boundaries(session, revision_id, snapshot, segments=segments)
-        return
-    except ValueError as exc:
-        if not _unresolved_legacy_speaker(exc):
-            raise
-
-    unresolved_ids: set[str] = set()
-
-    def locate_unresolved(rows: list[GenerationSegment]) -> None:
-        # freeze_boundaries writes only the top-level speech_boundaries key;
-        # a shallow copy keeps probes bounded even for annotation-rich runs.
-        probe = dict(snapshot)
-        try:
-            freeze_boundaries(session, revision_id, probe, segments=rows)
-        except ValueError as exc:
-            if not _unresolved_legacy_speaker(exc):
-                raise
-            if len(rows) == 1:
-                unresolved_ids.add(rows[0].id)
-                return
-            midpoint = len(rows) // 2
-            locate_unresolved(rows[:midpoint])
-            locate_unresolved(rows[midpoint:])
-
-    locate_unresolved(segments)
-    frozen_boundaries: dict[str, Any] = {}
-    safe_chunk: list[GenerationSegment] = []
-
-    def freeze_chunk() -> None:
-        if not safe_chunk:
-            return
-        freeze_boundaries(session, revision_id, snapshot, segments=safe_chunk)
-        frozen_boundaries.update(snapshot.pop("speech_boundaries", {}))
-        safe_chunk.clear()
-
-    for segment in segments:
-        if segment.id in unresolved_ids:
-            freeze_chunk()
-        else:
-            safe_chunk.append(segment)
-    freeze_chunk()
-    snapshot["speech_boundaries"] = frozen_boundaries
-
-
 def _take_payload(
     take: AudioTake,
     artifact: Artifact | None,
@@ -395,96 +331,82 @@ class GenerationSegmentReader:
                 if session_record.workflow_kind != "audiobook":
                     assembly_pauses = {row.id: 0 for row in rows}
                 elif rows:
+                    boundary_rows = [row for row in rows if not row.removed]
+                    if boundary_rows:
+                        next_ordinals = [
+                            select(func.min(GenerationSegment.ordinal))
+                            .where(
+                                GenerationSegment.plan_revision_id == plan_revision_id,
+                                GenerationSegment.removed.is_(False),
+                                GenerationSegment.ordinal > row.ordinal,
+                            )
+                            .scalar_subquery()
+                            for row in boundary_rows
+                        ]
+                        successors = list(
+                            session.scalars(
+                                select(GenerationSegment)
+                                .where(
+                                    GenerationSegment.plan_revision_id == plan_revision_id,
+                                    GenerationSegment.removed.is_(False),
+                                    GenerationSegment.ordinal.in_(next_ordinals),
+                                )
+                                .order_by(GenerationSegment.ordinal)
+                                .limit(len(boundary_rows))
+                            ).all()
+                        )
+                        boundary_rows = sorted(
+                            {row.id: row for row in (*boundary_rows, *successors)}.values(),
+                            key=lambda row: row.ordinal,
+                        )
                     if selected_run is not None:
-                        boundary_snapshot = deepcopy(dict(run_settings_snapshot))
+                        from .speech_boundaries import resolve_run_boundaries
+
+                        # The run's boundary facts with the current pause
+                        # settings: what assembling this run now gives.
+                        boundary_snapshot: dict[str, Any] = {
+                            "speech_boundaries": resolve_run_boundaries(
+                                session,
+                                plan_revision_id,
+                                run_settings_snapshot,
+                                audio_snapshot.get("audio") or {},
+                                segments=boundary_rows,
+                                run_id=selected_run.id,
+                            )
+                        }
                     else:
                         boundary_snapshot = {
                             "audio": deepcopy(audio_snapshot.get("audio") or {})
                         }
-                    if "speech_boundaries" not in boundary_snapshot:
-                        if selected_run is not None:
-                            performance_snapshot = boundary_snapshot.get(
-                                "performance_snapshot"
-                            )
-                            if not isinstance(performance_snapshot, Mapping):
-                                performance_snapshot = {}
-                            else:
-                                performance_snapshot = dict(performance_snapshot)
-                            if not isinstance(
-                                performance_snapshot.get("character_dictionary"), list
-                            ):
-                                # The parser expects a catalogue list; an empty
-                                # list prevents fallback to mutable current cast data.
-                                performance_snapshot["character_dictionary"] = []
-                            boundary_snapshot["performance_snapshot"] = (
-                                performance_snapshot
-                            )
-                        boundary_rows = [row for row in rows if not row.removed]
-                        if boundary_rows:
-                            next_ordinals = [
-                                select(func.min(GenerationSegment.ordinal))
-                                .where(
-                                    GenerationSegment.plan_revision_id == plan_revision_id,
-                                    GenerationSegment.removed.is_(False),
-                                    GenerationSegment.ordinal > row.ordinal,
+                        # Use the same resolved provider/project settings as
+                        # the audio identity below, without a second read.
+                        tts_settings = audio_snapshot.get("tts") or {}
+                        if (
+                            tts_settings.get("casting_enabled")
+                            or tts_settings.get("performance_enabled")
+                        ):
+                            from .models import PerformancePlan
+
+                            adopted_plan = session.scalar(
+                                select(PerformancePlan.id).where(
+                                    PerformancePlan.plan_revision_id == plan_revision_id,
+                                    PerformancePlan.status == "adopted",
                                 )
-                                .scalar_subquery()
-                                for row in boundary_rows
-                            ]
-                            successors = list(
-                                session.scalars(
-                                    select(GenerationSegment)
-                                    .where(
-                                        GenerationSegment.plan_revision_id == plan_revision_id,
-                                        GenerationSegment.removed.is_(False),
-                                        GenerationSegment.ordinal.in_(next_ordinals),
-                                    )
-                                    .order_by(GenerationSegment.ordinal)
-                                    .limit(len(boundary_rows))
-                                ).all()
                             )
-                            boundary_rows = sorted(
-                                {row.id: row for row in (*boundary_rows, *successors)}.values(),
-                                key=lambda row: row.ordinal,
-                            )
-                        if selected_run is None:
-                            # Use the same resolved provider/project settings as
-                            # the audio identity below, without a second read.
-                            tts_settings = audio_snapshot.get("tts") or {}
-                            if (
-                                tts_settings.get("casting_enabled")
-                                or tts_settings.get("performance_enabled")
-                            ):
-                                from .models import PerformancePlan
+                            if adopted_plan:
+                                from .performance_plans import freeze_performance_snapshot
 
-                                adopted_plan = session.scalar(
-                                    select(PerformancePlan.id).where(
-                                        PerformancePlan.plan_revision_id == plan_revision_id,
-                                        PerformancePlan.status == "adopted",
-                                    )
+                                freeze_performance_snapshot(
+                                    session, plan_revision_id, boundary_snapshot
                                 )
-                                if adopted_plan:
-                                    from .performance_plans import freeze_performance_snapshot
+                        from .speech_boundaries import freeze_boundaries
 
-                                    freeze_performance_snapshot(
-                                        session, plan_revision_id, boundary_snapshot
-                                    )
-                        if selected_run is not None:
-                            _freeze_legacy_boundaries(
-                                session,
-                                plan_revision_id,
-                                boundary_snapshot,
-                                boundary_rows,
-                            )
-                        else:
-                            from .speech_boundaries import freeze_boundaries
-
-                            freeze_boundaries(
-                                session,
-                                plan_revision_id,
-                                boundary_snapshot,
-                                segments=boundary_rows,
-                            )
+                        freeze_boundaries(
+                            session,
+                            plan_revision_id,
+                            boundary_snapshot,
+                            segments=boundary_rows,
+                        )
                     from .speech_boundaries import assembly_pause
 
                     assembly_pauses = {

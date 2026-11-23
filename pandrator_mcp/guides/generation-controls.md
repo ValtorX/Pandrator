@@ -157,7 +157,9 @@ marked `boundary_after="chapter"`; `audio.chapter_title_silence_ms` (default
 1750) is the pause after the spoken chapter title, after a chapter marker
 block. At a chapter break the longest applicable pause wins, including the
 voice-change minimum, and a manually set segment pause overrides it. A run
-started before these settings existed keeps the pauses it froze.
+keeps only which boundary each block ends on; assembling it, and the playlist
+with it chosen, take every pause length from the current audio settings, so a
+pause change needs a new assembly, not new takes.
 Fixed subtitle timing receives no added pause. Saved takes and resumed runs
 retain their original pacing; changing an internal gap requires a new take in
 a new generation run.

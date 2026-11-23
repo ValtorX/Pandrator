@@ -308,16 +308,21 @@ def expected_output_assembly_snapshot(
     run: GenerationRun,
     resolved_settings_snapshot: dict[str, Any],
 ) -> dict[str, Any]:
-    """Return the material assembly settings plus the selected run's pauses."""
+    """Return the material assembly settings plus the selected run's pauses.
+
+    The run's boundary facts are resolved with the given (current) audio settings,
+    so a pause setting change makes an earlier assembly of the run out of date.
+    """
+
+    from .speech_boundaries import resolve_run_boundaries
 
     snapshot = output_assembly_settings_snapshot(resolved_settings_snapshot)
-    boundary_snapshot = deepcopy(run.settings_snapshot_json or {})
-    if "speech_boundaries" not in boundary_snapshot:
-        from .speech_boundaries import freeze_boundaries
-
-        freeze_boundaries(session, run.plan_revision_id, boundary_snapshot)
-    snapshot["speech_boundaries"] = deepcopy(
-        boundary_snapshot.get("speech_boundaries") or {}
+    snapshot["speech_boundaries"] = resolve_run_boundaries(
+        session,
+        run.plan_revision_id,
+        run.settings_snapshot_json or {},
+        snapshot.get("audio") or {},
+        run_id=run.id,
     )
     return snapshot
 
@@ -371,6 +376,32 @@ def _legacy_assembly_boundaries_match(
     return True
 
 
+_BOUNDARY_FACTS = ("text_hash", "boundary_after", "silence_after_ms")
+
+
+def _assembly_boundaries_match(
+    stored_boundaries: dict[str, Any],
+    expected_boundaries: dict[str, Any],
+) -> bool:
+    """Compare boundaries block by block on what shapes the assembled audio.
+
+    Other entry fields (the end voices a run records) are left out, so an
+    assembly stored before they existed still matches while its pauses do.
+    """
+
+    if set(stored_boundaries) != set(expected_boundaries):
+        return False
+    for block_id, expected in expected_boundaries.items():
+        stored = stored_boundaries[block_id]
+        if not isinstance(stored, dict) or not isinstance(expected, dict):
+            if stored != expected:
+                return False
+            continue
+        if any(stored.get(key) != expected.get(key) for key in _BOUNDARY_FACTS):
+            return False
+    return True
+
+
 def output_assembly_matches(
     assembly: OutputAssembly,
     *,
@@ -396,7 +427,7 @@ def output_assembly_matches(
     )
     stored_boundaries = stored_resolved.get("speech_boundaries")
     if isinstance(stored_boundaries, dict):
-        if stored_boundaries != expected_boundaries:
+        if not _assembly_boundaries_match(stored_boundaries, expected_boundaries):
             return False
     elif not _legacy_assembly_boundaries_match(
         settings_container,
@@ -2855,17 +2886,22 @@ class GenerationService(GenerationHistoryReader):
         )
         if not plan_revision_id:
             raise ValueError("Create generation segments before assembling audio.")
-        from .speech_boundaries import freeze_boundaries
-        boundary_snapshot = deepcopy(run.settings_snapshot_json or {}) if run else {"audio": snapshot.get("audio") or {}}
-        if not run:
+        from .speech_boundaries import freeze_boundaries, resolve_run_boundaries
+        if run:
+            # The run's boundary facts with the current pause settings.
+            snapshot["speech_boundaries"] = resolve_run_boundaries(
+                session, plan_revision_id, run.settings_snapshot_json or {},
+                snapshot.get("audio") or {}, run_id=run.id,
+            )
+        else:
+            boundary_snapshot = {"audio": snapshot.get("audio") or {}}
             from .models import PerformancePlan
             from .performance_plans import freeze_performance_snapshot
             tts_settings = self.settings.get_in_session(session, session_id, "tts")["effective"]
             if (tts_settings.get("casting_enabled") or tts_settings.get("performance_enabled")) and session.scalar(select(PerformancePlan.id).where(PerformancePlan.plan_revision_id == plan_revision_id, PerformancePlan.status == "adopted")):
                 freeze_performance_snapshot(session, plan_revision_id, boundary_snapshot)
-        if "speech_boundaries" not in boundary_snapshot:
             freeze_boundaries(session, plan_revision_id, boundary_snapshot)
-        snapshot["speech_boundaries"] = boundary_snapshot.get("speech_boundaries", {})
+            snapshot["speech_boundaries"] = boundary_snapshot.get("speech_boundaries", {})
         settings_hash = stable_hash(snapshot)
         record = OutputAssembly(
             session_id=session_id,

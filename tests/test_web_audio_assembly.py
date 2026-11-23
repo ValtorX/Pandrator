@@ -277,7 +277,7 @@ class DurableOutputAssemblyTests(unittest.TestCase):
         _artifact, output_path = ArtifactService(self.database, self.paths).resolve(result["artifact_id"])
         self.assertEqual(240, len(AudioSegment.from_file(output_path)))
 
-    def test_inline_export_assembly_uses_run_frozen_pause(self):
+    def test_inline_export_assembly_uses_run_frozen_boundary(self):
         from pandrator.web.speech_boundaries import freeze_boundaries
 
         ids = self._plan_with_takes()
@@ -291,9 +291,15 @@ class DurableOutputAssemblyTests(unittest.TestCase):
             session.flush()
             run_id = run.id
             row.silence_after_ms = 700
+            # The boundary the run froze is kept; the block's markup is not read again.
+            row.speech_plan_json = {"speech_xml": f'<segment id="{row.id}" boundary_after="paragraph">{row.text}</segment>'}
             for take in session.scalars(select(AudioTake)):
                 take.generation_run_id = run_id
-        prepared = self.generation.prepare_assembly(self.record.id, run_override={"output": {"format": "wav"}})
+        # The first block is a chapter marker; this test is about the boundary, not the title pause.
+        prepared = self.generation.prepare_assembly(
+            self.record.id,
+            run_override={"output": {"format": "wav"}, "audio": {"chapter_title_silence_ms": 0}},
+        )
         artifact_id = WorkflowHandlers(self.database, self.paths)._ensure_export_generation_assembly(
             session_id=self.record.id, generation_run_id=run_id,
             resolved_settings_snapshot=prepared["snapshot"],
@@ -745,18 +751,12 @@ class DurableOutputAssemblyTests(unittest.TestCase):
             assembly = session.get(OutputAssembly, assembly_id)
             manifest = list((assembly.settings_json or {}).get("takes") or [])
             self.assertGreaterEqual(len(manifest), 2)
-            boundaries = {}
-            for index, item in enumerate(manifest):
-                pause = int(item.get("silence_after_ms") or 0)
-                if index == 0:
-                    pause += 250
-                boundaries[str(item["segment_id"])] = {
-                    "silence_after_ms": pause,
-                }
-            run = session.get(GenerationRun, run_id)
-            run.settings_snapshot_json = {
-                **dict(run.settings_snapshot_json or {}),
-                "speech_boundaries": boundaries,
+            # The first block's manual pause changes, so the pause assembly
+            # would give there no longer matches the stored manifest.
+            first = session.get(GenerationSegment, str(manifest[0]["segment_id"]))
+            first.speech_plan_json = {
+                **dict(first.speech_plan_json or {}),
+                "silence_override_ms": int(manifest[0].get("silence_after_ms") or 0) + 250,
             }
 
         with self.assertRaisesRegex(
