@@ -462,6 +462,8 @@ const SETTING_ORDER: Record<string, string[]> = {
     'clause_silence_ms',
     'in_segment_voice_change_silence_ms',
     'voice_change_silence_ms',
+    'chapter_silence_ms',
+    'chapter_title_silence_ms',
     'fade_enabled',
     'fade_in_ms',
     'fade_out_ms',
@@ -1081,7 +1083,9 @@ export function settingLabel(key: string): string {
     in_segment_voice_change_silence_ms:
       'Voice-change pause inside a segment (ms)',
     voice_change_silence_ms:
-      'Minimum pause at voice changes between segments (ms)'
+      'Minimum pause at voice changes between segments (ms)',
+    chapter_silence_ms: 'Pause before a chapter heading (ms)',
+    chapter_title_silence_ms: 'Pause after a chapter title (ms)'
   };
   if (labels[key]) return labels[key];
   return key

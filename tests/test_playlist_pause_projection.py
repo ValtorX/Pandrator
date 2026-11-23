@@ -371,6 +371,71 @@ def test_marked_take_silences_are_safe_and_legacy_parts_add_no_silence(case):
     assert "relative_path" not in safe_marked_take
 
 
+def _mark_chapter_marker(case, segment_id: str) -> None:
+    with case["services"]["database"].session() as session:
+        session.get(m.GenerationSegment, segment_id).node_kind = "chapter_marker"
+    for sid in case["segment_ids"]:
+        _set_segment(case, sid, silence_after_ms=700, speech_plan={})
+
+
+def _pauses(case, **options) -> list[int]:
+    items = _read_pause(case, **options)["items"]
+    return [item["assembly_silence_after_ms"] for item in items]
+
+
+def test_playlist_and_run_show_chapter_pauses_at_a_marker(case):
+    _mark_chapter_marker(case, case["segment_ids"][1])
+
+    # No run chosen: the resolved settings carry the built-in defaults.
+    assert _pauses(case) == [3000, 1750, 700]
+    # A page that holds only the block before the marker still sees its successor.
+    assert _pauses(case, cursor=0, limit=1) == [3000]
+    assert _pauses(case, cursor=1, limit=1) == [1750]
+
+    # The run-start freeze records the same pauses, and the playlist with that run shows them.
+    run = case["services"]["generation"].start(case["session_id"])
+    with case["services"]["database"].session() as session:
+        frozen = session.get(m.GenerationRun, run["id"]).settings_snapshot_json
+    assert [
+        frozen["speech_boundaries"][sid]["silence_after_ms"] for sid in case["segment_ids"]
+    ] == [3000, 1750, 700]
+    assert _pauses(case, generation_run_id=run["id"]) == [3000, 1750, 700]
+
+
+def test_settings_patch_changes_the_next_runs_chapter_pause(case):
+    _mark_chapter_marker(case, case["segment_ids"][1])
+    base = f"/api/v1/sessions/{case['session_id']}/settings/audio"
+    rejected = case["client"].patch(
+        base,
+        json={"value": {"chapter_silence_ms": -1}},
+        headers={**case["headers"], "If-Match": '"0"', "Idempotency-Key": "chapter-bad"},
+    )
+    assert rejected.status_code == 422
+    assert "chapter_silence_ms" in rejected.get_json()["error"]["message"]
+
+    patched = case["client"].patch(
+        base,
+        json={"value": {"chapter_silence_ms": 4000}},
+        headers={**case["headers"], "If-Match": '"0"', "Idempotency-Key": "chapter-ok"},
+    )
+    assert patched.status_code == 200, patched.get_json()
+    assert _pauses(case) == [4000, 1750, 700]
+
+    run = case["services"]["generation"].start(case["session_id"])
+    with case["services"]["database"].session() as session:
+        frozen = session.get(m.GenerationRun, run["id"]).settings_snapshot_json
+    assert frozen["speech_boundaries"][case["segment_ids"][0]]["silence_after_ms"] == 4000
+    assert frozen["speech_boundaries"][case["segment_ids"][1]]["silence_after_ms"] == 1750
+
+
+def test_run_frozen_before_chapter_settings_keeps_its_pauses(case):
+    _mark_chapter_marker(case, case["segment_ids"][1])
+    old = {"audio": {"sentence_silence_ms": 250, "paragraph_silence_ms": 700}}
+    run_id = _add_run(case, old, sequence_number=903)
+    assert _pauses(case, generation_run_id=run_id) == [700, 700, 700]
+    assert _pauses(case) == [3000, 1750, 700]
+
+
 def test_mcp_projection_field_enum_matches():
     assert "assembly_silence_after_ms" in PROJECTABLE_SEGMENT_FIELDS
     assert PROJECTABLE_SEGMENT_FIELDS == set(get_args(GenerationSegmentField))

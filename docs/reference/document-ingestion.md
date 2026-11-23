@@ -420,6 +420,8 @@ settings apply to narration too:
 | `speech_block_max_internal_gap_ms` | `1800` ms | Maximum silence allowed inside one synthesis block. |
 | `sentence_silence_ms` | `250` ms | Default assembly pause after an ordinary sentence. |
 | `paragraph_silence_ms` | `700` ms | Default assembly pause after a paragraph. |
+| `chapter_silence_ms` | `3000` ms | Assembly pause before a chapter heading; the longer of this and the regular pause applies. |
+| `chapter_title_silence_ms` | `1750` ms | Assembly pause after a spoken chapter title; the longer of this and the regular pause applies. |
 
 Narration segments and TTS blocks are related but not interchangeable. Editing
 or resegmenting the generation plan can stale existing takes because their

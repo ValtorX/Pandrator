@@ -266,7 +266,11 @@ class DurableOutputAssemblyTests(unittest.TestCase):
             row = session.get(GenerationSegment, ids[0])
             row.speech_plan_json = {"speech_xml": f'<segment id="{row.id}" boundary_after="continuation">{row.text}</segment>'}
             row.silence_after_ms = 700
-        queued = self.generation.create_assembly(self.record.id, run_override={"output": {"format": "wav"}})
+        # The first block is a chapter marker; this test is about the markup, not the title pause.
+        queued = self.generation.create_assembly(
+            self.record.id,
+            run_override={"output": {"format": "wav"}, "audio": {"chapter_title_silence_ms": 0}},
+        )
         result = WorkflowHandlers(self.database, self.paths).assemble_generation_output(
             {"output_assembly_id": queued["id"]}, lambda *_args: None, threading.Event(),
         )
@@ -298,11 +302,12 @@ class DurableOutputAssemblyTests(unittest.TestCase):
         _artifact, output_path = ArtifactService(self.database, self.paths).resolve(artifact_id)
         self.assertEqual(240, len(AudioSegment.from_file(output_path)))
 
-    def _plan_with_takes(self, frame_counts=None):
+    def _plan_with_takes(self, frame_counts=None, segments=None):
         plan = self.generation.create_plan(
             self.record.id,
             source_revision_id=None,
-            segments=[
+            segments=segments
+            or [
                 {
                     "text": "First",
                     "node_kind": "chapter_marker",
@@ -324,7 +329,7 @@ class DurableOutputAssemblyTests(unittest.TestCase):
             )
             segment_ids = [segment.id for segment in segments]
         for index, (segment_id, duration) in enumerate(
-            zip(segment_ids, (100, 140), strict=False)
+            zip(segment_ids, (100, 140, 120, 80), strict=False)
         ):
             path = self.session_dir / f"take-{index}.wav"
             if frame_counts is None:
@@ -354,6 +359,47 @@ class DurableOutputAssemblyTests(unittest.TestCase):
                     )
                 )
         return segment_ids
+
+    def _assemble_wav(self, audio=None):
+        queued = self.generation.create_assembly(
+            self.record.id,
+            run_override={"output": {"format": "wav"}, **({"audio": audio} if audio else {})},
+        )
+        result = WorkflowHandlers(self.database, self.paths).assemble_generation_output(
+            {"output_assembly_id": queued["id"]}, lambda *_args: None, threading.Event(),
+        )
+        artifact, path = ArtifactService(self.database, self.paths).resolve(result["artifact_id"])
+        return artifact.metadata_json["takes"], len(AudioSegment.from_file(path))
+
+    def test_assembly_applies_chapter_pauses_at_a_marker_and_keeps_other_pauses(self):
+        self._plan_with_takes(
+            segments=[
+                {"text": "Opening line."},
+                {"text": "End of the chapter.", "paragraph": "yes"},
+                {"text": "Chapter One", "node_kind": "chapter_marker", "paragraph": "yes"},
+                {"text": "It began."},
+            ]
+        )
+        # Defaults: 3000 ms before the heading, 1750 ms after the spoken title.
+        manifest, length = self._assemble_wav()
+        self.assertEqual([250, 3000, 1750, 0], [item["silence_after_ms"] for item in manifest])
+        self.assertEqual(100 + 250 + 140 + 3000 + 120 + 1750 + 80, length)
+        # The settings change the next assembly's pauses; a longer regular pause still wins.
+        manifest, _length = self._assemble_wav(
+            {"chapter_silence_ms": 4000, "chapter_title_silence_ms": 500}
+        )
+        self.assertEqual([250, 4000, 700, 0], [item["silence_after_ms"] for item in manifest])
+
+    def test_marker_as_the_last_assembled_block_gets_no_trailing_pause(self):
+        self._plan_with_takes(
+            segments=[
+                {"text": "End of the book.", "paragraph": "yes"},
+                {"text": "Epilogue", "node_kind": "chapter_marker", "paragraph": "yes"},
+            ]
+        )
+        manifest, length = self._assemble_wav()
+        self.assertEqual([3000, 0], [item["silence_after_ms"] for item in manifest])
+        self.assertEqual(100 + 3000 + 140, length)
 
     def test_reassembly_changes_internal_pauses_without_changing_raw_takes(self):
         ids = self._plan_with_takes()

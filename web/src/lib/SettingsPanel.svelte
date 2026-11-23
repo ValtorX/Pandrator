@@ -219,6 +219,8 @@
       'clause_silence_ms',
       'in_segment_voice_change_silence_ms',
       'voice_change_silence_ms',
+      'chapter_silence_ms',
+      'chapter_title_silence_ms',
       'fade_enabled',
       'fade_in_ms',
       'fade_out_ms',

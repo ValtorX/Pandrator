@@ -151,6 +151,13 @@ resolved voice changes inside a segment. Use 50 ms for a tighter join or zero
 to disable it; natural silence already in the audio remains. The separate
 `audio.voice_change_silence_ms` is a minimum between segments, disabled by
 default. Structural pauses and explicit segment overrides take priority.
+`audio.chapter_silence_ms` (default 3000) is the pause before a chapter
+heading, applied after the block before a chapter marker and after a block
+marked `boundary_after="chapter"`; `audio.chapter_title_silence_ms` (default
+1750) is the pause after the spoken chapter title, after a chapter marker
+block. At a chapter break the longest applicable pause wins, including the
+voice-change minimum, and a manually set segment pause overrides it. A run
+started before these settings existed keeps the pauses it froze.
 Fixed subtitle timing receives no added pause. Saved takes and resumed runs
 retain their original pacing; changing an internal gap requires a new take in
 a new generation run.

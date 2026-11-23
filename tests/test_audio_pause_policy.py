@@ -24,6 +24,8 @@ PAUSE_KEYS = (
     "clause_silence_ms",
     "voice_change_silence_ms",
     "in_segment_voice_change_silence_ms",
+    "chapter_silence_ms",
+    "chapter_title_silence_ms",
 )
 
 
@@ -385,6 +387,212 @@ def test_voice_change_floor_uses_actual_voice_and_explicit_pause_wins(case):
         snapshot["audio"]["paragraph_silence_ms"] = 700
         freeze_boundaries(session, case["revision_id"], snapshot)
         assert assembly_pause(segments[0], snapshot) == 700
+
+
+CHAPTER_AUDIO = {
+    "sentence_silence_ms": 250,
+    "paragraph_silence_ms": 700,
+    "clause_silence_ms": 83,
+    "chapter_silence_ms": 3000,
+    "chapter_title_silence_ms": 1750,
+}
+
+
+def _chapter_rows(session, case, kinds=("speech", "chapter_marker", "speech")):
+    """The case's three blocks with the given kinds, all stored at 700 ms."""
+    segments = list(
+        session.scalars(
+            select(m.GenerationSegment)
+            .where(m.GenerationSegment.plan_revision_id == case["revision_id"])
+            .order_by(m.GenerationSegment.ordinal)
+        )
+    )
+    for row, kind in zip(segments, kinds, strict=True):
+        row.node_kind = kind
+        row.silence_after_ms = 700
+        row.speech_plan_json = {}
+    session.flush()
+    return segments
+
+
+def _frozen_pauses(session, case, audio, segments=None):
+    snapshot = {"audio": dict(audio), "tts": {"performance_enabled": False}}
+    rows_ = list(
+        session.scalars(
+            select(m.GenerationSegment)
+            .where(m.GenerationSegment.plan_revision_id == case["revision_id"])
+            .order_by(m.GenerationSegment.ordinal)
+        )
+    )
+    freeze_boundaries(session, case["revision_id"], snapshot, segments=segments)
+    return [assembly_pause(row, snapshot) for row in rows_], snapshot
+
+
+def test_chapter_defaults_and_bounds():
+    assert BUILTIN_DEFAULTS["audio"]["chapter_silence_ms"] == 3000
+    assert BUILTIN_DEFAULTS["audio"]["chapter_title_silence_ms"] == 1750
+
+
+@pytest.mark.parametrize("key", ["chapter_silence_ms", "chapter_title_silence_ms"])
+@pytest.mark.parametrize("value", [-1, 10001, "100", 1.5, True, None])
+def test_chapter_pause_save_names_the_key(case, key, value):
+    with pytest.raises(ValueError, match=f"{key} must be an integer from 0 to 10000"):
+        case["services"]["workspace_settings"].update(
+            case["session_id"], "audio", 0, {key: value}
+        )
+
+
+def test_chapter_pauses_resolve_through_settings_by_default(case):
+    resolved, _ = case["services"]["workspace_settings"].resolve(
+        case["session_id"], sections=["audio"]
+    )
+    assert resolved["audio"]["chapter_silence_ms"] == 3000
+    assert resolved["audio"]["chapter_title_silence_ms"] == 1750
+
+
+def test_chapter_marker_gets_before_and_after_pauses_and_others_keep_theirs(case):
+    with case["services"]["database"].session() as session:
+        _chapter_rows(session, case)
+        pauses, snapshot = _frozen_pauses(session, case, CHAPTER_AUDIO)
+        assert pauses == [3000, 1750, 700]
+        assert snapshot["speech_boundaries"][case["segment_ids"][0]]["silence_after_ms"] == 3000
+        # Away from a break nothing changes.
+        _chapter_rows(session, case, kinds=("speech", "speech", "speech"))
+        assert _frozen_pauses(session, case, CHAPTER_AUDIO)[0] == [700, 700, 700]
+
+
+def test_longer_regular_pause_beats_the_chapter_pause(case):
+    with case["services"]["database"].session() as session:
+        _chapter_rows(session, case)
+        audio = CHAPTER_AUDIO | {"chapter_silence_ms": 500, "chapter_title_silence_ms": 100}
+        assert _frozen_pauses(session, case, audio)[0] == [700, 700, 700]
+
+
+def test_chapter_boundary_after_markup_gets_the_chapter_pause_without_title_pause(case):
+    with case["services"]["database"].session() as session:
+        segments = _chapter_rows(session, case, kinds=("speech", "speech", "speech"))
+        row = segments[0]
+        row.speech_plan_json = {
+            "speech_xml": f'<segment id="{row.id}" boundary_after="chapter">{row.text}</segment>'
+        }
+        assert _frozen_pauses(session, case, CHAPTER_AUDIO)[0] == [3000, 700, 700]
+        # Both marks on one block: one pause, the longest.
+        segments[1].node_kind = "chapter_marker"
+        assert _frozen_pauses(session, case, CHAPTER_AUDIO)[0] == [3000, 1750, 700]
+        # A marker that also ends its chapter takes the longer of the two.
+        segments[1].speech_plan_json = {
+            "speech_xml": (
+                f'<segment id="{segments[1].id}" boundary_after="chapter">'
+                f"{segments[1].text}</segment>"
+            )
+        }
+        assert _frozen_pauses(session, case, CHAPTER_AUDIO)[0] == [3000, 3000, 700]
+
+
+def test_voice_change_minimum_still_applies_after_the_chapter_rule(case):
+    with case["services"]["database"].session() as session:
+        segments = _chapter_rows(session, case)
+        for row, voice in zip(segments, ["one", "two", "three"], strict=True):
+            row.voice = voice
+        audio = CHAPTER_AUDIO | {"voice_change_silence_ms": 3500}
+        assert _frozen_pauses(session, case, audio)[0] == [3500, 3500, 700]
+        audio = CHAPTER_AUDIO | {"voice_change_silence_ms": 2000}
+        assert _frozen_pauses(session, case, audio)[0] == [3000, 2000, 700]
+
+
+def test_manual_pause_overrides_the_chapter_pauses(case):
+    with case["services"]["database"].session() as session:
+        segments = _chapter_rows(session, case)
+        segments[0].speech_plan_json = {"silence_override_ms": 400}
+        segments[1].speech_plan_json = {"silence_override_ms": 0}
+        for row, voice in zip(segments, ["one", "two", "three"], strict=True):
+            row.voice = voice
+        audio = CHAPTER_AUDIO | {"voice_change_silence_ms": 3500}
+        assert _frozen_pauses(session, case, audio)[0] == [400, 0, 700]
+
+
+def test_snapshot_without_chapter_keys_applies_no_chapter_rule(case):
+    with case["services"]["database"].session() as session:
+        _chapter_rows(session, case)
+        old_audio = {key: value for key, value in CHAPTER_AUDIO.items() if "chapter" not in key}
+        assert _frozen_pauses(session, case, old_audio)[0] == [700, 700, 700]
+        # A frozen snapshot keeps what it froze when the setting changes later.
+        _, frozen = _frozen_pauses(session, case, CHAPTER_AUDIO)
+        frozen["audio"]["chapter_silence_ms"] = 9000
+        rows_ = _chapter_rows(session, case)
+        assert [assembly_pause(row, frozen) for row in rows_] == [3000, 1750, 700]
+
+
+def test_subset_freeze_and_removed_blocks_find_the_marker_successor(case):
+    with case["services"]["database"].session() as session:
+        segments = _chapter_rows(session, case)
+        # Only the block before the marker is given; its successor is not.
+        snapshot = {"audio": dict(CHAPTER_AUDIO)}
+        freeze_boundaries(session, case["revision_id"], snapshot, segments=[segments[0]])
+        assert set(snapshot["speech_boundaries"]) == {segments[0].id}
+        assert assembly_pause(segments[0], snapshot) == 3000
+        # The marker alone gets its title pause.
+        snapshot = {"audio": dict(CHAPTER_AUDIO)}
+        freeze_boundaries(session, case["revision_id"], snapshot, segments=[segments[1]])
+        assert assembly_pause(segments[1], snapshot) == 1750
+        # A removed block between them does not hide the marker.
+        segments = _chapter_rows(session, case, kinds=("speech", "speech", "chapter_marker"))
+        segments[1].removed = True
+        session.flush()
+        snapshot = {"audio": dict(CHAPTER_AUDIO)}
+        freeze_boundaries(session, case["revision_id"], snapshot, segments=[segments[0]])
+        assert assembly_pause(segments[0], snapshot) == 3000
+
+
+def test_chapter_freeze_reads_successor_kinds_with_one_bounded_query(case):
+    from sqlalchemy import event
+
+    statements: list[str] = []
+
+    def capture(_connection, _cursor, statement, _parameters, _context, _many):
+        normalized = " ".join(statement.lower().split())
+        if "from generation_segments" in normalized:
+            statements.append(normalized)
+
+    with case["services"]["database"].session() as session:
+        segments = _chapter_rows(session, case)
+        engine = case["services"]["database"].engine
+        snapshot = {"audio": dict(CHAPTER_AUDIO)}
+        event.listen(engine, "before_cursor_execute", capture)
+        try:
+            freeze_boundaries(session, case["revision_id"], snapshot, segments=segments[:1])
+        finally:
+            event.remove(engine, "before_cursor_execute", capture)
+        # The successor of the last given row is read, and the answer is right.
+        assert assembly_pause(segments[0], snapshot) == 3000
+    reads = [sql for sql in statements if "node_kind" in sql and ">=" in sql]
+    assert len(reads) == 1 and " limit " in reads[0] and "lead(" not in reads[0], statements
+    assert len(statements) == 1, statements
+
+
+def test_chapter_rule_skips_subtitle_cues(case):
+    with case["services"]["database"].session() as session:
+        segments = _chapter_rows(session, case)
+        segments[0].node_kind = "subtitle_cue"
+        segments[1].node_kind = "chapter_marker"
+        session.flush()
+        pauses, _ = _frozen_pauses(session, case, CHAPTER_AUDIO)
+        assert pauses[0] == 700  # a subtitle cue before a marker gets no chapter pause
+        segments[0].node_kind = "speech"
+        segments[1].node_kind = "subtitle_cue"
+        segments[2].node_kind = "chapter_marker"
+        session.flush()
+        pauses, _ = _frozen_pauses(session, case, CHAPTER_AUDIO)
+        assert pauses[1] == 700  # a cue gets no chapter pause
+
+
+def test_consecutive_chapter_markers_each_take_the_longest_pause(case):
+    with case["services"]["database"].session() as session:
+        _chapter_rows(session, case, kinds=("chapter_marker", "chapter_marker", "speech"))
+        # The first marker is both a title and the block before a marker.
+        assert _frozen_pauses(session, case, CHAPTER_AUDIO)[0] == [3000, 1750, 700]
+        audio = CHAPTER_AUDIO | {"chapter_silence_ms": 1000}
+        assert _frozen_pauses(session, case, audio)[0] == [1750, 1750, 700]
 
 
 @pytest.mark.parametrize(

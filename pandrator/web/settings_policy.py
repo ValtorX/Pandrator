@@ -315,6 +315,8 @@ BUILTIN_DEFAULTS: dict[str, dict[str, Any]] = {
         "clause_silence_ms": 83,
         "voice_change_silence_ms": 0,
         "in_segment_voice_change_silence_ms": 100,
+        "chapter_silence_ms": 3000,
+        "chapter_title_silence_ms": 1750,
         "fade_enabled": False,
         "fade_in_ms": 0,
         "fade_out_ms": 0,
@@ -922,7 +924,7 @@ def validate_audio_pause_settings(value: dict[str, Any]) -> None:
         raise ValueError("Audio defaults must be an object.")
     for key in (
         "sentence_silence_ms", "paragraph_silence_ms", "clause_silence_ms", "voice_change_silence_ms",
-        "in_segment_voice_change_silence_ms",
+        "in_segment_voice_change_silence_ms", "chapter_silence_ms", "chapter_title_silence_ms",
     ):
         if key in value and (type(value[key]) is not int or not 0 <= value[key] <= 10000):
             raise ValueError(f"{key} must be an integer from 0 to 10000.")

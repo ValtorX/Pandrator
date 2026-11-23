@@ -347,6 +347,29 @@ def test_preview_returns_compiled_request_without_synthesis(case):
     assert result["transcript"] == "Yet this defeat would be temporary."
 
 
+def test_preview_effective_pause_applies_the_chapter_pauses(case):
+    with case["services"]["database"].session() as session:
+        session.get(m.GenerationSegment, case["segment_ids"][1]).node_kind = "chapter_marker"
+        for segment_id in case["segment_ids"]:
+            session.get(m.GenerationSegment, segment_id).silence_after_ms = 700
+    plan = create(case)
+
+    def effective(index):
+        response = case["post"](
+            "/" + plan["id"] + "/preview",
+            {
+                "segment_id": case["segment_ids"][index],
+                "service": "audio_cpp",
+                "model": "fish_audio_s2_pro_q8_0",
+            },
+        )
+        assert response.status_code == 200, response.get_json()
+        return response.get_json()["assembly_boundary"]["effective_silence_after_ms"]
+
+    # Before a chapter heading, on the heading, and on an ordinary block.
+    assert [effective(0), effective(1), effective(2)] == [3000, 1750, 700]
+
+
 def test_passive_reanalysis_preserves_locked_entries(case):
     adopted = adopt(case, edit(case, create(case)))
     new = create(case, mode="passive", copy_from_id=adopted["id"])

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 
 from sqlalchemy import select
 
@@ -110,9 +110,65 @@ def boundary_pause(boundary: str | None, stored_ms: int, audio: dict) -> int:
         return 0
     if boundary == "dialogue_turn":
         return max(0, int(audio.get("sentence_silence_ms", 250)))
-    if boundary in {"paragraph", "scene", "chapter"}:
+    if boundary == "chapter":
+        return max(
+            max(0, int(audio.get("paragraph_silence_ms", 700))),
+            _setting_ms(audio, "chapter_silence_ms"),
+        )
+    if boundary in {"paragraph", "scene"}:
         return max(0, int(audio.get("paragraph_silence_ms", 700)))
     return max(0, int(stored_ms or 0))
+
+
+def _setting_ms(audio: dict, key: str) -> int:
+    """A pause setting in milliseconds; a snapshot without the key applies none."""
+    return max(0, int(audio.get(key) or 0))
+
+
+def blocks_before_chapter_marker(
+    session, revision_id: str, rows: Sequence[m.GenerationSegment]
+) -> set[str]:
+    """Ids of non-removed blocks whose next non-removed block is a chapter marker.
+
+    The next block is read from the revision, so the answer does not depend on which
+    rows a caller freezes (a playlist page, a run limited to selected blocks). One
+    query over the index range from the rows' first ordinal: at most ``last - first + 1``
+    ordinals lie in the rows' span, plus the successor of the last row.
+    """
+    if not rows:
+        return set()
+    first = min(row.ordinal for row in rows)
+    last = max(row.ordinal for row in rows)
+    following = session.execute(
+        select(m.GenerationSegment.id, m.GenerationSegment.node_kind)
+        .where(
+            m.GenerationSegment.plan_revision_id == revision_id,
+            m.GenerationSegment.removed.is_(False),
+            m.GenerationSegment.ordinal >= first,
+        )
+        .order_by(m.GenerationSegment.ordinal)
+        .limit(last - first + 2)
+    ).all()
+    return {
+        block_id
+        for (block_id, _kind), (_next_id, next_kind) in zip(
+            following, following[1:], strict=False
+        )
+        if next_kind == "chapter_marker"
+    }
+
+
+def apply_chapter_pauses(
+    pause: int, *, boundary: str | None, node_kind: str, before_marker: bool, audio: dict
+) -> int:
+    """Raise a resolved pause to the chapter pauses that apply; the longest wins."""
+    if node_kind == "subtitle_cue":
+        return pause
+    if boundary == "chapter" or before_marker:
+        pause = max(pause, _setting_ms(audio, "chapter_silence_ms"))
+    if node_kind == "chapter_marker":
+        pause = max(pause, _setting_ms(audio, "chapter_title_silence_ms"))
+    return pause
 
 
 def freeze_boundaries(
@@ -143,6 +199,8 @@ def freeze_boundaries(
     # One catalogue for this freeze; cast spans would otherwise each rebuild it.
     service_config_cache: dict = {}
     voice_gap = int((snapshot.get("audio") or {}).get("voice_change_silence_ms") or 0)
+    audio = snapshot.get("audio") or {}
+    chapter_gap = _setting_ms(audio, "chapter_silence_ms")
     rows = (
         list(segments)
         if segments is not None
@@ -156,6 +214,9 @@ def freeze_boundaries(
                 .order_by(m.GenerationSegment.ordinal)
             )
         )
+    )
+    before_marker = (
+        blocks_before_chapter_marker(session, revision_id, rows) if chapter_gap else set()
     )
     for row in rows:
         text = row.optimized_text or row.text
@@ -192,6 +253,15 @@ def freeze_boundaries(
             pause = max(0, int((snapshot.get("audio") or {}).get(key, row.silence_after_ms)))
         if explicit is not None:
             pause = max(0, int(explicit))
+        else:
+            # The longest applicable pause wins; a manual pause above is kept as set.
+            pause = apply_chapter_pauses(
+                pause,
+                boundary=boundary,
+                node_kind=row.node_kind,
+                before_marker=row.id in before_marker,
+                audio=audio,
+            )
         if voice_gap and row.node_kind != "subtitle_cue":
             from .generation_cast_runtime import segment_render_parts
             from .generation_performance_snapshot import (

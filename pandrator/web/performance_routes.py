@@ -410,14 +410,25 @@ def register_performance_routes(app, context) -> None:
                     "plan_revision_id": plan.plan_revision_id,
                     "source_artifact_id": (session.get(m.GenerationPlanRevision, plan.plan_revision_id).settings_json or {}).get("_source_artifact_id"),
                 }
-                from .speech_boundaries import boundary_pause
+                from .speech_boundaries import (
+                    apply_chapter_pauses,
+                    blocks_before_chapter_marker,
+                    boundary_pause,
+                )
                 row = session.get(m.GenerationSegment, payload.segment_id)
                 boundary = (result.get("speech_structure") or {}).get("boundary_after")
                 audio = services.workspace_settings.get_in_session(session, session_id, "audio")["effective"]
                 result["assembly_boundary"] = {
                     "boundary_after": boundary,
                     "stored_silence_after_ms": row.silence_after_ms,
-                    "effective_silence_after_ms": boundary_pause(boundary, row.silence_after_ms, audio),
+                    "effective_silence_after_ms": apply_chapter_pauses(
+                        boundary_pause(boundary, row.silence_after_ms, audio),
+                        boundary=boundary,
+                        node_kind=row.node_kind,
+                        before_marker=row.id
+                        in blocks_before_chapter_marker(session, row.plan_revision_id, [row]),
+                        audio=audio,
+                    ),
                 }
                 model = result["capabilities"].get("model")
                 backend = result["capabilities"].get("backend")
