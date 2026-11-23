@@ -155,8 +155,16 @@ default. Structural pauses and explicit segment overrides take priority.
 heading, applied after the block before a chapter marker and after a block
 marked `boundary_after="chapter"`; `audio.chapter_title_silence_ms` (default
 1750) is the pause after the spoken chapter title, after a chapter marker
-block. At a chapter break the longest applicable pause wins, including the
-voice-change minimum, and a manually set segment pause overrides it. A run
+block. `audio.scene_silence_ms` (default 2000) is the pause before a scene's
+first line, after a block marked `boundary_after="scene"`;
+`audio.scene_heading_silence_ms` (default 1000) is the pause after a heading
+line, after a block marked as a heading. A heading that opens a scene gets the
+scene pause before it and the heading pause after it. Segmentation marks
+neither today: a scene break comes from speech markup (a speaker plan's
+`boundary_after="scene"`), and a heading is a block whose node kind is
+`heading`, set through the segment update API. At a chapter or scene
+break the longest applicable pause wins, including the voice-change minimum,
+and a manually set segment pause overrides it. A run
 keeps only which boundary each block ends on; assembling it, and the playlist
 with it chosen, take every pause length from the current audio settings, so a
 pause change needs a new assembly, not new takes.

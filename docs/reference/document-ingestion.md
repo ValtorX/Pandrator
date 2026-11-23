@@ -422,6 +422,14 @@ settings apply to narration too:
 | `paragraph_silence_ms` | `700` ms | Default assembly pause after a paragraph. |
 | `chapter_silence_ms` | `3000` ms | Assembly pause before a chapter heading; the longer of this and the regular pause applies. |
 | `chapter_title_silence_ms` | `1750` ms | Assembly pause after a spoken chapter title; the longer of this and the regular pause applies. |
+| `scene_silence_ms` | `2000` ms | Assembly pause before a scene's first line (after a block marked as ending a scene); the longer of this and the regular pause applies. |
+| `scene_heading_silence_ms` | `1000` ms | Assembly pause after a scene heading line (a block marked as a heading); the longer of this and the regular pause applies. |
+
+Segmentation marks no scene breaks or heading lines today: a block ends a scene when its
+speech markup says `boundary_after="scene"` (speech structure analysis, annotated text or an
+assistant's speaker-plan markup), and it is a heading when its node kind is `heading` (set
+through the segment update API). Until then the two scene settings change nothing on a book
+without those marks.
 
 Narration segments and TTS blocks are related but not interchangeable. Editing
 or resegmenting the generation plan can stale existing takes because their

@@ -19,6 +19,13 @@ const { compareSettingOrder, settingLabel, settingApplies } = await import(
   `data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString('base64')}`
 );
 
+const BREAK_PAUSES = [
+  'chapter_silence_ms',
+  'chapter_title_silence_ms',
+  'scene_silence_ms',
+  'scene_heading_silence_ms'
+];
+
 const PAUSES = [
   'sentence_silence_ms',
   'paragraph_silence_ms',
@@ -26,16 +33,18 @@ const PAUSES = [
   'in_segment_voice_change_silence_ms',
   'voice_change_silence_ms',
   'chapter_silence_ms',
-  'chapter_title_silence_ms'
+  'chapter_title_silence_ms',
+  'scene_silence_ms',
+  'scene_heading_silence_ms'
 ];
 
-test('the chapter pauses follow the existing pauses in the audio section order', () => {
+test('the chapter and scene pauses follow the existing pauses in the audio section order', () => {
   const shuffled = [
     'fade_enabled',
-    'chapter_title_silence_ms',
+    'scene_heading_silence_ms',
     ...[...PAUSES]
       .reverse()
-      .filter((key) => key !== 'chapter_title_silence_ms'),
+      .filter((key) => key !== 'scene_heading_silence_ms'),
     'audio_verification_mode'
   ];
   const ordered = shuffled.sort((left, right) =>
@@ -48,7 +57,7 @@ test('the chapter pauses follow the existing pauses in the audio section order',
   ]);
 });
 
-test('the chapter pauses have their labels and apply with default settings', () => {
+test('the chapter and scene pauses have their labels and apply with default settings', () => {
   assert.equal(
     settingLabel('chapter_silence_ms'),
     'Pause before a chapter heading (ms)'
@@ -57,11 +66,19 @@ test('the chapter pauses have their labels and apply with default settings', () 
     settingLabel('chapter_title_silence_ms'),
     'Pause after a chapter title (ms)'
   );
-  for (const key of ['chapter_silence_ms', 'chapter_title_silence_ms'])
+  assert.equal(
+    settingLabel('scene_silence_ms'),
+    'Pause before a new scene (ms)'
+  );
+  assert.equal(
+    settingLabel('scene_heading_silence_ms'),
+    'Pause after a heading line (ms)'
+  );
+  for (const key of BREAK_PAUSES)
     assert.equal(settingApplies('audio', key, {}), true);
 });
 
-test("the Settings panel's audio list shows the chapter pauses after voice changes", () => {
+test("the Settings panel's audio list shows the chapter pauses and the scene pauses after voice changes", () => {
   const source = readFileSync(
     new URL('../src/lib/SettingsPanel.svelte', import.meta.url),
     'utf8'
@@ -71,8 +88,10 @@ test("the Settings panel's audio list shows the chapter pauses after voice chang
   const keys = [...list[1].matchAll(/'([a-z_]+)'/g)].map((match) => match[1]);
   const at = keys.indexOf('voice_change_silence_ms');
   assert.ok(at >= 0);
-  assert.deepEqual(keys.slice(at + 1, at + 3), [
+  assert.deepEqual(keys.slice(at + 1, at + 5), [
     'chapter_silence_ms',
-    'chapter_title_silence_ms'
+    'chapter_title_silence_ms',
+    'scene_silence_ms',
+    'scene_heading_silence_ms'
   ]);
 });

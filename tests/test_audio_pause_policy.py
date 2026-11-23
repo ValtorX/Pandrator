@@ -26,6 +26,8 @@ PAUSE_KEYS = (
     "in_segment_voice_change_silence_ms",
     "chapter_silence_ms",
     "chapter_title_silence_ms",
+    "scene_silence_ms",
+    "scene_heading_silence_ms",
 )
 
 
@@ -593,6 +595,149 @@ def test_consecutive_chapter_markers_each_take_the_longest_pause(case):
         assert _frozen_pauses(session, case, CHAPTER_AUDIO)[0] == [3000, 1750, 700]
         audio = CHAPTER_AUDIO | {"chapter_silence_ms": 1000}
         assert _frozen_pauses(session, case, audio)[0] == [1750, 1750, 700]
+
+
+SCENE_AUDIO = CHAPTER_AUDIO | {"scene_silence_ms": 2000, "scene_heading_silence_ms": 1000}
+
+
+def _scene_end(row):
+    row.speech_plan_json = {
+        "speech_xml": f'<segment id="{row.id}" boundary_after="scene">{row.text}</segment>'
+    }
+
+
+def test_scene_defaults_and_bounds():
+    assert BUILTIN_DEFAULTS["audio"]["scene_silence_ms"] == 2000
+    assert BUILTIN_DEFAULTS["audio"]["scene_heading_silence_ms"] == 1000
+
+
+@pytest.mark.parametrize("key", ["scene_silence_ms", "scene_heading_silence_ms"])
+@pytest.mark.parametrize("value", [-1, 10001, "100", 1.5, True, None])
+def test_scene_pause_save_names_the_key(case, key, value):
+    with pytest.raises(ValueError, match=f"{key} must be an integer from 0 to 10000"):
+        case["services"]["workspace_settings"].update(
+            case["session_id"], "audio", 0, {key: value}
+        )
+
+
+def test_scene_pauses_resolve_through_settings_by_default(case):
+    resolved, _ = case["services"]["workspace_settings"].resolve(
+        case["session_id"], sections=["audio"]
+    )
+    assert resolved["audio"]["scene_silence_ms"] == 2000
+    assert resolved["audio"]["scene_heading_silence_ms"] == 1000
+
+
+def test_scene_break_gets_the_scene_pause_and_others_keep_theirs(case):
+    with case["services"]["database"].session() as session:
+        segments = _chapter_rows(session, case, kinds=("speech", "speech", "speech"))
+        _scene_end(segments[0])
+        pauses, snapshot = _frozen_pauses(session, case, SCENE_AUDIO)
+        assert pauses == [2000, 700, 700]
+        assert snapshot["speech_boundaries"][segments[0].id]["boundary_after"] == "scene"
+
+
+def test_heading_alone_gets_the_heading_pause(case):
+    with case["services"]["database"].session() as session:
+        _chapter_rows(session, case, kinds=("speech", "heading", "speech"))
+        assert _frozen_pauses(session, case, SCENE_AUDIO)[0] == [700, 1000, 700]
+
+
+def test_heading_that_opens_a_scene_gets_both_pauses(case):
+    with case["services"]["database"].session() as session:
+        segments = _chapter_rows(session, case, kinds=("speech", "heading", "speech"))
+        _scene_end(segments[0])
+        assert _frozen_pauses(session, case, SCENE_AUDIO)[0] == [2000, 1000, 700]
+
+
+def test_chapter_and_scene_meet_at_the_longest_pause(case):
+    with case["services"]["database"].session() as session:
+        segments = _chapter_rows(session, case)
+        _scene_end(segments[0])
+        assert _frozen_pauses(session, case, SCENE_AUDIO)[0] == [3000, 1750, 700]
+        audio = SCENE_AUDIO | {"chapter_silence_ms": 1500, "scene_silence_ms": 2600}
+        assert _frozen_pauses(session, case, audio)[0] == [2600, 1750, 700]
+
+
+def test_heading_that_ends_a_scene_takes_the_longest_pause(case):
+    with case["services"]["database"].session() as session:
+        segments = _chapter_rows(session, case, kinds=("speech", "heading", "speech"))
+        _scene_end(segments[1])
+        assert _frozen_pauses(session, case, SCENE_AUDIO)[0] == [700, 2000, 700]
+        audio = SCENE_AUDIO | {"scene_heading_silence_ms": 2500}
+        assert _frozen_pauses(session, case, audio)[0] == [700, 2500, 700]
+
+
+def test_longer_regular_pause_beats_the_scene_pauses(case):
+    with case["services"]["database"].session() as session:
+        segments = _chapter_rows(session, case, kinds=("speech", "heading", "speech"))
+        _scene_end(segments[0])
+        audio = SCENE_AUDIO | {"paragraph_silence_ms": 2500, "scene_heading_silence_ms": 100}
+        # The scene block's boundary resolves to the paragraph pause (2500), and the
+        # heading's paragraph pause_kind does too: both beat the shorter break settings.
+        segments[1].speech_plan_json = {"pause_kind": "paragraph"}
+        assert _frozen_pauses(session, case, audio)[0] == [2500, 2500, 700]
+
+
+def test_a_heading_at_a_chapter_break_takes_the_longest_pause(case):
+    with case["services"]["database"].session() as session:
+        segments = _chapter_rows(session, case, kinds=("heading", "chapter_marker", "speech"))
+        # A heading before a chapter marker: the chapter pause (3000) beats the heading
+        # pause (1000); a heading that ends a chapter takes the same one pause.
+        assert _frozen_pauses(session, case, SCENE_AUDIO)[0][0] == 3000
+        segments[1].node_kind = "speech"
+        segments[0].speech_plan_json = {
+            "speech_xml": f'<segment id="{segments[0].id}" boundary_after="chapter">'
+            f"{segments[0].text}</segment>"
+        }
+        session.flush()
+        assert _frozen_pauses(session, case, SCENE_AUDIO)[0][0] == 3000
+
+
+def test_manual_pause_overrides_the_scene_pauses(case):
+    with case["services"]["database"].session() as session:
+        segments = _chapter_rows(session, case, kinds=("speech", "heading", "speech"))
+        _scene_end(segments[0])
+        segments[0].speech_plan_json["silence_override_ms"] = 300
+        segments[1].speech_plan_json = {"silence_override_ms": 0}
+        for row, voice in zip(segments, ["one", "two", "three"], strict=True):
+            row.voice = voice
+        audio = SCENE_AUDIO | {"voice_change_silence_ms": 3500}
+        assert _frozen_pauses(session, case, audio)[0] == [300, 0, 700]
+
+
+def test_voice_change_minimum_still_applies_after_the_scene_rule(case):
+    with case["services"]["database"].session() as session:
+        segments = _chapter_rows(session, case, kinds=("speech", "speech", "speech"))
+        _scene_end(segments[0])
+        for row, voice in zip(segments, ["one", "two", "three"], strict=True):
+            row.voice = voice
+        audio = SCENE_AUDIO | {"voice_change_silence_ms": 2600}
+        assert _frozen_pauses(session, case, audio)[0] == [2600, 2600, 700]
+
+
+def test_snapshot_without_scene_keys_applies_no_scene_rule(case):
+    with case["services"]["database"].session() as session:
+        segments = _chapter_rows(session, case, kinds=("speech", "heading", "speech"))
+        _scene_end(segments[0])
+        # Chapter keys alone: the scene break and the heading keep the paragraph pause.
+        assert _frozen_pauses(session, case, CHAPTER_AUDIO)[0] == [700, 700, 700]
+
+
+def test_scene_rules_skip_subtitle_cues(case):
+    with case["services"]["database"].session() as session:
+        # A cue carries no scene markup, and marked as a heading it gets no heading pause.
+        _chapter_rows(session, case, kinds=("speech", "subtitle_cue", "speech"))
+        assert _frozen_pauses(session, case, SCENE_AUDIO)[0] == [700, 700, 700]
+
+
+def test_boundary_pause_gives_the_longer_of_paragraph_and_scene_pause():
+    from pandrator.web.speech_boundaries import boundary_pause
+
+    assert boundary_pause("scene", 700, SCENE_AUDIO) == 2000
+    assert boundary_pause("scene", 700, SCENE_AUDIO | {"paragraph_silence_ms": 2500}) == 2500
+    assert boundary_pause("scene", 700, CHAPTER_AUDIO) == 700
+    assert boundary_pause("paragraph", 700, SCENE_AUDIO) == 700
 
 
 @pytest.mark.parametrize(

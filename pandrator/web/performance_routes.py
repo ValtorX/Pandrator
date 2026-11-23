@@ -411,7 +411,7 @@ def register_performance_routes(app, context) -> None:
                     "source_artifact_id": (session.get(m.GenerationPlanRevision, plan.plan_revision_id).settings_json or {}).get("_source_artifact_id"),
                 }
                 from .speech_boundaries import (
-                    apply_chapter_pauses,
+                    apply_break_pauses,
                     blocks_before_chapter_marker,
                     boundary_pause,
                 )
@@ -421,7 +421,7 @@ def register_performance_routes(app, context) -> None:
                 result["assembly_boundary"] = {
                     "boundary_after": boundary,
                     "stored_silence_after_ms": row.silence_after_ms,
-                    "effective_silence_after_ms": apply_chapter_pauses(
+                    "effective_silence_after_ms": apply_break_pauses(
                         boundary_pause(boundary, row.silence_after_ms, audio),
                         boundary=boundary,
                         node_kind=row.node_kind,

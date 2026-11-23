@@ -124,7 +124,12 @@ def boundary_pause(boundary: str | None, stored_ms: int, audio: Mapping[str, Any
             max(0, int(audio.get("paragraph_silence_ms", 700))),
             _setting_ms(audio, "chapter_silence_ms"),
         )
-    if boundary in {"paragraph", "scene"}:
+    if boundary == "scene":
+        return max(
+            max(0, int(audio.get("paragraph_silence_ms", 700))),
+            _setting_ms(audio, "scene_silence_ms"),
+        )
+    if boundary == "paragraph":
         return max(0, int(audio.get("paragraph_silence_ms", 700)))
     return max(0, int(stored_ms or 0))
 
@@ -251,7 +256,7 @@ def blocks_before_chapter_marker(
     }
 
 
-def apply_chapter_pauses(
+def apply_break_pauses(
     pause: int,
     *,
     boundary: str | None,
@@ -259,13 +264,17 @@ def apply_chapter_pauses(
     before_marker: bool,
     audio: Mapping[str, Any],
 ) -> int:
-    """Raise a resolved pause to the chapter pauses that apply; the longest wins."""
+    """Raise a resolved pause to the chapter and scene pauses that apply; the longest wins."""
     if node_kind == "subtitle_cue":
         return pause
     if boundary == "chapter" or before_marker:
         pause = max(pause, _setting_ms(audio, "chapter_silence_ms"))
+    if boundary == "scene":
+        pause = max(pause, _setting_ms(audio, "scene_silence_ms"))
     if node_kind == "chapter_marker":
         pause = max(pause, _setting_ms(audio, "chapter_title_silence_ms"))
+    if node_kind == "heading":
+        pause = max(pause, _setting_ms(audio, "scene_heading_silence_ms"))
     return pause
 
 
@@ -280,7 +289,7 @@ def block_pause(
 
     The base pause comes from the boundary, else the block's ``pause_kind`` setting,
     else its stored pause. A manual pause replaces it and stops there; otherwise the
-    chapter rule raises it.
+    chapter and scene rules raise it.
     """
     if block.override is not None:
         return max(0, int(block.override))
@@ -289,7 +298,7 @@ def block_pause(
         key = f"{block.pause_kind}_silence_ms"
         pause = max(0, int(audio.get(key, block.stored_ms)))
     # The longest applicable pause wins; a manual pause above is kept as set.
-    return apply_chapter_pauses(
+    return apply_break_pauses(
         pause,
         boundary=boundary,
         node_kind=block.node_kind,

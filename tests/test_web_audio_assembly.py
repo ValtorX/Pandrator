@@ -396,6 +396,30 @@ class DurableOutputAssemblyTests(unittest.TestCase):
         )
         self.assertEqual([250, 4000, 700, 0], [item["silence_after_ms"] for item in manifest])
 
+    def test_assembly_applies_scene_and_heading_pauses_and_keeps_other_pauses(self):
+        ids = self._plan_with_takes(
+            segments=[
+                {"text": "End of the scene.", "paragraph": "yes"},
+                {"text": "Three days later", "node_kind": "heading", "paragraph": "yes"},
+                {"text": "The next scene.", "paragraph": "yes"},
+                {"text": "It goes on."},
+            ]
+        )
+        with self.database.session() as session:
+            row = session.get(GenerationSegment, ids[0])
+            row.speech_plan_json = {
+                "speech_xml": f'<segment id="{row.id}" boundary_after="scene">{row.text}</segment>'
+            }
+        # Defaults: 2000 ms before the scene's first line (the heading), 1000 ms after it.
+        manifest, length = self._assemble_wav()
+        self.assertEqual([2000, 1000, 700, 0], [item["silence_after_ms"] for item in manifest])
+        self.assertEqual(100 + 2000 + 140 + 1000 + 120 + 700 + 80, length)
+        # The settings change the next assembly's pauses; a longer regular pause still wins.
+        manifest, _length = self._assemble_wav(
+            {"scene_silence_ms": 2600, "scene_heading_silence_ms": 300}
+        )
+        self.assertEqual([2600, 700, 700, 0], [item["silence_after_ms"] for item in manifest])
+
     def test_marker_as_the_last_assembled_block_gets_no_trailing_pause(self):
         self._plan_with_takes(
             segments=[

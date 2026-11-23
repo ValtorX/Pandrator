@@ -631,6 +631,113 @@ def test_pause_change_reaches_the_reassembly_of_the_same_run(case):
     assert new_jobs == ["generation.assemble"], new_jobs
 
 
+# Story 4 of the chapter pauses epic: scene breaks and scene headings.
+
+SCENE_BOOK = [
+    {"text": "The end of the scene.", "paragraph": "yes"},
+    {"text": "Three days later", "node_kind": "heading", "paragraph": "yes"},
+    {"text": "The next scene begins.", "paragraph": "yes"},
+    {"text": "It goes on.", "paragraph": "yes"},
+]
+
+
+def _scene_book(case) -> dict:
+    """Scene end, heading that opens the next scene, then ordinary blocks, all stored at 700."""
+    book = _book(case, segments=SCENE_BOOK)
+    with book["services"]["database"].session() as session:
+        first = session.get(m.GenerationSegment, book["segment_ids"][0])
+        first.speech_plan_json = {
+            **(first.speech_plan_json or {}),
+            "speech_xml": f'<segment id="{first.id}" boundary_after="scene">{first.text}</segment>',
+        }
+        for sid in book["segment_ids"]:
+            session.get(m.GenerationSegment, sid).silence_after_ms = 700
+    return book
+
+
+def test_playlist_and_run_show_scene_and_heading_pauses(case):
+    book = _scene_book(case)
+    # No run chosen: the built-in defaults, 2000 after the scene end and 1000 after the heading.
+    assert _pauses(book) == [2000, 1000, 700, 700]
+    # A page holding only the heading still shows its pause.
+    assert _pauses(book, cursor=1, limit=1) == [1000]
+
+    run = book["services"]["generation"].start(book["session_id"])
+    with book["services"]["database"].session() as session:
+        frozen = session.get(m.GenerationRun, run["id"]).settings_snapshot_json
+    assert [
+        frozen["speech_boundaries"][sid]["silence_after_ms"] for sid in book["segment_ids"]
+    ] == [2000, 1000, 700, 700]
+    assert frozen["speech_boundaries"][book["segment_ids"][0]]["boundary_after"] == "scene"
+    assert _pauses(book, generation_run_id=run["id"]) == [2000, 1000, 700, 700]
+
+
+def test_settings_patch_changes_the_next_runs_scene_pauses(case):
+    book = _scene_book(case)
+    base = f"/api/v1/sessions/{book['session_id']}/settings/audio"
+    rejected = book["client"].patch(
+        base,
+        json={"value": {"scene_silence_ms": -1}},
+        headers={**book["headers"], "If-Match": '"0"', "Idempotency-Key": "scene-bad"},
+    )
+    assert rejected.status_code == 422
+    assert "scene_silence_ms" in rejected.get_json()["error"]["message"]
+
+    patched = book["client"].patch(
+        base,
+        json={"value": {"scene_silence_ms": 2600, "scene_heading_silence_ms": 1200}},
+        headers={**book["headers"], "If-Match": '"0"', "Idempotency-Key": "scene-ok"},
+    )
+    assert patched.status_code == 200, patched.get_json()
+    run = book["services"]["generation"].start(book["session_id"])
+    with book["services"]["database"].session() as session:
+        frozen = session.get(m.GenerationRun, run["id"]).settings_snapshot_json
+    assert [
+        frozen["speech_boundaries"][sid]["silence_after_ms"] for sid in book["segment_ids"]
+    ] == [2600, 1200, 700, 700]
+
+
+def test_run_frozen_before_scene_settings_gets_the_current_scene_pauses(case):
+    book = _scene_book(case)
+    old = {"audio": {"sentence_silence_ms": 250, "paragraph_silence_ms": 700}}
+    run_id = _add_run(book, old, sequence_number=904)
+    # A legacy run froze no boundaries; each block's own markup and kind give the pause.
+    assert _pauses(book, generation_run_id=run_id) == [2000, 1000, 700, 700]
+
+
+def test_scene_pause_change_reaches_the_reassembly_of_the_same_run(case):
+    book = _scene_book(case)
+    services = book["services"]
+    services["workspace_settings"].update(book["session_id"], "output", 0, {"format": "wav"})
+    run_id = services["generation"].start(book["session_id"])["id"]
+    _complete_with_takes(book, run_id)
+
+    first_id, first = _assemble(book, run_id)
+    assert first == [2000, 1000, 700, 0]
+    assert _current_assembly(book, run_id) == first_id
+    before = _production_state(book)
+    assert len(before["takes"]) == 4
+
+    _update_audio(book, scene_silence_ms=2600)
+    assert _current_assembly(book, run_id) is None
+    assert _pauses(book, generation_run_id=run_id) == [2600, 1000, 700, 700]
+    second_id, second = _assemble(book, run_id)
+    assert second == [2600, 1000, 700, 0]
+    assert _current_assembly(book, run_id) == second_id
+
+    _update_audio(book, scene_heading_silence_ms=1500)
+    assert _current_assembly(book, run_id) is None
+    assert _assemble(book, run_id)[1] == [2600, 1500, 700, 0]
+
+    after = _production_state(book)
+    assert after["takes"] == before["takes"]
+    assert after["plans"] == before["plans"]
+    assert after["runs"] == before["runs"]
+    assert after["reuse"] == before["reuse"]
+    new_jobs = sorted(job[1] for job in after["jobs"] if job not in before["jobs"])
+    assert new_jobs == ["generation.assemble"] * 2, new_jobs
+
+
 def test_unchanged_settings_resolve_to_the_pauses_the_run_froze(case):
     book = _book(case)
     with book["services"]["database"].session() as session:
