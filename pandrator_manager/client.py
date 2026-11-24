@@ -74,6 +74,30 @@ class ProductUninstalled(ManagerUnavailable):
         self.status = status
 
 
+def _connection_never_established(error: BaseException) -> bool:
+    """Return whether a connection error means the request never reached a server."""
+
+    # urllib3 is only a transitive dependency, so match its classes by name.
+    never_established = {"NewConnectionError", "ConnectTimeoutError"}
+    pending: list[object] = [error]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, requests.ConnectTimeout) or any(
+            cls.__name__ in never_established for cls in type(current).__mro__
+        ):
+            return True
+        if isinstance(current, BaseException):
+            pending.extend(current.args)
+            pending.append(current.__cause__)
+            pending.append(current.__context__)
+        pending.append(getattr(current, "reason", None))
+    return False
+
+
 class ManagerApiError(RuntimeError):
     def __init__(self, status_code: int, payload: dict):
         error = payload.get("error") if isinstance(payload, dict) else None
@@ -604,6 +628,33 @@ class ManagerClient:
                 pass
             time.sleep(0.05)
         return False
+
+    def quit_manager(self, *, stop_active_work: bool = False) -> None:
+        """Ask the manager to stop every managed service and then itself.
+
+        Raises ``ManagerApiError`` (for example ``application_busy``) when the
+        manager refuses.
+        """
+
+        try:
+            self.request(
+                "POST",
+                "/v1/runtime/quit",
+                json_payload={"stop_active_work": stop_active_work},
+                idempotency_key=str(uuid.uuid4()),
+                # The route can wait behind a long runtime action.
+                timeout=10 * 60,
+            )
+        except requests.ConnectionError as error:
+            # As in ``stop_manager``, the response can be lost when the server
+            # closes. Accept that only when the connection was established; a
+            # refused connection never reached a Manager. Services stop before
+            # the manager exits (15 + 6 + 5 s each), so allow a long wait.
+            if _connection_never_established(error):
+                raise
+            if self._wait_for_shutdown_confirmation(timeout_seconds=300):
+                return
+            raise
 
     def stop_manager(self) -> None:
         try:

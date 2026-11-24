@@ -68,7 +68,7 @@ def _icon_pixmaps():
 class _ActionDispatcher:
     def __init__(
         self,
-        actions: Mapping[str, Callable[[], None]],
+        actions: Mapping[str, Callable[[], bool | None]],
         quit_event: asyncio.Event,
         engine_action: Callable[[str, str], None] | None = None,
     ):
@@ -86,7 +86,10 @@ class _ActionDispatcher:
                         action[1],
                     )
             else:
-                await asyncio.to_thread(self.actions[action])
+                accepted = await asyncio.to_thread(self.actions[action])
+                if action == "quit_pandrator" and accepted is True:
+                    # The manager accepted the quit, so the tray goes with it.
+                    self.quit_event.set()
         except Exception:
             logging.exception("Desktop tray action %s failed.", action)
 
@@ -247,7 +250,8 @@ class DBusMenu(ServiceInterface):
             "children-display": "submenu",
         },
         9: {"type": "separator"},
-        10: {"label": "Quit tray"},
+        10: {"label": "Close tray only"},
+        11: {"label": "Quit Pandrator"},
     }
     _BASE_ACTIONS = {
         1: "open_pandrator",
@@ -255,6 +259,7 @@ class DBusMenu(ServiceInterface):
         4: "start_pandrator",
         5: "stop_pandrator",
         10: "quit",
+        11: "quit_pandrator",
     }
 
     def __init__(
@@ -278,7 +283,7 @@ class DBusMenu(ServiceInterface):
         }
         self._actions = dict(self._BASE_ACTIONS)
         self._children = {
-            0: list(range(1, 11)),
+            0: [*range(1, 10), 11, 10],
             7: [],
             8: [],
         }
@@ -495,7 +500,7 @@ async def _poll_engine_status(
 
 
 async def _serve(
-    actions: Mapping[str, Callable[[], None]],
+    actions: Mapping[str, Callable[[], bool | None]],
     *,
     engine_provider: Callable[[], EngineMenuSnapshot] | None = None,
     engine_action: Callable[[str, str], None] | None = None,
@@ -568,7 +573,7 @@ async def _serve(
 
 
 def run_status_notifier(
-    actions: Mapping[str, Callable[[], None]],
+    actions: Mapping[str, Callable[[], bool | None]],
     *,
     engine_provider: Callable[[], EngineMenuSnapshot] | None = None,
     engine_action: Callable[[str, str], None] | None = None,

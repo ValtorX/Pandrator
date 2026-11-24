@@ -44,6 +44,7 @@ from ..auth import (
 )
 from ..diagnostics import build_diagnostic_bundle
 from ..errors import ManagerError, NotFoundError
+from ..model_maintenance import application_activity
 from ..models import API_VERSION, ManagedProcessSpec
 from ..network import (
     EndpointExposure,
@@ -69,6 +70,7 @@ from .schemas import (
     LegacyImportRequest,
     OperationRequest,
     PlanRequest,
+    QuitRequest,
     RecoveryExchangeRequest,
     ReleasePlanRequest,
     RuntimeRequest,
@@ -156,6 +158,7 @@ def create_api(
     client_secret: str,
     recovery_sessions: RecoverySessionManager | None = None,
     shutdown_callback: Callable[[], None] | None = None,
+    quit_callback: Callable[[], bool] | None = None,
     shutdown_event: threading.Event | None = None,
     manager_exposure: EndpointExposure | None = None,
     application_exposure: EndpointExposure | None = None,
@@ -2088,6 +2091,44 @@ def create_api(
             return jsonify(error={"code": "unsupported"}), 501
         shutdown_callback()
         return jsonify(status="manager_stopping")
+
+    @lifecycle_guard("quit")
+    def quit_all(callback: Callable[[], bool]):
+        payload = QuitRequest.model_validate(request.get_json(silent=True) or {})
+        stopping = ManagerError(
+            "manager_stopping",
+            "The manager is already shutting down.",
+            http_status=409,
+        )
+        if shutdown_event is not None and shutdown_event.is_set():
+            raise stopping
+        if not payload.stop_active_work:
+            # Rows left by an app that is already stopped must not prompt, so
+            # the database is read only while the app or a worker is live.
+            live = {
+                service.id
+                for service in supervisor.snapshot()
+                if service.process is not None
+            }
+            if live.intersection({PANDRATOR_API_SERVICE, *PANDRATOR_WORKER_SERVICES}):
+                activity = application_activity(application.context.layout)
+                if activity is not None:
+                    raise ManagerError(
+                        "application_busy",
+                        "Pandrator has queued or running work.",
+                        activity,
+                        409,
+                    )
+        if not callback():
+            raise stopping
+        return jsonify(status="manager_stopping")
+
+    @api.post("/v1/runtime/quit")
+    @idempotent
+    def quit_manager():
+        if quit_callback is None:
+            return jsonify(error={"code": "unsupported"}), 501
+        return quit_all(quit_callback)
 
     @api.post("/v1/recovery-sessions")
     @idempotent

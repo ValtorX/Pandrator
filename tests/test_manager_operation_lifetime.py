@@ -536,6 +536,59 @@ class OperationLifetimeTests(unittest.TestCase):
                 for engine in engines:
                     self.assertTrue(engine.shutdown(timeout=5))
 
+    def _run_daemon_calling(self, *callbacks: str) -> tuple[list[object], mock.Mock]:
+        """Run the daemon, call the named API callbacks in order, and return the results."""
+
+        supervisor = mock.Mock()
+        supervisor.restore_desired.return_value = {}
+        server = mock.Mock()
+        server.effective_port = 12345
+        server._map = {}
+        captured: dict[str, object] = {}
+        results: list[object] = []
+
+        def fake_create_api(*_args, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+        def run_server() -> None:
+            for name in callbacks:
+                results.append(captured[name]())  # type: ignore[operator]
+
+        server.run.side_effect = run_server
+        with (
+            mock.patch.object(daemon, "create_application", return_value=self.application),
+            mock.patch.object(daemon, "ProcessSupervisor", return_value=supervisor),
+            mock.patch.object(daemon, "OperationEngine", return_value=mock.Mock()),
+            mock.patch.object(daemon, "create_api", side_effect=fake_create_api),
+            mock.patch.object(daemon, "create_server", return_value=server),
+            mock.patch.object(daemon, "pandrator_runtime_specs", return_value=()),
+            mock.patch.object(daemon, "installed_component_runtime_specs", return_value=()),
+            mock.patch.object(daemon.signal, "signal"),
+            mock.patch.object(daemon.logging, "basicConfig"),
+            mock.patch.object(daemon, "RotatingFileHandler", return_value=logging.NullHandler()),
+        ):
+            daemon.run_daemon(self.temporary.name, register_silero=False)
+        return results, supervisor
+
+    def test_quit_callback_stops_services_and_keeps_their_intent(self) -> None:
+        results, supervisor = self._run_daemon_calling("quit_callback")
+
+        self.assertEqual([True], results)
+        supervisor.shutdown.assert_called_once_with(stop_children=True, keep_desired=True)
+
+    def test_plain_shutdown_callback_leaves_services_running(self) -> None:
+        results, supervisor = self._run_daemon_calling("shutdown_callback")
+
+        self.assertEqual([None], results)
+        supervisor.shutdown.assert_called_once_with(stop_children=False, keep_desired=True)
+
+    def test_quit_after_a_handoff_shutdown_loses_and_keeps_services(self) -> None:
+        results, supervisor = self._run_daemon_calling("shutdown_callback", "quit_callback")
+
+        self.assertEqual([None, False], results)
+        supervisor.shutdown.assert_called_once_with(stop_children=False, keep_desired=True)
+
     def test_daemon_retains_workspace_until_request_handlers_finish(self) -> None:
         self._assert_daemon_retains_workspace("request")
 

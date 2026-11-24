@@ -47,7 +47,11 @@ from pandrator_manager.tray.status_notifier import DBusMenu, StatusNotifierItem,
 async def run():
     server = await MessageBus().connect()
     client = await MessageBus().connect()
-    dispatcher = _ActionDispatcher({}, asyncio.Event())
+    quit_calls = []
+    dispatcher = _ActionDispatcher(
+        {'quit_pandrator': lambda: quit_calls.append('quit') or True},
+        asyncio.Event(),
+    )
     notifier = StatusNotifierItem(dispatcher)
     menu = DBusMenu(dispatcher)
     try:
@@ -68,14 +72,22 @@ async def run():
         api = proxy.get_interface('com.canonical.dbusmenu')
         revision, layout = await api.call_get_layout(0, -1, [])
         assert revision == 1 and layout[0] == 0 and layout[2]
-        groups = await api.call_get_group_properties([1, 10], ['label'])
-        assert [g[0] for g in groups] == [1, 10]
+        groups = await api.call_get_group_properties([1, 10, 11], ['label'])
+        assert [g[0] for g in groups] == [1, 10, 11]
         assert groups[0][1]['label'].value == 'Open Pandrator'
+        assert groups[1][1]['label'].value == 'Close tray only'
+        assert groups[2][1]['label'].value == 'Quit Pandrator'
+        assert [child.value[0] for child in layout[2]][-2:] == [11, 10]
         assert await api.call_about_to_show(0) is False
         assert await api.call_about_to_show_group([0]) == [[], []]
         assert await api.call_event_group([[999, 'clicked', Variant('s', ''), 0]]) == [999]
+        await api.call_event(11, 'clicked', Variant('s', ''), 0)
+        await asyncio.wait_for(dispatcher.quit_event.wait(), timeout=2)
+        assert quit_calls == ['quit']
+        dispatcher.quit_event.clear()
         await api.call_event(10, 'clicked', Variant('s', ''), 0)
         assert dispatcher.quit_event.is_set()
+        assert quit_calls == ['quit']
         received = asyncio.Event()
         api.on_layout_updated(lambda revision, parent: received.set())
         menu.LayoutUpdated(2, 0)

@@ -217,6 +217,19 @@ class ManagerAutomationApiTests(unittest.TestCase):
             "automation_route_denied",
             denied_diagnostics.get_json()["error"]["code"],
         )
+        denied_quit = self.client.post(
+            "/v1/runtime/quit",
+            json={},
+            headers={
+                **authorization,
+                "Idempotency-Key": "automation-quit-denied",
+            },
+        )
+        self.assertEqual(403, denied_quit.status_code)
+        self.assertEqual(
+            "automation_route_denied",
+            denied_quit.get_json()["error"]["code"],
+        )
 
         listed = self.client.get(
             "/v1/automation/clients",

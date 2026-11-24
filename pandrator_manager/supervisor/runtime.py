@@ -736,9 +736,22 @@ class ProcessSupervisor:
         self._cleanup_owned_family(runtime, parent)
         self._close_runtime_handles(runtime)
 
-    def stop(self, service_id: str) -> ManagedService:
+    def stop(self, service_id: str, *, keep_desired: bool = False) -> ManagedService:
+        """Stop one service.
+
+        ``keep_desired`` leaves the stored running intent as it was, so a
+        Manager quit lets the next Manager start restore what was running.
+        """
+
         with self._lock:
             self._pending.pop(service_id, None)
+            stored_desired = False
+            if keep_desired:
+                stored_desired = any(
+                    service.desired_running
+                    for service in self.store.list_services()
+                    if service.id == service_id
+                )
             runtime = self._runtime.get(service_id)
             if runtime is None:
                 existing = next(
@@ -761,7 +774,7 @@ class ProcessSupervisor:
                         service_key=service_id,
                     ),
                 )
-                existing.desired_running = False
+                existing.desired_running = stored_desired
                 existing.health = HealthResult(
                     state=HealthState.STOPPED,
                     service_id=service_id,
@@ -777,7 +790,7 @@ class ProcessSupervisor:
                     state=HealthState.STOPPED,
                     service_id=service_id,
                 ),
-                desired_running=False,
+                desired_running=stored_desired,
             )
             service.process = None
             self.store.save_service(service)
@@ -836,6 +849,22 @@ class ProcessSupervisor:
             if service_id in self._runtime or service_id in self._pending:
                 results.append(self.stop(service_id))
         return results
+
+    def _stop_every_service(self, *, keep_desired: bool) -> None:
+        """Stop each live or pending service in reverse dependency order.
+
+        A failure is logged and the remaining services still stop.
+        """
+
+        for service_id in reversed(self._topological_order()):
+            with self._lock:
+                live = service_id in self._runtime or service_id in self._pending
+            if not live:
+                continue
+            try:
+                self.stop(service_id, keep_desired=keep_desired)
+            except Exception:
+                logging.exception("Could not stop managed service %s", service_id)
 
     def _topological_order(self) -> tuple[str, ...]:
         result: list[str] = []
@@ -1098,12 +1127,17 @@ class ProcessSupervisor:
             except Exception:
                 logging.exception("Supervisor monitor iteration failed")
 
-    def shutdown(self, *, stop_children: bool = False) -> None:
+    def shutdown(
+        self,
+        *,
+        stop_children: bool = False,
+        keep_desired: bool = False,
+    ) -> None:
         self._stop_event.set()
         if self._monitor_thread:
             self._monitor_thread.join(timeout=5)
         if stop_children:
-            self.stop_all()
+            self._stop_every_service(keep_desired=keep_desired)
         else:
             # The OS duplicates the log handle into each child. Closing the
             # daemon's copy permits manager restart/adoption without stopping

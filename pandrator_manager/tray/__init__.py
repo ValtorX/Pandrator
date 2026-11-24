@@ -12,7 +12,7 @@ import sys
 import threading
 from typing import NotRequired, TypedDict
 
-from ..client import ManagerClient
+from ..client import ManagerApiError, ManagerClient
 from ..context import WorkspaceLayout
 from ..desktop import host_process_environment, open_desktop_url
 from ..tray_autostart import _tray_command as _tray_command
@@ -27,6 +27,7 @@ from ..tray_lifecycle import (
     stop_tray_background as stop_tray_background,
 )
 from ..workspace_selection import default_workspace
+from . import dialogs
 from .menu import (
     EngineMenuSnapshot,
     build_engine_menu_snapshot,
@@ -111,12 +112,41 @@ def launch_tray_background(layout: WorkspaceLayout) -> tuple[bool, str]:
     return True, ""
 
 
+_QUIT_QUESTIONS = {
+    "application_busy": (
+        "Pandrator has queued or running work. Quitting stops it.\n\n"
+        "Quit Pandrator anyway?"
+    ),
+    "application_activity_unknown": (
+        "Pandrator could not check whether it has queued or running work. "
+        "Quitting would stop any it has.\n\nQuit Pandrator anyway?"
+    ),
+}
+_QUIT_UNCONFIRMED = (
+    "Pandrator could not confirm the quit. If it is still running, try again."
+)
+_QUIT_MESSAGES = {
+    "maintenance_in_progress": (
+        "The Manager is busy starting services or running maintenance. "
+        "Try again in a moment."
+    ),
+    "manager_stopping": "The Manager is already shutting down.",
+}
+
+
+def _error_code(error: ManagerApiError) -> str:
+    payload = error.payload if isinstance(error.payload, dict) else {}
+    detail = payload.get("error")
+    return str(detail.get("code") or "") if isinstance(detail, dict) else ""
+
+
 class TrayApplication:
     def __init__(self, client: ManagerClient) -> None:
         self.client = client
         self.icon = None
         self._engine_snapshot = unavailable_engine_snapshot("Loading engine status")
         self._menu_refresh_stop = threading.Event()
+        self._quit_lock = threading.Lock()
 
     def _image(self):
         from .icon import load_tray_icon
@@ -271,7 +301,8 @@ class TrayApplication:
                 pystray.Menu(self._pystray_engine_items),
             ),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Quit tray", self.quit_tray),
+            pystray.MenuItem("Quit Pandrator", self.quit_pandrator_async),
+            pystray.MenuItem("Close tray only", self.quit_tray),
         )
 
     def _refresh_pystray_menu(self, icon) -> None:
@@ -298,6 +329,78 @@ class TrayApplication:
 
     def stop_pandrator(self, _icon=None, _item=None) -> None:
         self.client.application("stop")
+
+    def quit_pandrator_async(self, icon=None, _item=None) -> None:
+        # The question can stay open for a long time, so keep the menu thread
+        # free while it is asked.
+        threading.Thread(
+            target=self.quit_pandrator,
+            args=(icon,),
+            name="pandrator-tray-quit",
+            daemon=True,
+        ).start()
+
+    def quit_pandrator(self, icon=None, _item=None) -> bool:
+        """Ask the Manager to stop every service and itself, then close the tray.
+
+        Returns True when the Manager accepted the quit. It asks first when
+        work is active or could not be checked, and stays open on any refusal.
+        """
+
+        if not self._quit_lock.acquire(blocking=False):
+            return False
+        try:
+            stop_active_work = False
+            try:
+                # The Manager may have crashed or been replaced since the tray
+                # started, so find the live one before asking it to quit.
+                found = ManagerClient.discover(self.client.layout.workspace)
+                if found is not self.client:
+                    try:
+                        self.client.session.close()
+                    except Exception:
+                        logging.debug("Could not close the replaced Manager session.")
+                self.client = found
+            except Exception:
+                logging.exception("Desktop tray could not find the Manager.")
+                dialogs.show_message("Quit Pandrator", _QUIT_UNCONFIRMED)
+                return False
+            while True:
+                try:
+                    self.client.quit_manager(stop_active_work=stop_active_work)
+                except ManagerApiError as error:
+                    code = _error_code(error)
+                    if not stop_active_work and code in _QUIT_QUESTIONS:
+                        if not dialogs.ask_yes_no(
+                            "Quit Pandrator",
+                            _QUIT_QUESTIONS[code],
+                        ):
+                            return False
+                        stop_active_work = True
+                        continue
+                    reason = error.args[0] if error.args else None
+                    dialogs.show_message(
+                        "Quit Pandrator",
+                        _QUIT_MESSAGES.get(
+                            code,
+                            f"Pandrator could not quit: {reason}"
+                            if reason
+                            else f"Pandrator could not quit ({code or error.status_code}).",
+                        ),
+                    )
+                    return False
+                except Exception:
+                    logging.exception("Desktop tray could not ask the Manager to quit.")
+                    dialogs.show_message("Quit Pandrator", _QUIT_UNCONFIRMED)
+                    return False
+                break
+            self._menu_refresh_stop.set()
+            selected = icon or self.icon
+            if selected is not None:
+                selected.stop()
+            return True
+        finally:
+            self._quit_lock.release()
 
     def quit_tray(self, icon=None, _item=None) -> None:
         self._menu_refresh_stop.set()
@@ -354,6 +457,7 @@ def main(argv: list[str] | None = None) -> int:
                         "open_recovery": application.open_recovery,
                         "start_pandrator": application.start_pandrator,
                         "stop_pandrator": application.stop_pandrator,
+                        "quit_pandrator": application.quit_pandrator,
                     },
                     engine_provider=application.engine_snapshot,
                     engine_action=application.control_engine,

@@ -17,6 +17,7 @@ from pandrator.web.model_maintenance import (
 from pandrator_manager.context import WorkspaceLayout
 from pandrator_manager.errors import ManagerError
 from pandrator_manager.model_maintenance import (
+    application_activity,
     ensure_application_quiescent_for_model_maintenance,
     plan_touches_audio_cpp,
 )
@@ -293,6 +294,72 @@ class ModelMaintenanceGuardTests(unittest.TestCase):
             first.close()
             self.assertEqual(1, len(failure))
             self.assertIsInstance(failure[0], ManagerError)
+
+    def test_activity_check_is_none_without_creating_a_database(self):
+        with tempfile.TemporaryDirectory() as directory:
+            layout = WorkspaceLayout.from_value(directory)
+            self.assertIsNone(application_activity(layout))
+            self.assertFalse((layout.data / "pandrator.sqlite3").exists())
+
+    def test_activity_check_reports_active_job_and_generation_rows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            layout = WorkspaceLayout.from_value(directory)
+            database = layout.data / "pandrator.sqlite3"
+            _create_minimal_application_database(database)
+            self.assertIsNone(application_activity(layout))
+            with closing(sqlite3.connect(database)) as connection, connection:
+                connection.execute(
+                    "INSERT INTO jobs(id, kind, status, created_at) VALUES (?, ?, ?, ?)",
+                    ("job-done", "noop", "succeeded", 1.0),
+                )
+                connection.execute(
+                    "INSERT INTO generation_runs(id, status, created_at) VALUES (?, ?, ?)",
+                    ("run-1", "pausing", 2.0),
+                )
+            self.assertEqual(
+                {"generation_run_id": "run-1", "status": "pausing"},
+                application_activity(layout),
+            )
+            with closing(sqlite3.connect(database)) as connection, connection:
+                connection.execute(
+                    "INSERT INTO jobs(id, kind, status, created_at) VALUES (?, ?, ?, ?)",
+                    ("job-1", "tts", "running", 3.0),
+                )
+            self.assertEqual(
+                {"job_id": "job-1", "job_kind": "tts", "status": "running"},
+                application_activity(layout),
+            )
+
+    def test_activity_check_does_not_wait_for_an_app_writer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            layout = WorkspaceLayout.from_value(directory)
+            database = layout.data / "pandrator.sqlite3"
+            _create_minimal_application_database(database)
+            writer = sqlite3.connect(database, isolation_level=None)
+            try:
+                writer.execute("BEGIN IMMEDIATE")
+                writer.execute(
+                    "INSERT INTO jobs(id, kind, status, created_at) VALUES (?, ?, ?, ?)",
+                    ("job-1", "noop", "queued", 1.0),
+                )
+                # The uncommitted writer holds the lock; a read-only check still
+                # answers at once and sees only committed rows.
+                self.assertIsNone(application_activity(layout))
+                writer.commit()
+            finally:
+                writer.close()
+            self.assertEqual("job-1", application_activity(layout)["job_id"])
+
+    def test_unreadable_database_reports_unknown_activity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            layout = WorkspaceLayout.from_value(directory)
+            database = layout.data / "pandrator.sqlite3"
+            database.parent.mkdir(parents=True)
+            database.write_text("not sqlite", encoding="utf-8")
+            with self.assertRaises(ManagerError) as raised:
+                application_activity(layout)
+            self.assertEqual("application_activity_unknown", raised.exception.code)
+            self.assertEqual(409, raised.exception.http_status)
 
     def test_typed_manager_plan_uses_audio_cpp_component_id(self):
         class Task:

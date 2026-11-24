@@ -350,6 +350,7 @@ def run_daemon(
     operation_engine = None
     restoration_thread: threading.Thread | None = None
     api_shutdown = threading.Event()
+    stop_services_on_exit = threading.Event()
     try:
         secret = ensure_client_secret(layout.credential)
         ensure_client_secret(layout.mcp_credential)
@@ -391,10 +392,18 @@ def run_daemon(
         supervisor.start_monitoring()
         shutdown_started = threading.Event()
 
-        def request_shutdown() -> None:
+        def request_shutdown(*, stop_services: bool = False) -> bool:
+            """Start the shutdown; return False when one already started.
+
+            ``stop_services`` is recorded only by the call that starts the
+            shutdown, so a handoff already under way keeps its services.
+            """
+
             selected = server
             if selected is not None and not shutdown_started.is_set():
                 shutdown_started.set()
+                if stop_services:
+                    stop_services_on_exit.set()
                 api_shutdown.set()
 
                 def close_server() -> None:
@@ -419,14 +428,21 @@ def run_daemon(
                     name="manager-shutdown",
                     daemon=True,
                 ).start()
+                return True
+            return False
+
+        def shutdown_keeping_services() -> None:
+            # Handoffs, restarts and signals leave services running for the
+            # next Manager to adopt.
+            request_shutdown()
 
         manager_handoff = ManagerHandoffCoordinator(
             layout,
-            shutdown_callback=request_shutdown,
+            shutdown_callback=shutdown_keeping_services,
         )
         uninstall_handoff = UninstallHandoffCoordinator(
             layout,
-            shutdown_callback=request_shutdown,
+            shutdown_callback=shutdown_keeping_services,
         )
 
         def coordinate_handoff(execution, result) -> None:
@@ -458,7 +474,8 @@ def run_daemon(
             application,
             supervisor,
             client_secret=secret,
-            shutdown_callback=request_shutdown,
+            shutdown_callback=shutdown_keeping_services,
+            quit_callback=lambda: request_shutdown(stop_services=True),
             shutdown_event=api_shutdown,
             manager_exposure=manager_exposure,
             application_exposure=network.application,
@@ -511,7 +528,7 @@ def run_daemon(
         restoration_thread.start()
 
         def signal_shutdown(_signum, _frame) -> None:
-            request_shutdown()
+            shutdown_keeping_services()
 
         for signal_name in ("SIGINT", "SIGTERM"):
             selected_signal = getattr(signal, signal_name, None)
@@ -554,10 +571,20 @@ def run_daemon(
                 server.close()
             except Exception:
                 logging.exception("Could not close manager API server")
-        if supervisor is not None:
-            supervisor.shutdown(stop_children=False)
-        _remove_descriptor(layout.descriptor, lock.instance_id)
-        lock.release()
+        try:
+            if supervisor is not None:
+                # Services stop here, after the monitor has stopped, so its
+                # restart scheduling cannot bring one back. A quit keeps each
+                # service's durable intent for the next Manager start.
+                supervisor.shutdown(
+                    stop_children=stop_services_on_exit.is_set(),
+                    keep_desired=True,
+                )
+        except Exception:
+            logging.exception("Could not shut down the service supervisor")
+        finally:
+            _remove_descriptor(layout.descriptor, lock.instance_id)
+            lock.release()
 
 
 def main(argv: list[str] | None = None) -> int:

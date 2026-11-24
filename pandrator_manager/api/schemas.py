@@ -30,6 +30,10 @@ class RuntimeRequest(StrictModel):
     service_ids: tuple[str, ...] = ()
 
 
+class QuitRequest(StrictModel):
+    stop_active_work: bool = False
+
+
 class RecoveryExchangeRequest(StrictModel):
     token: str = Field(min_length=32, max_length=256)
     remember: bool = True

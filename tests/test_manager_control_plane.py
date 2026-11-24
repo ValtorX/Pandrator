@@ -33,13 +33,14 @@ from pandrator_manager.auth import (
     derive_browser_session_keys,
 )
 from pandrator_manager.autostart import LinuxSystemdAutostart, WindowsAutostart
-from pandrator_manager.client import ManagerClient
+from pandrator_manager.client import ManagerApiError, ManagerClient
 from pandrator_manager.daemon import ManagerAlreadyRunning, ManagerInstanceLock
 from pandrator_manager.models import (
     API_VERSION,
     DesiredComponentState,
     HealthProbeSpec,
     ManagedProcessSpec,
+    ManagedService,
     OperationKind,
     OperationState,
     ProcessIdentity,
@@ -47,6 +48,7 @@ from pandrator_manager.models import (
 )
 from pandrator_manager.network import EndpointExposure
 from pandrator_manager.supervisor import ProcessSupervisor
+from pandrator_manager.supervisor.runtime import _PendingRestart
 from pandrator_manager.tray import (
     TrayApplication,
     configure_tray_autostart,
@@ -744,6 +746,128 @@ class SupervisorIntegrationTests(unittest.TestCase):
                 second.stop(spec.service_id)
 
 
+class SupervisorQuitTests(unittest.TestCase):
+    def _supervisor(self, directory):
+        application = create_application(directory)
+        supervisor = ProcessSupervisor(
+            application.context,
+            application.store,
+            manager_instance_id="manager-test",
+            monitor_interval_seconds=0.1,
+        )
+        base = fake_http_spec(directory, port=free_port())
+        dependent = fake_http_spec(directory, port=free_port()).model_copy(
+            update={
+                "service_id": "fake.dependent",
+                "dependencies": (base.service_id,),
+            }
+        )
+        supervisor.register_many([base, dependent])
+        return application, supervisor, base, dependent
+
+    def test_quit_stops_every_service_in_reverse_order_and_keeps_intent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            application, supervisor, base, dependent = self._supervisor(directory)
+            supervisor.start_monitoring()
+            first = supervisor.start(base.service_id)
+            second = supervisor.start(dependent.service_id)
+            pids = [first.process.pid, second.process.pid]
+            stopped: list[str] = []
+            original_stop = supervisor.stop
+
+            def recording_stop(service_id, **options):
+                stopped.append(service_id)
+                return original_stop(service_id, **options)
+
+            try:
+                with mock.patch.object(supervisor, "stop", side_effect=recording_stop):
+                    supervisor.shutdown(stop_children=True, keep_desired=True)
+                self.assertEqual([dependent.service_id, base.service_id], stopped)
+                for pid in pids:
+                    self.assertTrue(wait_for_process_exit(pid))
+            finally:
+                for pid in pids:
+                    if psutil.pid_exists(pid):
+                        psutil.Process(pid).kill()
+            stored = {item.id: item for item in application.store.list_services()}
+            self.assertTrue(stored[base.service_id].desired_running)
+            self.assertTrue(stored[dependent.service_id].desired_running)
+            self.assertIsNone(stored[base.service_id].process)
+
+    def test_plain_stop_still_clears_the_running_intent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            application, supervisor, base, _dependent = self._supervisor(directory)
+            supervisor.start(base.service_id)
+            supervisor.stop(base.service_id)
+            stored = {item.id: item for item in application.store.list_services()}
+            self.assertFalse(stored[base.service_id].desired_running)
+
+    def test_quit_continues_past_a_service_that_fails_to_stop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _application, supervisor, base, dependent = self._supervisor(directory)
+            base_service = supervisor.start(base.service_id)
+            supervisor.start(dependent.service_id)
+            base_pid = base_service.process.pid
+            original_stop = supervisor.stop
+
+            attempted: list[str] = []
+
+            def failing_stop(service_id, **options):
+                attempted.append(service_id)
+                if service_id == dependent.service_id:
+                    raise RuntimeError("fixture stop failure")
+                return original_stop(service_id, **options)
+
+            try:
+                with (
+                    mock.patch.object(supervisor, "stop", side_effect=failing_stop),
+                    self.assertLogs(level="ERROR"),
+                ):
+                    supervisor.shutdown(stop_children=True, keep_desired=True)
+                # Shutdown itself tried the failing service and then the base one.
+                self.assertEqual([dependent.service_id, base.service_id], attempted)
+                self.assertTrue(wait_for_process_exit(base_pid))
+            finally:
+                original_stop(dependent.service_id)
+                original_stop(base.service_id)
+
+    def test_quit_keeps_the_intent_of_a_service_waiting_to_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            application, supervisor, base, _dependent = self._supervisor(directory)
+            application.store.save_service(
+                ManagedService(
+                    id=base.service_id,
+                    component_id=base.component_id,
+                    service_key=base.service_id,
+                    desired_running=True,
+                )
+            )
+            supervisor._pending[base.service_id] = _PendingRestart(
+                spec=base,
+                restart_count=1,
+                due_monotonic=time.monotonic() + 100,
+            )
+
+            supervisor.shutdown(stop_children=True, keep_desired=True)
+
+            self.assertEqual({}, supervisor._pending)
+            stored = {item.id: item for item in application.store.list_services()}
+            self.assertTrue(stored[base.service_id].desired_running)
+
+    def test_shutdown_without_stop_children_leaves_services_running(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _application, supervisor, base, _dependent = self._supervisor(directory)
+            service = supervisor.start(base.service_id)
+            pid = service.process.pid
+            try:
+                supervisor.shutdown(stop_children=False, keep_desired=True)
+                self.assertTrue(psutil.pid_exists(pid))
+            finally:
+                process = psutil.Process(pid)
+                process.kill()
+                process.wait(timeout=5)
+
+
 class RecoverySessionManagerTests(unittest.TestCase):
     def test_transient_and_remembered_expiry_are_enforced_and_sliding(self):
         now = [1_000.0]
@@ -1376,6 +1500,179 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(imported.get_json(), replay.get_json())
 
 
+class QuitRouteTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.application = create_application(self.temporary.name)
+        self.application.instance_id = "quit-test"
+        self.supervisor = ProcessSupervisor(
+            self.application.context,
+            self.application.store,
+            manager_instance_id="quit-test",
+        )
+        self.secret = "q" * 43
+        self.quit_callback = mock.Mock(return_value=True)
+        self.shutdown_event = threading.Event()
+        self.api = create_api(
+            self.application,
+            self.supervisor,
+            client_secret=self.secret,
+            recovery_sessions=RecoverySessionManager(),
+            quit_callback=self.quit_callback,
+            shutdown_event=self.shutdown_event,
+        )
+        self.client = self.api.test_client()
+        self.auth = {"Authorization": f"Bearer {self.secret}"}
+        self.database = self.application.context.layout.data / "pandrator.sqlite3"
+        self.keys = 0
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def _post(self, body=None):
+        self.keys += 1
+        return self.client.post(
+            "/v1/runtime/quit",
+            headers={**self.auth, "Idempotency-Key": f"quit-{self.keys}"},
+            json={} if body is None else body,
+        )
+
+    def _running(self, service_id="pandrator.api"):
+        return mock.patch.object(
+            self.supervisor,
+            "snapshot",
+            return_value=[
+                ManagedService(
+                    id=service_id,
+                    component_id="pandrator",
+                    service_key=service_id,
+                    process=ProcessIdentity(
+                        pid=4321,
+                        create_time=1.0,
+                        executable=sys.executable,
+                        manager_instance_id="quit-test",
+                    ),
+                )
+            ],
+        )
+
+    def _active_job(self, status="running"):
+        self.database.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS jobs (
+                    id TEXT PRIMARY KEY, kind TEXT NOT NULL,
+                    status TEXT NOT NULL, created_at REAL NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS generation_runs (
+                    id TEXT PRIMARY KEY, status TEXT NOT NULL,
+                    created_at REAL NOT NULL
+                );
+                """
+            )
+            connection.execute(
+                "INSERT INTO jobs(id, kind, status, created_at) VALUES (?, ?, ?, ?)",
+                ("job-1", "tts", status, 1.0),
+            )
+
+    def test_idle_quit_answers_manager_stopping_and_starts_shutdown(self):
+        with self._running():
+            response = self._post()
+        self.assertEqual(200, response.status_code)
+        self.assertEqual({"status": "manager_stopping"}, response.get_json())
+        self.quit_callback.assert_called_once_with()
+
+    def test_quit_with_the_app_stopped_ignores_leftover_work(self):
+        self._active_job()
+        response = self._post()
+        self.assertEqual(200, response.status_code)
+        self.quit_callback.assert_called_once_with()
+
+    def test_active_work_is_refused_until_stopping_it_is_accepted(self):
+        self._active_job()
+        with self._running():
+            refused = self._post()
+            self.assertEqual(409, refused.status_code)
+            error = refused.get_json()["error"]
+            self.assertEqual("application_busy", error["code"])
+            self.assertEqual("job-1", error["details"]["job_id"])
+            self.quit_callback.assert_not_called()
+            accepted = self._post({"stop_active_work": True})
+        self.assertEqual(200, accepted.status_code)
+        self.quit_callback.assert_called_once_with()
+
+    def test_a_running_worker_alone_also_triggers_the_check(self):
+        self._active_job()
+        with self._running("pandrator.worker.2"):
+            response = self._post()
+        self.assertEqual("application_busy", response.get_json()["error"]["code"])
+
+    def test_unreadable_database_asks_instead_of_guessing(self):
+        self.database.parent.mkdir(parents=True, exist_ok=True)
+        self.database.write_text("not sqlite", encoding="utf-8")
+        with self._running():
+            refused = self._post()
+            self.assertEqual(409, refused.status_code)
+            self.assertEqual(
+                "application_activity_unknown",
+                refused.get_json()["error"]["code"],
+            )
+            self.quit_callback.assert_not_called()
+            accepted = self._post({"stop_active_work": True})
+        self.assertEqual(200, accepted.status_code)
+
+    def test_maintenance_blocks_the_quit(self):
+        self.application.lifecycle_lock = threading.Lock()
+        self.application.lifecycle_lock.acquire()
+        self.addCleanup(self.application.lifecycle_lock.release)
+        response = self._post()
+        self.assertEqual(409, response.status_code)
+        self.assertEqual(
+            "maintenance_in_progress",
+            response.get_json()["error"]["code"],
+        )
+        self.quit_callback.assert_not_called()
+
+    def test_a_shutdown_already_under_way_keeps_services(self):
+        self.shutdown_event.set()
+        response = self._post({"stop_active_work": True})
+        self.assertEqual(409, response.status_code)
+        self.assertEqual("manager_stopping", response.get_json()["error"]["code"])
+        self.quit_callback.assert_not_called()
+
+    def test_losing_the_race_to_a_handoff_reports_manager_stopping(self):
+        self.quit_callback.return_value = False
+        response = self._post()
+        self.assertEqual(409, response.status_code)
+        self.assertEqual("manager_stopping", response.get_json()["error"]["code"])
+
+    def test_route_is_unsupported_without_a_callback(self):
+        api = create_api(
+            self.application,
+            self.supervisor,
+            client_secret=self.secret,
+            recovery_sessions=RecoverySessionManager(),
+        )
+        response = api.test_client().post(
+            "/v1/runtime/quit",
+            headers={**self.auth, "Idempotency-Key": "quit-unsupported"},
+            json={},
+        )
+        self.assertEqual(501, response.status_code)
+
+    def test_route_needs_the_bearer_and_stays_out_of_automation_scopes(self):
+        anonymous = self.client.post(
+            "/v1/runtime/quit",
+            headers={"Idempotency-Key": "quit-anonymous"},
+            json={},
+        )
+        self.assertEqual(401, anonymous.status_code)
+        document = self.client.get("/v1/openapi.json", headers=self.auth).get_json()
+        self.assertNotIn("/v1/runtime/quit", document["paths"])
+        self.quit_callback.assert_not_called()
+
+
 class DurableBrowserSessionTests(unittest.TestCase):
     secret = "d" * 43
 
@@ -1775,6 +2072,88 @@ class DaemonClientIntegrationTests(unittest.TestCase):
             self.assertNotIn("Traceback", content)
 
 
+class DaemonQuitIntegrationTests(unittest.TestCase):
+    def test_quit_manager_stops_a_real_daemon_and_releases_its_files(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            client = ManagerClient.ensure_running(directory, timeout_seconds=20)
+            owner = psutil.Process(client.descriptor.pid)
+            try:
+                client.quit_manager()
+                owner.wait(timeout=30)
+                self.assertFalse(client.layout.descriptor.exists())
+                self.assertFalse(client.layout.instance_lock.exists())
+                content = (client.layout.logs / "manager.log").read_text(encoding="utf-8")
+                self.assertNotIn("Traceback", content)
+            finally:
+                if client.layout.descriptor.exists():
+                    client.stop_manager()
+                    owner.wait(timeout=10)
+
+    def test_quit_manager_posts_the_flag_and_accepts_a_dropped_response(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            layout = create_application(directory).context.layout
+            client = ManagerClient(layout, mock.Mock(), "s" * 43)
+            with mock.patch.object(client, "request") as request:
+                client.quit_manager(stop_active_work=True)
+            self.assertEqual("/v1/runtime/quit", request.call_args.args[1])
+            self.assertEqual(
+                {"stop_active_work": True},
+                request.call_args.kwargs["json_payload"],
+            )
+            with (
+                mock.patch.object(
+                    client,
+                    "request",
+                    side_effect=requests.ConnectionError("dropped"),
+                ),
+                mock.patch.object(
+                    client,
+                    "_wait_for_shutdown_confirmation",
+                    return_value=True,
+                ) as confirmed,
+            ):
+                client.quit_manager()
+            self.assertEqual(300, confirmed.call_args.kwargs["timeout_seconds"])
+
+    def test_quit_manager_reraises_a_refused_connection_without_waiting(self):
+        from urllib3.exceptions import MaxRetryError, NewConnectionError
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            layout = create_application(directory).context.layout
+            client = ManagerClient(layout, mock.Mock(), "s" * 43)
+            refused = requests.ConnectionError(
+                MaxRetryError(
+                    None,
+                    "http://127.0.0.1:1/",
+                    reason=NewConnectionError(None, "Failed to establish a connection"),
+                )
+            )
+            with (
+                mock.patch.object(client, "request", side_effect=refused),
+                mock.patch.object(
+                    client,
+                    "_wait_for_shutdown_confirmation",
+                ) as confirmed,
+                self.assertRaises(requests.ConnectionError),
+            ):
+                client.quit_manager()
+            confirmed.assert_not_called()
+
+    def test_quit_manager_raises_the_refusal_to_the_caller(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            layout = create_application(directory).context.layout
+            client = ManagerClient(layout, mock.Mock(), "s" * 43)
+            refusal = ManagerApiError(
+                409,
+                {"error": {"code": "application_busy", "message": "busy"}},
+            )
+            with (
+                mock.patch.object(client, "request", side_effect=refusal),
+                self.assertRaises(ManagerApiError),
+            ):
+                client.quit_manager()
+
+
 class OptionalDesktopIntegrationTests(unittest.TestCase):
     def test_headless_linux_tray_check_does_not_import_x11_backend(self):
         with (
@@ -1906,6 +2285,15 @@ class OptionalDesktopIntegrationTests(unittest.TestCase):
         icon.stop.assert_called_once_with()
         client.runtime.assert_not_called()
         client.stop_manager.assert_not_called()
+
+    def test_closing_the_tray_only_never_calls_the_manager(self):
+        client = mock.Mock(spec=[])
+        tray = TrayApplication(client)
+        icon = mock.Mock()
+
+        tray.quit_tray(icon)
+
+        icon.stop.assert_called_once_with()
 
     def test_stopping_tray_validates_identity_before_terminating_process(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -11,6 +11,7 @@ from pandrator_manager.desktop import (
     host_process_environment,
     open_desktop_url,
 )
+from pandrator_manager.tray import dialogs
 from pandrator_manager.tray.menu import (
     EngineMenuItem,
     EngineMenuSnapshot,
@@ -128,10 +129,21 @@ class StatusNotifierContractTests(unittest.TestCase):
                 "Stop Pandrator",
                 "MCP server — Not available",
                 "Speech engines",
-                "Quit tray",
+                "Quit Pandrator",
+                "Close tray only",
             ],
             labels,
         )
+
+    def test_dbus_menu_keeps_close_tray_on_the_original_quit_id(self):
+        menu = DBusMenu(self.dispatcher)
+
+        self.assertEqual("quit", menu._actions[10])
+        self.assertEqual("quit_pandrator", menu._actions[11])
+        self.assertEqual([*range(1, 10), 11, 10], menu._children[0])
+        with mock.patch.object(self.dispatcher, "dispatch") as dispatch:
+            menu.Event(11, "clicked", Variant("s", ""), 0)
+        dispatch.assert_called_once_with("quit_pandrator")
 
     def test_dbus_menu_exposes_engine_state_and_runtime_action(self):
         snapshot = EngineMenuSnapshot(
@@ -255,6 +267,45 @@ class StatusNotifierContractTests(unittest.TestCase):
 
 
 class StatusNotifierActionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_accepted_quit_pandrator_also_ends_the_tray(self):
+        quit_event = asyncio.Event()
+        dispatcher = _ActionDispatcher({"quit_pandrator": lambda: True}, quit_event)
+
+        await dispatcher._invoke("quit_pandrator")
+
+        self.assertTrue(quit_event.is_set())
+
+    async def test_declined_quit_pandrator_keeps_the_tray(self):
+        quit_event = asyncio.Event()
+        dispatcher = _ActionDispatcher({"quit_pandrator": lambda: False}, quit_event)
+
+        await dispatcher._invoke("quit_pandrator")
+
+        self.assertFalse(quit_event.is_set())
+
+    async def test_failing_quit_pandrator_keeps_the_tray(self):
+        quit_event = asyncio.Event()
+
+        def failing() -> bool:
+            raise RuntimeError("fixture")
+
+        dispatcher = _ActionDispatcher({"quit_pandrator": failing}, quit_event)
+
+        with self.assertLogs(level="ERROR"):
+            await dispatcher._invoke("quit_pandrator")
+
+        self.assertFalse(quit_event.is_set())
+
+    async def test_close_tray_only_still_ends_just_the_tray(self):
+        quit_event = asyncio.Event()
+        quit_pandrator = mock.Mock(return_value=True)
+        dispatcher = _ActionDispatcher({"quit_pandrator": quit_pandrator}, quit_event)
+
+        dispatcher.dispatch("quit")
+
+        self.assertTrue(quit_event.is_set())
+        quit_pandrator.assert_not_called()
+
     async def test_engine_action_is_forwarded_off_the_dbus_event_loop(self):
         quit_event = asyncio.Event()
         engine_action = mock.Mock()
@@ -267,6 +318,207 @@ class StatusNotifierActionTests(unittest.IsolatedAsyncioTestCase):
         await dispatcher._invoke(("tts.kokoro", "stop"))
 
         engine_action.assert_called_once_with("tts.kokoro", "stop")
+
+
+class NativeDialogTests(unittest.TestCase):
+    def test_windows_question_defaults_to_no_and_accepts_only_yes(self):
+        calls = []
+
+        def box(title, message, flags):
+            calls.append((title, message, flags))
+            return 6
+
+        self.assertTrue(
+            dialogs.ask_yes_no("T", "M", system="windows", message_box=box)
+        )
+        flags = calls[0][2]
+        self.assertTrue(flags & 0x4)  # MB_YESNO
+        self.assertTrue(flags & 0x100)  # MB_DEFBUTTON2, the "No" button
+        self.assertFalse(
+            dialogs.ask_yes_no("T", "M", system="windows", message_box=lambda *_: 7)
+        )
+
+    def test_zenity_question_command_defaults_to_cancel(self):
+        runner = mock.Mock(return_value=mock.Mock(returncode=0, stdout=""))
+        answer = dialogs.ask_yes_no(
+            "Title",
+            "Message & more",
+            system="linux",
+            environ={"DISPLAY": ":0"},
+            which=lambda name: "/usr/bin/zenity" if name == "zenity" else None,
+            runner=runner,
+        )
+
+        self.assertTrue(answer)
+        command = runner.call_args.args[0]
+        self.assertEqual("/usr/bin/zenity", command[0])
+        self.assertIn("--question", command)
+        self.assertIn("--default-cancel", command)
+        self.assertIn("--no-markup", command)
+        self.assertIn("--text=Message & more", command)
+
+    def test_question_with_only_kdialog_answers_no_but_a_message_still_uses_it(self):
+        runner = mock.Mock(return_value=mock.Mock(returncode=0, stdout=""))
+        only_kdialog = lambda name: "/usr/bin/kdialog" if name == "kdialog" else None  # noqa: E731
+
+        with self.assertLogs(level="WARNING"):
+            answer = dialogs.ask_yes_no(
+                "Title",
+                "Message",
+                system="linux",
+                environ={"WAYLAND_DISPLAY": "wayland-0"},
+                which=only_kdialog,
+                runner=runner,
+            )
+
+        self.assertFalse(answer)
+        # The question never ran; kdialog only showed the notice.
+        self.assertNotIn("--yesno", runner.call_args.args[0])
+        self.assertIn("--msgbox", runner.call_args.args[0])
+        runner.reset_mock()
+        dialogs.show_message(
+            "Title",
+            "Message",
+            system="linux",
+            environ={"WAYLAND_DISPLAY": "wayland-0"},
+            which=only_kdialog,
+            runner=runner,
+        )
+        self.assertEqual(
+            ["/usr/bin/kdialog", "--title", "Title", "--msgbox", "Message"],
+            runner.call_args.args[0],
+        )
+
+    def test_linux_without_a_tool_or_display_answers_no(self):
+        runner = mock.Mock()
+        self.assertFalse(
+            dialogs.ask_yes_no(
+                "T",
+                "M",
+                system="linux",
+                environ={"DISPLAY": ":0"},
+                which=lambda _name: None,
+                runner=runner,
+            )
+        )
+        self.assertFalse(
+            dialogs.ask_yes_no(
+                "T",
+                "M",
+                system="linux",
+                environ={},
+                which=lambda _name: "/usr/bin/zenity",
+                runner=runner,
+            )
+        )
+        runner.assert_not_called()
+
+    def test_macos_question_defaults_to_no_and_escapes_the_text(self):
+        runner = mock.Mock(
+            return_value=mock.Mock(returncode=0, stdout="button returned:Yes\n")
+        )
+        answer = dialogs.ask_yes_no(
+            "Ti\"tle",
+            "Line one\nLine \"two\"",
+            system="macos",
+            which=lambda name: "/usr/bin/osascript",
+            runner=runner,
+        )
+
+        self.assertTrue(answer)
+        script = runner.call_args.args[0][2]
+        self.assertIn('default button "No"', script)
+        self.assertIn('cancel button "No"', script)
+        self.assertIn('\\"two\\"', script)
+        self.assertIn('" & return & "', script)
+
+    def test_macos_cancel_is_no(self):
+        runner = mock.Mock(return_value=mock.Mock(returncode=1, stdout=""))
+        self.assertFalse(
+            dialogs.ask_yes_no(
+                "T",
+                "M",
+                system="macos",
+                which=lambda _name: "/usr/bin/osascript",
+                runner=runner,
+            )
+        )
+
+    def test_a_failing_runner_answers_no(self):
+        runner = mock.Mock(side_effect=OSError("fixture"))
+        with self.assertLogs(level="ERROR"):
+            self.assertFalse(
+                dialogs.ask_yes_no(
+                    "T",
+                    "M",
+                    system="linux",
+                    environ={"DISPLAY": ":0"},
+                    which=lambda _name: "/usr/bin/zenity",
+                    runner=runner,
+                )
+            )
+
+    def test_message_uses_the_native_tool_or_logs_without_one(self):
+        runner = mock.Mock()
+        dialogs.show_message(
+            "T",
+            "M",
+            system="linux",
+            environ={"DISPLAY": ":0"},
+            which=lambda name: "/usr/bin/zenity",
+            runner=runner,
+        )
+        self.assertIn("--info", runner.call_args.args[0])
+
+        runner.reset_mock()
+        with self.assertLogs(level="WARNING"):
+            dialogs.show_message(
+                "T",
+                "M",
+                system="linux",
+                environ={"DISPLAY": ":0"},
+                which=lambda _name: None,
+                runner=runner,
+            )
+        runner.assert_not_called()
+
+    def test_a_question_with_no_safe_dialog_tells_the_user_the_answer_is_no(self):
+        runner = mock.Mock(return_value=mock.Mock(returncode=0, stdout=""))
+        only_kdialog = lambda name: "/usr/bin/kdialog" if name == "kdialog" else None  # noqa: E731
+
+        with self.assertLogs(level="WARNING"):
+            answer = dialogs.ask_yes_no(
+                "Title",
+                "Quit?",
+                system="linux",
+                environ={"DISPLAY": ":0"},
+                which=only_kdialog,
+                runner=runner,
+            )
+
+        self.assertFalse(answer)
+        command = runner.call_args.args[0]
+        self.assertEqual("--msgbox", command[3])
+        self.assertIn("Quit?", command[4])
+        self.assertIn("install zenity", command[4])
+
+    def test_a_message_tool_that_fails_is_logged(self):
+        runner = mock.Mock(return_value=mock.Mock(returncode=1, stdout=""))
+        with self.assertLogs(level="WARNING") as logged:
+            dialogs.show_message(
+                "Title",
+                "Body",
+                system="linux",
+                environ={"DISPLAY": ":0"},
+                which=lambda _name: "/usr/bin/zenity",
+                runner=runner,
+            )
+        self.assertIn("Title: Body", logged.output[0])
+
+    def test_windows_message_uses_an_ok_box(self):
+        box = mock.Mock(return_value=1)
+        dialogs.show_message("T", "M", system="windows", message_box=box)
+        self.assertEqual(("T", "M"), box.call_args.args[:2])
 
 
 if __name__ == "__main__":

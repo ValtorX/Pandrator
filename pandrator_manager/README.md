@@ -28,8 +28,9 @@ guide covers Manager commands and operational details.
 - The Manager stops only processes it can identify and removes only paths it
   owns.
 - User data is separate from replaceable runtimes and is preserved by default.
-- The optional tray is only a client. Closing it does not stop the Manager,
-  Pandrator, or a running service.
+- The optional tray is only a client. "Close tray only" does not stop the
+  Manager, Pandrator, or a running service. "Quit Pandrator" asks the Manager
+  to stop every managed service and then itself.
 - Product updates are checked against project-signed manifests and artifact
   hashes.
 
@@ -328,8 +329,19 @@ Manager exits and removes only files owned by the selected installation.
 The tray extra is never a daemon dependency. `pandrator-tray --check` reports
 whether a usable desktop backend exists; on headless Linux it returns
 `unavailable: No graphical desktop session is available.` without importing
-an X11 backend or creating the requested workspace. Quitting or losing the
-tray does not stop any managed process.
+an X11 backend or creating the requested workspace. Losing the tray, or
+choosing "Close tray only", does not stop any managed process.
+
+"Quit Pandrator" calls `POST /v1/runtime/quit`. The Manager stops every
+managed service in reverse dependency order and then exits, and the tray exits
+with it. Each service keeps its stored running intent, so the next Manager
+start restores what was running, as after a reboot. When the app or a worker is
+running and the app database shows queued or running work, or cannot be read,
+the Manager refuses with `application_busy` or `application_activity_unknown`;
+the tray then asks a Yes/No question that defaults to No and retries with
+`stop_active_work` only on Yes. The route needs the Manager bearer or a
+recovery browser session and is not available to automation tokens. Manager
+restarts, updates, handoffs and signals still leave services running.
 
 ## Current component coverage
 
