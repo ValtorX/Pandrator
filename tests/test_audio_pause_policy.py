@@ -740,6 +740,19 @@ def test_boundary_pause_gives_the_longer_of_paragraph_and_scene_pause():
     assert boundary_pause("paragraph", 700, SCENE_AUDIO) == 700
 
 
+def test_boundary_pause_gives_the_longer_of_paragraph_and_chapter_pause():
+    from pandrator.web.speech_boundaries import boundary_pause
+
+    # Chapter and scene set apart, so a swapped setting key shows.
+    audio = SCENE_AUDIO | {"chapter_silence_ms": 3000, "scene_silence_ms": 2000}
+    assert boundary_pause("chapter", 700, audio) == 3000
+    assert boundary_pause("scene", 700, audio) == 2000
+    assert boundary_pause("chapter", 700, audio | {"paragraph_silence_ms": 3500}) == 3500
+    assert boundary_pause("chapter", 700, audio | {"chapter_silence_ms": 0}) == 700
+    # No boundary: the stored pause.
+    assert boundary_pause(None, 450, audio) == 450
+
+
 @pytest.mark.parametrize(
     "same_voice,subtitle,gap,expected_gaps,expected_duration",
     [

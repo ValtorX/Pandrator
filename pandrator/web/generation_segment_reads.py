@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from copy import deepcopy
 from typing import Any
 
 from sqlalchemy import func, select
@@ -359,56 +358,34 @@ class GenerationSegmentReader:
                             {row.id: row for row in (*boundary_rows, *successors)}.values(),
                             key=lambda row: row.ordinal,
                         )
-                    if selected_run is not None:
-                        from .speech_boundaries import resolve_run_boundaries
+                    from .speech_boundaries import (
+                        assembly_pause,
+                        freeze_current_boundaries,
+                        resolve_run_boundaries,
+                    )
 
+                    if selected_run is not None:
                         # The run's boundary facts with the current pause
                         # settings: what assembling this run now gives.
-                        boundary_snapshot: dict[str, Any] = {
-                            "speech_boundaries": resolve_run_boundaries(
-                                session,
-                                plan_revision_id,
-                                run_settings_snapshot,
-                                audio_snapshot.get("audio") or {},
-                                segments=boundary_rows,
-                                run_id=selected_run.id,
-                            )
-                        }
-                    else:
-                        boundary_snapshot = {
-                            "audio": deepcopy(audio_snapshot.get("audio") or {})
-                        }
-                        # Use the same resolved provider/project settings as
-                        # the audio identity below, without a second read.
-                        tts_settings = audio_snapshot.get("tts") or {}
-                        if (
-                            tts_settings.get("casting_enabled")
-                            or tts_settings.get("performance_enabled")
-                        ):
-                            from .models import PerformancePlan
-
-                            adopted_plan = session.scalar(
-                                select(PerformancePlan.id).where(
-                                    PerformancePlan.plan_revision_id == plan_revision_id,
-                                    PerformancePlan.status == "adopted",
-                                )
-                            )
-                            if adopted_plan:
-                                from .performance_plans import freeze_performance_snapshot
-
-                                freeze_performance_snapshot(
-                                    session, plan_revision_id, boundary_snapshot
-                                )
-                        from .speech_boundaries import freeze_boundaries
-
-                        freeze_boundaries(
+                        boundaries = resolve_run_boundaries(
                             session,
                             plan_revision_id,
-                            boundary_snapshot,
+                            run_settings_snapshot,
+                            audio_snapshot.get("audio") or {},
+                            segments=boundary_rows,
+                            run_id=selected_run.id,
+                        )
+                    else:
+                        # Use the same resolved provider/project settings as
+                        # the audio identity below, without a second read.
+                        boundaries = freeze_current_boundaries(
+                            session,
+                            plan_revision_id,
+                            audio_snapshot.get("audio") or {},
+                            audio_snapshot.get("tts") or {},
                             segments=boundary_rows,
                         )
-                    from .speech_boundaries import assembly_pause
-
+                    boundary_snapshot = {"speech_boundaries": boundaries}
                     assembly_pauses = {
                         row.id: (
                             0

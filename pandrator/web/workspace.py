@@ -2886,7 +2886,7 @@ class GenerationService(GenerationHistoryReader):
         )
         if not plan_revision_id:
             raise ValueError("Create generation segments before assembling audio.")
-        from .speech_boundaries import freeze_boundaries, resolve_run_boundaries
+        from .speech_boundaries import freeze_current_boundaries, resolve_run_boundaries
         if run:
             # The run's boundary facts with the current pause settings.
             snapshot["speech_boundaries"] = resolve_run_boundaries(
@@ -2894,14 +2894,10 @@ class GenerationService(GenerationHistoryReader):
                 snapshot.get("audio") or {}, run_id=run.id,
             )
         else:
-            boundary_snapshot = {"audio": snapshot.get("audio") or {}}
-            from .models import PerformancePlan
-            from .performance_plans import freeze_performance_snapshot
-            tts_settings = self.settings.get_in_session(session, session_id, "tts")["effective"]
-            if (tts_settings.get("casting_enabled") or tts_settings.get("performance_enabled")) and session.scalar(select(PerformancePlan.id).where(PerformancePlan.plan_revision_id == plan_revision_id, PerformancePlan.status == "adopted")):
-                freeze_performance_snapshot(session, plan_revision_id, boundary_snapshot)
-            freeze_boundaries(session, plan_revision_id, boundary_snapshot)
-            snapshot["speech_boundaries"] = boundary_snapshot.get("speech_boundaries", {})
+            snapshot["speech_boundaries"] = freeze_current_boundaries(
+                session, plan_revision_id, snapshot.get("audio") or {},
+                self.settings.get_in_session(session, session_id, "tts")["effective"],
+            )
         settings_hash = stable_hash(snapshot)
         record = OutputAssembly(
             session_id=session_id,

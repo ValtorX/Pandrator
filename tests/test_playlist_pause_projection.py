@@ -988,9 +988,8 @@ CAST_CHARACTERS = [
 CAST_VOICES = {"characters": {"c-one": {"voice": "one"}, "c-two": {"voice": "two"}}}
 
 
-def _cast_run(case) -> tuple[dict, str]:
-    """A real run with casting on and an adopted speaker plan: blocks spoken by c-one,
-    c-two, c-two, frozen with the voice-change minimum at 0 (so no voices recorded)."""
+def _cast_book(case) -> dict:
+    """Casting on and an adopted speaker plan, no run: blocks spoken by c-one, c-two, c-two."""
     book = _book(case, segments=[{"text": f"Line {n}.", "paragraph": "yes"} for n in range(3)])
     services = book["services"]
     with services["database"].session() as session:
@@ -1012,6 +1011,14 @@ def _cast_run(case) -> tuple[dict, str]:
         book["session_id"], "tts", tts["revision"], {**tts["override"], "casting_enabled": True}
     )
     adopt(book, edit(book, create(book)))
+    return book
+
+
+def _cast_run(case) -> tuple[dict, str]:
+    """A real run on ``_cast_book``, frozen with the voice-change minimum at 0 (so no
+    voices recorded)."""
+    book = _cast_book(case)
+    services = book["services"]
     run_id = services["generation"].start(book["session_id"])["id"]
     with services["database"].session() as session:
         snapshot = session.get(m.GenerationRun, run_id).settings_snapshot_json
@@ -1037,6 +1044,45 @@ def test_raised_minimum_applies_at_a_cast_speaker_change_of_a_frozen_run(case):
     # The voices come from the run's frozen cast: c-one to c-two changes, c-two to c-two does not.
     assert _pauses(book, generation_run_id=run_id) == [1500, 250, 250]
     assert _expected_pauses(book, run_id) == [1500, 250, 250]
+
+
+def test_no_run_playlist_and_assembly_freeze_the_adopted_plan_alike(case, monkeypatch):
+    """The playlist and a run-less assembly share ``freeze_current_boundaries``: with
+    casting on, both freeze the adopted speaker plan and give the same pauses."""
+    from pandrator.web import performance_plans
+
+    book = _cast_book(case)
+    _update_audio(book, voice_change_silence_ms=1500)
+    calls: list[str] = []
+    real_freeze = performance_plans.freeze_performance_snapshot
+
+    def counted(session, revision_id, snapshot):
+        calls.append(revision_id)
+        return real_freeze(session, revision_id, snapshot)
+
+    monkeypatch.setattr(performance_plans, "freeze_performance_snapshot", counted)
+
+    def assembled() -> list[int]:
+        queued = book["services"]["generation"].create_assembly(book["session_id"])
+        with book["services"]["database"].session() as session:
+            record = session.get(m.OutputAssembly, queued["id"])
+            boundaries = record.settings_json["resolved"]["speech_boundaries"]
+        return [boundaries[sid]["silence_after_ms"] for sid in book["segment_ids"]]
+
+    # With no run, no cast is frozen, so markup speakers render as plain narration and
+    # the voice-change minimum does not apply (baseline 5.1, R3; story 3 left it).
+    assert _pauses(book) == [250, 250, 250]
+    assert len(calls) == 1
+    assert assembled() == [250, 250, 250]
+    assert len(calls) == 2
+    tts = book["services"]["workspace_settings"].get(book["session_id"], "tts")
+    book["services"]["workspace_settings"].update(
+        book["session_id"], "tts", tts["revision"],
+        {**tts["override"], "casting_enabled": False, "performance_enabled": False},
+    )
+    assert _pauses(book) == [250, 250, 250]
+    assert assembled() == [250, 250, 250]
+    assert len(calls) == 2
 
 
 def test_a_block_whose_voices_cannot_be_rendered_gets_no_minimum(case):

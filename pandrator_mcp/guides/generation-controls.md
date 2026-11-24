@@ -162,12 +162,12 @@ line, after a block marked as a heading. A heading that opens a scene gets the
 scene pause before it and the heading pause after it. Segmentation marks
 neither today: a scene break comes from speech markup (a speaker plan's
 `boundary_after="scene"`), and a heading is a block whose node kind is
-`heading`, set through the segment update API. At a chapter or scene
-break the longest applicable pause wins, including the voice-change minimum,
-and a manually set segment pause overrides it. A run
-keeps only which boundary each block ends on; assembling it, and the playlist
-with it chosen, take every pause length from the current audio settings, so a
-pause change needs a new assembly, not new takes.
+`heading`, set through the segment update API. At a chapter or scene break the
+longest applicable pause wins, including the voice-change minimum, and a
+manually set segment pause overrides it. A run keeps only which boundary each
+block ends on; assembling it, and the playlist with it chosen, take every pause
+length from the current audio settings, so a pause change needs a new assembly,
+not new takes.
 Fixed subtitle timing receives no added pause. Saved takes and resumed runs
 retain their original pacing; changing an internal gap requires a new take in
 a new generation run.

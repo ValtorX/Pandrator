@@ -114,23 +114,24 @@ def default_record_pause(record: dict, settings: dict, *, is_subtitle: bool = Fa
     return sentence_silence
 
 
+# The setting a break boundary raises its paragraph pause to; the longer applies.
+_BREAK_SETTINGS = {"chapter": "chapter_silence_ms", "scene": "scene_silence_ms"}
+
+
 def boundary_pause(boundary: str | None, stored_ms: int, audio: Mapping[str, Any]) -> int:
+    """The pause a markup boundary gives; with no boundary, the block's stored pause.
+
+    Chapter and scene boundaries take the longer of the paragraph pause and their
+    break setting, so the speech preview agrees with ``apply_break_pauses``.
+    """
     if boundary == "continuation":
         return 0
     if boundary == "dialogue_turn":
         return max(0, int(audio.get("sentence_silence_ms", 250)))
-    if boundary == "chapter":
-        return max(
-            max(0, int(audio.get("paragraph_silence_ms", 700))),
-            _setting_ms(audio, "chapter_silence_ms"),
-        )
-    if boundary == "scene":
-        return max(
-            max(0, int(audio.get("paragraph_silence_ms", 700))),
-            _setting_ms(audio, "scene_silence_ms"),
-        )
-    if boundary == "paragraph":
-        return max(0, int(audio.get("paragraph_silence_ms", 700)))
+    if boundary == "paragraph" or boundary in _BREAK_SETTINGS:
+        paragraph = max(0, int(audio.get("paragraph_silence_ms", 700)))
+        setting = _BREAK_SETTINGS.get(boundary)
+        return paragraph if setting is None else max(paragraph, _setting_ms(audio, setting))
     return max(0, int(stored_ms or 0))
 
 
@@ -267,10 +268,10 @@ def apply_break_pauses(
     """Raise a resolved pause to the chapter and scene pauses that apply; the longest wins."""
     if node_kind == "subtitle_cue":
         return pause
-    if boundary == "chapter" or before_marker:
-        pause = max(pause, _setting_ms(audio, "chapter_silence_ms"))
-    if boundary == "scene":
-        pause = max(pause, _setting_ms(audio, "scene_silence_ms"))
+    if boundary in _BREAK_SETTINGS:
+        pause = max(pause, _setting_ms(audio, _BREAK_SETTINGS[boundary]))
+    if before_marker:
+        pause = max(pause, _setting_ms(audio, _BREAK_SETTINGS["chapter"]))
     if node_kind == "chapter_marker":
         pause = max(pause, _setting_ms(audio, "chapter_title_silence_ms"))
     if node_kind == "heading":
@@ -305,6 +306,33 @@ def block_pause(
         before_marker=before_marker,
         audio=audio,
     )
+
+
+def _before_marker_ids(
+    session, revision_id: str, blocks: Sequence[BoundaryBlock], audio: Mapping[str, Any]
+) -> set[str]:
+    """Blocks followed by a chapter marker, read only while the chapter pause is on."""
+    if not _setting_ms(audio, "chapter_silence_ms"):
+        return set()
+    return blocks_before_chapter_marker(session, revision_id, blocks)
+
+
+def _boundary_entry(
+    block: BoundaryBlock,
+    boundary: str | None,
+    text_hash: str | None,
+    *,
+    before_marker: Container[str],
+    audio: Mapping[str, Any],
+) -> dict[str, Any]:
+    """A block's ``speech_boundaries`` entry before the voice-change minimum."""
+    return {
+        "text_hash": text_hash,
+        "boundary_after": boundary,
+        "silence_after_ms": block_pause(
+            block, boundary, before_marker=block.id in before_marker, audio=audio
+        ),
+    }
 
 
 def _voice_id(voice_key: Any) -> str:
@@ -472,7 +500,7 @@ def freeze_boundaries(
     # One catalogue for this freeze; cast spans would otherwise each rebuild it.
     service_config_cache: dict = {}
     audio = snapshot.get("audio") or {}
-    voice_gap = int(audio.get("voice_change_silence_ms") or 0)
+    voice_gap = _setting_ms(audio, "voice_change_silence_ms")
     rows = (
         list(segments)
         if segments is not None
@@ -488,11 +516,7 @@ def freeze_boundaries(
         )
     )
     blocks = [BoundaryBlock.from_row(row) for row in rows]
-    before_marker = (
-        blocks_before_chapter_marker(session, revision_id, blocks)
-        if _setting_ms(audio, "chapter_silence_ms")
-        else set()
-    )
+    before_marker = _before_marker_ids(session, revision_id, blocks, audio)
     for block in blocks:
         xml = _block_markup(block, annotations)
         boundary, text_hash = None, None
@@ -505,13 +529,9 @@ def freeze_boundaries(
                     )
                 markup_characters = current_characters
             boundary, text_hash = _markup_boundary(block, xml, markup_characters)
-        entry: dict[str, Any] = {
-            "text_hash": text_hash,
-            "boundary_after": boundary,
-            "silence_after_ms": block_pause(
-                block, boundary, before_marker=block.id in before_marker, audio=audio
-            ),
-        }
+        entry = _boundary_entry(
+            block, boundary, text_hash, before_marker=before_marker, audio=audio
+        )
         if voice_gap and block.node_kind != "subtitle_cue":
             voices[block.id] = entry["voices"] = _block_voices(
                 snapshot, block, review_ids, service_config_cache
@@ -519,6 +539,35 @@ def freeze_boundaries(
         result[block.id] = entry
     _raise_voice_changes(result, blocks, voices, voice_gap)
     snapshot["speech_boundaries"] = result
+
+
+def freeze_current_boundaries(
+    session,
+    revision_id: str,
+    audio: Mapping[str, Any],
+    tts: Mapping[str, Any],
+    *,
+    segments: Iterable[m.GenerationSegment] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """``speech_boundaries`` for assembling, or playing, with no run chosen.
+
+    Resolved from the current audio settings and, when casting or performance is on,
+    the revision's adopted speaker plan, as a run start would freeze them.
+    """
+    snapshot: dict[str, Any] = {"audio": deepcopy(dict(audio))}
+    if tts.get("casting_enabled") or tts.get("performance_enabled"):
+        adopted_plan = session.scalar(
+            select(m.PerformancePlan.id).where(
+                m.PerformancePlan.plan_revision_id == revision_id,
+                m.PerformancePlan.status == "adopted",
+            )
+        )
+        if adopted_plan:
+            from .performance_plans import freeze_performance_snapshot
+
+            freeze_performance_snapshot(session, revision_id, snapshot)
+    freeze_boundaries(session, revision_id, snapshot, segments=segments)
+    return snapshot.get("speech_boundaries", {})
 
 
 def resolve_run_boundaries(
@@ -552,7 +601,7 @@ def resolve_run_boundaries(
     """
     frozen_entries = run_snapshot.get("speech_boundaries")
     legacy_run = not isinstance(frozen_entries, Mapping)
-    if not isinstance(frozen_entries, Mapping):
+    if legacy_run:
         frozen_entries = {}
     if _audiobook_record(session, revision_id) is None:
         return deepcopy(dict(frozen_entries))
@@ -572,11 +621,7 @@ def resolve_run_boundaries(
         annotations = {}
     review_ids: set[str] = set(performance.get("review_segment_ids") or ())
     voice_gap = _setting_ms(audio, "voice_change_silence_ms")
-    before_marker = (
-        blocks_before_chapter_marker(session, revision_id, blocks)
-        if _setting_ms(audio, "chapter_silence_ms")
-        else set()
-    )
+    before_marker = _before_marker_ids(session, revision_id, blocks, audio)
     render_snapshot = dict(run_snapshot)
     service_config_cache: dict = {}
     result: dict[str, dict[str, Any]] = {}
@@ -602,13 +647,9 @@ def resolve_run_boundaries(
                     if legacy_run and not _unresolved_speaker(error):
                         raise
                     boundary, text_hash = None, None
-        entry: dict[str, Any] = {
-            "text_hash": text_hash,
-            "boundary_after": boundary,
-            "silence_after_ms": block_pause(
-                block, boundary, before_marker=block.id in before_marker, audio=audio
-            ),
-        }
+        entry = _boundary_entry(
+            block, boundary, text_hash, before_marker=before_marker, audio=audio
+        )
         if isinstance(known_voices, list) and len(known_voices) == 2:
             voices[block.id] = entry["voices"] = [str(value) for value in known_voices]
         elif voice_gap and block.node_kind != "subtitle_cue":
