@@ -384,6 +384,7 @@ class GenerationSegmentReader:
                             audio_snapshot.get("audio") or {},
                             audio_snapshot.get("tts") or {},
                             segments=boundary_rows,
+                            cast_refusal="warn",
                         )
                     boundary_snapshot = {"speech_boundaries": boundaries}
                     assembly_pauses = {

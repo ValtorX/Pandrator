@@ -8,7 +8,7 @@ from copy import deepcopy
 from typing import get_args
 
 import pytest
-from sqlalchemy import event, select
+from sqlalchemy import event, func, select
 
 from pandrator.web import models as m
 from pandrator.web import speech_boundaries
@@ -988,14 +988,14 @@ CAST_CHARACTERS = [
 CAST_VOICES = {"characters": {"c-one": {"voice": "one"}, "c-two": {"voice": "two"}}}
 
 
-def _cast_book(case) -> dict:
+def _cast_book(case, cast: dict | None = None) -> dict:
     """Casting on and an adopted speaker plan, no run: blocks spoken by c-one, c-two, c-two."""
     book = _book(case, segments=[{"text": f"Line {n}.", "paragraph": "yes"} for n in range(3)])
     services = book["services"]
     with services["database"].session() as session:
         save_generation_controls(
             session, book["session_id"], expected_revision=0,
-            characters=CAST_CHARACTERS, cast=CAST_VOICES,
+            characters=CAST_CHARACTERS, cast=cast or CAST_VOICES,
         )
         for sid, speaker in zip(book["segment_ids"], ["c-one", "c-two", "c-two"], strict=True):
             row = session.get(m.GenerationSegment, sid)
@@ -1046,43 +1046,152 @@ def test_raised_minimum_applies_at_a_cast_speaker_change_of_a_frozen_run(case):
     assert _expected_pauses(book, run_id) == [1500, 250, 250]
 
 
-def test_no_run_playlist_and_assembly_freeze_the_adopted_plan_alike(case, monkeypatch):
-    """The playlist and a run-less assembly share ``freeze_current_boundaries``: with
-    casting on, both freeze the adopted speaker plan and give the same pauses."""
-    from pandrator.web import performance_plans
+def _count_freezes(monkeypatch) -> dict[str, list[str]]:
+    """Count the adopted-plan freezes and the cast freezes of a read."""
+    from pandrator.web import generation_cast_runtime, performance_plans
+
+    calls: dict[str, list[str]] = {"plan": [], "cast": []}
+    real_plan = performance_plans.freeze_performance_snapshot
+    real_cast = generation_cast_runtime.freeze_cast_snapshot
+
+    def counted_plan(session, revision_id, snapshot):
+        calls["plan"].append(revision_id)
+        return real_plan(session, revision_id, snapshot)
+
+    def counted_cast(session, revision_id, snapshot, settings, *args, **kwargs):
+        calls["cast"].append(revision_id)
+        return real_cast(session, revision_id, snapshot, settings, *args, **kwargs)
+
+    monkeypatch.setattr(performance_plans, "freeze_performance_snapshot", counted_plan)
+    monkeypatch.setattr(generation_cast_runtime, "freeze_cast_snapshot", counted_cast)
+    return calls
+
+
+def _assembled(book) -> list[int]:
+    queued = book["services"]["generation"].create_assembly(book["session_id"])
+    with book["services"]["database"].session() as session:
+        record = session.get(m.OutputAssembly, queued["id"])
+        boundaries = record.settings_json["resolved"]["speech_boundaries"]
+    return [boundaries[sid]["silence_after_ms"] for sid in book["segment_ids"]]
+
+
+def _update_tts(book, **changes) -> None:
+    workspace = book["services"]["workspace_settings"]
+    tts = workspace.get(book["session_id"], "tts")
+    workspace.update(book["session_id"], "tts", tts["revision"], {**tts["override"], **changes})
+
+
+def test_no_run_speaker_change_gets_the_voice_change_pause_as_a_run_does(case, monkeypatch):
+    """With no run, the playlist and the assembly freeze the cast, so they give the
+    pauses a run gives on the same book."""
+    book = _cast_book(case)
+    run_id = book["services"]["generation"].start(book["session_id"])["id"]
+    _update_audio(book, voice_change_silence_ms=1500)
+    assert _pauses(book, generation_run_id=run_id) == [1500, 250, 250]
+    assert _expected_pauses(book, run_id) == [1500, 250, 250]
+    calls = _count_freezes(monkeypatch)
+    assert _pauses(book) == [1500, 250, 250]
+    assert (len(calls["plan"]), len(calls["cast"])) == (1, 1)
+    assert _assembled(book) == [1500, 250, 250]
+    assert (len(calls["plan"]), len(calls["cast"])) == (2, 2)
+
+
+def test_no_run_page_freezes_the_cast_of_its_rows_only(case, monkeypatch):
+    book = _cast_book(case)
+    _update_audio(book, voice_change_silence_ms=1500)
+    seen: list[object] = []
+    from pandrator.web import generation_cast_runtime
+
+    real_cast = generation_cast_runtime.freeze_cast_snapshot
+
+    def spy(session, revision_id, snapshot, settings, *args, **kwargs):
+        seen.append(kwargs.get("_freeze_segment_ids"))
+        return real_cast(session, revision_id, snapshot, settings, *args, **kwargs)
+
+    monkeypatch.setattr(generation_cast_runtime, "freeze_cast_snapshot", spy)
+    # The page holds the first block; its successor is read for the boundary.
+    assert _pauses(book, cursor=0, limit=1) == [1500]
+    assert len(seen) == 1
+    assert sorted(seen[0]) == sorted(book["segment_ids"][:2])
+    seen.clear()
+    _assembled(book)
+    assert seen == [None]
+
+
+def test_no_run_pauses_are_unchanged_without_the_minimum_or_casting(case, monkeypatch):
+    book = _cast_book(case)
+    calls = _count_freezes(monkeypatch)
+    _update_audio(book, voice_change_silence_ms=0)
+    assert _pauses(book) == [250, 250, 250]
+    assert _assembled(book) == [250, 250, 250]
+    assert (len(calls["plan"]), len(calls["cast"])) == (2, 0)
+    _update_audio(book, voice_change_silence_ms=1500)
+    _update_tts(book, casting_enabled=False, performance_enabled=False)
+    assert _pauses(book) == [250, 250, 250]
+    assert _assembled(book) == [250, 250, 250]
+    assert (len(calls["plan"]), len(calls["cast"])) == (2, 0)
+    # Performance alone freezes the adopted plan but no cast.
+    _update_tts(book, casting_enabled=False, performance_enabled=True)
+    assert _pauses(book) == [250, 250, 250]
+    assert _assembled(book) == [250, 250, 250]
+    assert (len(calls["plan"]), len(calls["cast"])) == (4, 0)
+
+
+def test_no_run_cast_refusal_keeps_the_playlist_and_stops_the_assembly(case, caplog):
+    book = _cast_book(
+        case,
+        cast={"characters": {"c-one": {"voice": "one"}, "c-two": {"voice": "two", "service": "xtts"}}},
+    )
+    _update_audio(book, voice_change_silence_ms=1500)
+    with pytest.raises(ValueError, match="assigned to xtts"):
+        book["services"]["generation"].start(book["session_id"])
+    with caplog.at_level("WARNING", logger="pandrator.web.speech_boundaries"):
+        assert _pauses(book) == [250, 250, 250]
+    warnings = [record for record in caplog.records if record.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert book["revision_id"] in warnings[0].getMessage()
+    assert "assigned to xtts" in warnings[0].getMessage()
+    with book["services"]["database"].session() as session:
+        before = session.scalar(select(func.count()).select_from(m.OutputAssembly))
+    with pytest.raises(ValueError, match="assigned to xtts"):
+        book["services"]["generation"].create_assembly(book["session_id"])
+    with book["services"]["database"].session() as session:
+        assert session.scalar(select(func.count()).select_from(m.OutputAssembly)) == before
+
+
+@pytest.mark.parametrize("stage", ["freeze", "render"])
+def test_no_run_playlist_falls_back_on_any_cast_refusal(case, monkeypatch, caplog, stage):
+    """An access refusal from the cast freeze, or a refusal rendering a voice from the
+    frozen cast, leaves the playlist on today's pauses; the assembly refuses."""
+    from pandrator.web import generation_cast_runtime
+    from pandrator.web.access.contracts import AccessDenied
 
     book = _cast_book(case)
     _update_audio(book, voice_change_silence_ms=1500)
-    calls: list[str] = []
-    real_freeze = performance_plans.freeze_performance_snapshot
+    refusal: type[Exception]
+    if stage == "freeze":
+        refusal = AccessDenied
 
-    def counted(session, revision_id, snapshot):
-        calls.append(revision_id)
-        return real_freeze(session, revision_id, snapshot)
+        def refuse(*_args, **_kwargs):
+            raise AccessDenied()
 
-    monkeypatch.setattr(performance_plans, "freeze_performance_snapshot", counted)
+        monkeypatch.setattr(generation_cast_runtime, "freeze_cast_snapshot", refuse)
+    else:
+        refusal = ValueError
+        real_voices = speech_boundaries._block_voices
 
-    def assembled() -> list[int]:
-        queued = book["services"]["generation"].create_assembly(book["session_id"])
-        with book["services"]["database"].session() as session:
-            record = session.get(m.OutputAssembly, queued["id"])
-            boundaries = record.settings_json["resolved"]["speech_boundaries"]
-        return [boundaries[sid]["silence_after_ms"] for sid in book["segment_ids"]]
+        def refuse_with_cast(snapshot, *args, **kwargs):
+            if snapshot.get("generation_control_snapshot"):
+                raise ValueError("The cast voice cannot be rendered.")
+            return real_voices(snapshot, *args, **kwargs)
 
-    # With no run, no cast is frozen, so markup speakers render as plain narration and
-    # the voice-change minimum does not apply (baseline 5.1, R3; story 3 left it).
-    assert _pauses(book) == [250, 250, 250]
-    assert len(calls) == 1
-    assert assembled() == [250, 250, 250]
-    assert len(calls) == 2
-    tts = book["services"]["workspace_settings"].get(book["session_id"], "tts")
-    book["services"]["workspace_settings"].update(
-        book["session_id"], "tts", tts["revision"],
-        {**tts["override"], "casting_enabled": False, "performance_enabled": False},
-    )
-    assert _pauses(book) == [250, 250, 250]
-    assert assembled() == [250, 250, 250]
-    assert len(calls) == 2
+        monkeypatch.setattr(speech_boundaries, "_block_voices", refuse_with_cast)
+    with caplog.at_level("WARNING", logger="pandrator.web.speech_boundaries"):
+        assert _pauses(book) == [250, 250, 250]
+    warnings = [record for record in caplog.records if record.levelname == "WARNING"]
+    assert len(warnings) == 1 and book["revision_id"] in warnings[0].getMessage()
+    with pytest.raises(refusal):
+        book["services"]["generation"].create_assembly(book["session_id"])
 
 
 def test_a_block_whose_voices_cannot_be_rendered_gets_no_minimum(case):

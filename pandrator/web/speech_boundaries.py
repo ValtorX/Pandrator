@@ -6,13 +6,14 @@ resolved again from those facts and the current settings when the run is assembl
 
 from __future__ import annotations
 
+import logging
 import re
 import threading
 from collections import OrderedDict
 from collections.abc import Container, Iterable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import func, select
 
@@ -20,8 +21,11 @@ from pandrator.logic.speech_markup import ParsedSpeechMarkup, parse_speech_marku
 from pandrator.logic.speech_performance import content_hash
 
 from . import models as m
+from .access.contracts import AccessDenied, WorkspaceNotFound
 from .generation_cast_runtime import remap_markup
 from .generation_controls import get_generation_controls
+
+logger = logging.getLogger(__name__)
 
 
 def effective_speech_boundary(parsed: ParsedSpeechMarkup) -> str | None:
@@ -548,13 +552,22 @@ def freeze_current_boundaries(
     tts: Mapping[str, Any],
     *,
     segments: Iterable[m.GenerationSegment] | None = None,
+    cast_refusal: Literal["raise", "warn"] = "raise",
 ) -> dict[str, dict[str, Any]]:
     """``speech_boundaries`` for assembling, or playing, with no run chosen.
 
     Resolved from the current audio settings and, when casting or performance is on,
-    the revision's adopted speaker plan, as a run start would freeze them.
+    the revision's adopted speaker plan, as a run start would freeze them. While
+    casting is on and the voice-change minimum is above 0, the cast is frozen too
+    (for the rows in ``segments`` when given), so a cast speaker change gets the
+    minimum as it does in a run. With either off, no cast is frozen.
+
+    A cast that cannot be resolved or rendered raises its refusal (``cast_refusal="raise"``,
+    as a run start does), or with ``"warn"`` is logged and the pauses are those
+    without the cast, so a listing still answers.
     """
     snapshot: dict[str, Any] = {"audio": deepcopy(dict(audio))}
+    rows = list(segments) if segments is not None else None
     if tts.get("casting_enabled") or tts.get("performance_enabled"):
         adopted_plan = session.scalar(
             select(m.PerformancePlan.id).where(
@@ -566,8 +579,50 @@ def freeze_current_boundaries(
             from .performance_plans import freeze_performance_snapshot
 
             freeze_performance_snapshot(session, revision_id, snapshot)
-    freeze_boundaries(session, revision_id, snapshot, segments=segments)
+    if tts.get("casting_enabled") and _setting_ms(snapshot["audio"], "voice_change_silence_ms"):
+        try:
+            _freeze_with_current_cast(session, revision_id, snapshot, tts, rows)
+            return snapshot.get("speech_boundaries", {})
+        except _CAST_REFUSALS as error:
+            if cast_refusal != "warn":
+                raise
+            logger.warning(
+                "Speech plan revision %s: the cast could not be frozen or rendered, so "
+                "voice changes get no minimum pause: %s",
+                revision_id,
+                error,
+            )
+            for key in ("tts", "generation_control_snapshot", "speech_boundaries"):
+                snapshot.pop(key, None)
+    freeze_boundaries(session, revision_id, snapshot, segments=rows)
     return snapshot.get("speech_boundaries", {})
+
+
+# What freezing or rendering the current cast refuses with; the cast freeze itself
+# raises these for a block whose voice it cannot resolve.
+_CAST_REFUSALS = (ValueError, AccessDenied, WorkspaceNotFound)
+
+
+def _freeze_with_current_cast(
+    session,
+    revision_id: str,
+    snapshot: dict[str, Any],
+    tts: Mapping[str, Any],
+    rows: Sequence[m.GenerationSegment] | None,
+) -> None:
+    """Freeze the cast into ``snapshot`` as a run start does, then the boundaries with it."""
+    from .generation_cast_runtime import freeze_cast_snapshot
+    from .generation_performance_snapshot import performance_runtime_settings
+
+    snapshot["tts"] = deepcopy(dict(tts))
+    freeze_cast_snapshot(
+        session,
+        revision_id,
+        snapshot,
+        performance_runtime_settings(snapshot),
+        _freeze_segment_ids=None if rows is None else [row.id for row in rows],
+    )
+    freeze_boundaries(session, revision_id, snapshot, segments=rows)
 
 
 def resolve_run_boundaries(
